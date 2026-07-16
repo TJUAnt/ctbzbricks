@@ -1,0 +1,81 @@
+{
+  "description": "Unified part candidate search configuration.",
+  "default_limit": 100,
+  "pool_multiplier": 20,
+  "minimum_pool_size": 500,
+  "missing_relation_priority": 9,
+  "connector_count_weight": 0.01,
+  "required_connector_keys": {
+    "type": "type",
+    "gender": "gender",
+    "direction_group": "direction_group",
+    "direction_label": "direction_label",
+    "min_count": "min_count"
+  },
+  "score_reason_labels": {
+    "relation_priority": "relation_priority",
+    "geometry_score": "geometry_score",
+    "connector_surplus": "connector_surplus"
+  },
+  "validation_cases": [
+    {
+      "name": "plate_2x4_geometry",
+      "logical_size": [
+        2,
+        4,
+        1
+      ],
+      "category": [
+        "Plate"
+      ],
+      "strict_bbox": true,
+      "expected_first_ldraw_part_num": "3020.dat"
+    },
+    {
+      "name": "rebrickable_print_geometry_equivalent",
+      "rebrickable_part_num": "3626cpr3662",
+      "expected_ldraw_part_num": "3626c.dat",
+      "expected_relation_type": "geometry_equivalent"
+    },
+    {
+      "name": "rebrickable_substitute_candidate",
+      "rebrickable_part_num": "11120",
+      "include_substitutes": true,
+      "expected_ldraw_part_num": "3007.dat",
+      "expected_relation_type": "substitute_candidate"
+    },
+    {
+      "name": "side_technic_pin_hole",
+      "required_connectors": [
+        {
+          "type": "technic_pin_hole",
+          "gender": "F",
+          "direction_group": "side",
+          "min_count": 1
+        }
+      ],
+      "expected_minimum_results": 1
+    },
+    {
+      "name": "plate_2x4_anti_stud_filter",
+      "logical_size": [
+        2,
+        4,
+        1
+      ],
+      "category": [
+        "Plate"
+      ],
+      "strict_bbox": true,
+      "required_connectors": [
+        {
+          "type": "anti_stud",
+          "gender": "F",
+          "direction_group": "vertical",
+          "min_count": 8
+        }
+      ],
+      "expected_first_ldraw_part_num": "3020.dat"
+    }
+  ]
+}

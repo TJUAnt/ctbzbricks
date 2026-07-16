@@ -1,0 +1,3834 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #f4f7fb;
+  color: #17201b;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+}
+
+button {
+  font: inherit;
+}
+
+.workbench {
+  display: grid;
+  grid-template-columns: 278px minmax(0, 1fr);
+  grid-template-rows: 84px minmax(0, 1fr);
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 250, 255, 0.92)),
+    #f4f7fb;
+}
+
+.workbench-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  overflow: hidden;
+  min-width: 0;
+  border-bottom: 1px solid rgba(0, 55, 138, 0.2);
+  background:
+    radial-gradient(circle at 22px 22px, rgba(255, 255, 255, 0.18) 0 9px, transparent 10px) 0 0 / 36px 36px,
+    linear-gradient(180deg, #086bdc 0%, #0053b4 100%);
+  box-shadow: 0 10px 24px rgba(0, 59, 139, 0.22);
+  padding: 12px 28px;
+}
+
+.workbench-nav {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow: hidden;
+  border-right: 1px solid rgba(21, 71, 135, 0.12);
+  background:
+    linear-gradient(180deg, #ffffff 0%, #f9fbff 72%, #eef4fb 100%);
+  padding: 28px 20px 0;
+}
+
+.workbench-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #ffffff;
+  text-decoration: none;
+}
+
+.workbench-brand strong,
+.workbench-brand em {
+  display: block;
+}
+
+.workbench-brand strong {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.workbench-brand em {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.brand-mark {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 15px 14px, rgba(255, 255, 255, 0.38) 0 5px, transparent 6px),
+    radial-gradient(circle at 36px 14px, rgba(255, 255, 255, 0.26) 0 5px, transparent 6px),
+    linear-gradient(180deg, #ffdd36, #f04425);
+  box-shadow: inset 0 -8px 18px rgba(130, 24, 14, 0.22);
+}
+
+.workbench-brand svg,
+.menu-button svg {
+  width: 19px;
+  height: 19px;
+}
+
+.brand-mark svg {
+  width: 28px;
+  height: 28px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.topbar-icon-button,
+.topbar-user-button {
+  position: relative;
+  display: inline-flex;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  cursor: pointer;
+  text-decoration: none;
+  box-shadow: inset 0 -8px 16px rgba(0, 50, 124, 0.16);
+}
+
+.topbar-icon-button {
+  width: 44px;
+}
+
+.topbar-icon-button svg,
+.topbar-user-button svg {
+  width: 22px;
+  height: 22px;
+}
+
+.topbar-icon-button span {
+  position: absolute;
+  top: -7px;
+  right: -6px;
+  display: grid;
+  min-width: 21px;
+  height: 21px;
+  place-items: center;
+  border: 2px solid #086bdc;
+  border-radius: 999px;
+  background: #ff3737;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.topbar-user-button {
+  padding: 0 14px 0 9px;
+  font-weight: 750;
+}
+
+.topbar-avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 8px;
+  background: #ffdf42;
+  color: #1e4d91;
+}
+
+.workbench-menu {
+  display: grid;
+  gap: 20px;
+  min-height: 100%;
+}
+
+.menu-group {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid rgba(21, 71, 135, 0.1);
+  padding-bottom: 18px;
+}
+
+.menu-title {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 9px;
+  color: #0c4ea8;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.menu-title svg:first-child {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  padding: 7px;
+  background: #1d85ff;
+  color: #ffffff;
+}
+
+.menu-title svg:last-child {
+  width: 17px;
+  height: 17px;
+  color: #7c8a9b;
+}
+
+.menu-title-green {
+  color: #0c9955;
+}
+
+.menu-title-green svg:first-child {
+  background: #19c873;
+}
+
+.menu-title-amber {
+  color: #e38a00;
+}
+
+.menu-title-amber svg:first-child {
+  background: #ffb11f;
+}
+
+.menu-title-purple {
+  color: #8655d9;
+}
+
+.menu-title-purple svg:first-child {
+  background: #8a62d9;
+}
+
+.menu-button {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #25354c;
+  cursor: pointer;
+  padding: 9px 12px;
+  text-align: left;
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.menu-button:hover,
+.menu-button-active {
+  border-color: rgba(29, 133, 255, 0.14);
+  background: linear-gradient(90deg, #e6f3ff, #f2f8ff);
+  color: #064b9c;
+  box-shadow: inset 4px 0 0 #1d85ff;
+}
+
+.menu-button-green:hover,
+.menu-button-green.menu-button-active {
+  border-color: rgba(25, 200, 115, 0.16);
+  background: linear-gradient(90deg, #e8faef, #f5fff8);
+  color: #087a42;
+  box-shadow: inset 4px 0 0 #19c873;
+}
+
+.menu-button-amber:hover,
+.menu-button-amber.menu-button-active {
+  border-color: rgba(255, 177, 31, 0.2);
+  background: linear-gradient(90deg, #fff3d8, #fffaf0);
+  color: #b86c00;
+  box-shadow: inset 4px 0 0 #ffb11f;
+}
+
+.menu-button-purple:hover,
+.menu-button-purple.menu-button-active {
+  border-color: rgba(138, 98, 217, 0.18);
+  background: linear-gradient(90deg, #f0e9ff, #fbf8ff);
+  color: #6b42b8;
+  box-shadow: inset 4px 0 0 #8a62d9;
+}
+
+.menu-button svg {
+  flex: 0 0 auto;
+}
+
+.menu-brick-scene {
+  position: relative;
+  align-self: stretch;
+  min-height: 180px;
+  margin: auto -20px 0;
+  overflow: hidden;
+}
+
+.menu-brick-scene::before {
+  position: absolute;
+  right: -40px;
+  bottom: -18px;
+  left: -20px;
+  height: 86px;
+  content: "";
+  background:
+    radial-gradient(circle at 18px 14px, rgba(255, 255, 255, 0.38) 0 7px, transparent 8px) 0 0 / 42px 36px,
+    linear-gradient(90deg, #e0322b 0 18%, #ffca1d 18% 40%, #12a85c 40% 64%, #1679db 64% 82%, #c8d1dc 82%);
+  box-shadow: inset 0 12px 24px rgba(255, 255, 255, 0.18);
+}
+
+.menu-brick-scene span {
+  position: absolute;
+  bottom: 42px;
+  display: block;
+  border-radius: 8px 8px 0 0;
+  box-shadow: inset 0 10px 18px rgba(255, 255, 255, 0.18);
+}
+
+.menu-brick-scene span:nth-child(1) {
+  left: 28px;
+  width: 52px;
+  height: 78px;
+  background: #0d75dd;
+}
+
+.menu-brick-scene span:nth-child(2) {
+  left: 70px;
+  width: 70px;
+  height: 112px;
+  background: #ffca1d;
+}
+
+.menu-brick-scene span:nth-child(3) {
+  left: 136px;
+  width: 56px;
+  height: 72px;
+  background: #13a95c;
+}
+
+.workbench-content {
+  min-width: 0;
+  min-height: calc(100vh - 84px);
+  overflow: auto;
+}
+
+.dashboard-page {
+  position: relative;
+  min-height: calc(100vh - 84px);
+  overflow: hidden;
+  padding: 0 28px 34px;
+}
+
+.dashboard-page::after {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 278px;
+  z-index: 1;
+  height: 32px;
+  pointer-events: none;
+  content: "";
+  background:
+    radial-gradient(circle at 17px 8px, rgba(255, 255, 255, 0.48) 0 6px, transparent 7px) 0 0 / 54px 24px,
+    linear-gradient(90deg, #e2312b 0 16%, #0e7de0 16% 34%, #ffc61f 34% 54%, #13a95c 54% 72%, #c7d0d9 72% 84%, #0e7de0 84%);
+  box-shadow: 0 -8px 22px rgba(24, 42, 68, 0.14);
+}
+
+.dashboard-hero {
+  position: relative;
+  display: flex;
+  min-height: 112px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 0 -28px 28px;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(24, 42, 68, 0.12);
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.94) 0%, rgba(255, 255, 255, 0.88) 62%, rgba(219, 238, 255, 0.64) 100%),
+    #ffffff;
+  padding: 22px 38px;
+}
+
+.dashboard-welcome {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 18px;
+}
+
+.dashboard-hero-icon {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 16px 12px, rgba(255, 255, 255, 0.44) 0 6px, transparent 7px),
+    linear-gradient(180deg, #ffd73a, #f4aa12);
+  color: #8b4b00;
+  box-shadow: inset 0 -10px 16px rgba(156, 91, 0, 0.14);
+}
+
+.dashboard-hero-icon svg {
+  width: 30px;
+  height: 30px;
+}
+
+.dashboard-welcome h1 {
+  margin: 0;
+  color: #17201b;
+  font-size: 25px;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.dashboard-welcome p {
+  margin: 7px 0 0;
+  color: #516170;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.dashboard-hero-model {
+  position: relative;
+  width: 270px;
+  height: 82px;
+  flex: 0 0 auto;
+}
+
+.dashboard-hero-model span {
+  position: absolute;
+  display: block;
+  border-radius: 8px;
+  box-shadow:
+    inset 0 9px 16px rgba(255, 255, 255, 0.22),
+    0 12px 24px rgba(41, 86, 137, 0.18);
+}
+
+.dashboard-hero-model span::before {
+  position: absolute;
+  top: 7px;
+  left: 12px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  content: "";
+  background: rgba(255, 255, 255, 0.32);
+  box-shadow: 30px 0 0 rgba(255, 255, 255, 0.24);
+}
+
+.dashboard-hero-model span:nth-child(1) {
+  right: 18px;
+  bottom: 12px;
+  width: 116px;
+  height: 42px;
+  background: #0e7de0;
+}
+
+.dashboard-hero-model span:nth-child(2) {
+  right: 118px;
+  bottom: 12px;
+  width: 72px;
+  height: 42px;
+  background: #ffca1d;
+}
+
+.dashboard-hero-model span:nth-child(3) {
+  right: 48px;
+  bottom: 50px;
+  width: 72px;
+  height: 34px;
+  background: #13a95c;
+}
+
+.dashboard-hero-model span:nth-child(4) {
+  right: 184px;
+  bottom: 10px;
+  width: 44px;
+  height: 54px;
+  background: #e2312b;
+}
+
+.dashboard-sections {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 30px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-bottom: 44px;
+}
+
+.dashboard-section {
+  display: grid;
+  gap: 12px;
+}
+
+.dashboard-section-tab {
+  justify-self: start;
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px 8px 8px 0;
+  color: #ffffff;
+  padding: 0 22px 0 16px;
+  font-size: 16px;
+  font-weight: 850;
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 100%, 0 100%);
+  box-shadow: 0 12px 24px rgba(24, 42, 68, 0.1);
+}
+
+.dashboard-section-tab svg {
+  width: 19px;
+  height: 19px;
+}
+
+.dashboard-section-tab-blue {
+  background: linear-gradient(180deg, #1685ff, #0067d2);
+}
+
+.dashboard-section-tab-green {
+  background: linear-gradient(180deg, #20c878, #08a65b);
+}
+
+.dashboard-section-tab-amber {
+  background: linear-gradient(180deg, #ffbd2e, #f39a00);
+}
+
+.dashboard-section-tab-purple {
+  background: linear-gradient(180deg, #9b72e8, #7951cc);
+}
+
+.dashboard-card-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.dashboard-card-grid-1 {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dashboard-card-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dashboard-card {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  grid-template-areas:
+    "title title"
+    "visual body";
+  min-height: 190px;
+  align-items: start;
+  gap: 14px 18px;
+  overflow: hidden;
+  border: 1px solid rgba(24, 42, 68, 0.1);
+  border-radius: 8px;
+  color: #17201b;
+  padding: 22px;
+  text-decoration: none;
+  box-shadow: 0 14px 34px rgba(24, 42, 68, 0.07);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+
+.dashboard-card-grid-3 .dashboard-card {
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 12px 14px;
+  padding: 20px;
+}
+
+.dashboard-card:hover {
+  border-color: rgba(21, 105, 210, 0.22);
+  box-shadow: 0 20px 42px rgba(24, 42, 68, 0.12);
+  transform: translateY(-2px);
+}
+
+.dashboard-card-blue {
+  background: linear-gradient(135deg, #eef9ff, #ffffff 62%, #e7f3ff);
+}
+
+.dashboard-card-slate {
+  background: linear-gradient(135deg, #f4f7fb, #ffffff 62%, #edf2f7);
+}
+
+.dashboard-card-sand {
+  background: linear-gradient(135deg, #fff7df, #ffffff 62%, #fff1c4);
+}
+
+.dashboard-card-green {
+  background: linear-gradient(135deg, #edfff4, #ffffff 62%, #e4faeb);
+}
+
+.dashboard-card-mint {
+  background: linear-gradient(135deg, #edfff7, #ffffff 62%, #dcf8ef);
+}
+
+.dashboard-card-amber {
+  grid-template-columns: 190px minmax(0, 1fr);
+  min-height: 210px;
+  background: linear-gradient(135deg, #fff6dc, #ffffff 64%, #fff0be);
+}
+
+.dashboard-card-purple {
+  min-height: 128px;
+  background: linear-gradient(135deg, #f4efff, #ffffff 64%, #ece2ff);
+}
+
+.dashboard-card-body {
+  grid-area: body;
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.dashboard-card h2 {
+  grid-area: title;
+  margin: 0;
+  color: #113b7a;
+  font-size: 18px;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.dashboard-card-green h2,
+.dashboard-card-mint h2 {
+  color: #087a42;
+}
+
+.dashboard-card-amber h2 {
+  color: #885200;
+}
+
+.dashboard-card-purple h2 {
+  color: #633aae;
+}
+
+.dashboard-card ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  color: #25354c;
+  font-size: 14px;
+  font-weight: 650;
+  list-style: none;
+}
+
+.dashboard-card li {
+  position: relative;
+  min-width: 0;
+  padding-left: 16px;
+}
+
+.dashboard-card li::before {
+  position: absolute;
+  top: 8px;
+  left: 1px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  content: "";
+  background: currentColor;
+}
+
+.dashboard-card-action {
+  display: inline-flex;
+  justify-self: end;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(21, 105, 210, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.66);
+  color: #0b63c7;
+  padding: 0 12px 0 15px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.dashboard-card-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dashboard-card-action-green,
+.dashboard-card-action-mint {
+  color: #0b884d;
+}
+
+.dashboard-card-action-amber {
+  color: #a46300;
+}
+
+.dashboard-card-action-purple {
+  color: #6b42b8;
+}
+
+.dashboard-card-visual {
+  position: relative;
+  display: grid;
+  grid-area: visual;
+  width: 128px;
+  height: 128px;
+  place-items: center;
+  justify-self: center;
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 22px 18px, rgba(255, 255, 255, 0.48) 0 8px, transparent 9px),
+    radial-gradient(circle at 56px 18px, rgba(255, 255, 255, 0.34) 0 8px, transparent 9px),
+    radial-gradient(circle at 90px 18px, rgba(255, 255, 255, 0.28) 0 8px, transparent 9px),
+    linear-gradient(180deg, #dceaff, #b9d8ff);
+  box-shadow: inset 0 -18px 24px rgba(40, 101, 170, 0.1);
+}
+
+.dashboard-card-grid-3 .dashboard-card-visual {
+  width: 108px;
+  height: 108px;
+}
+
+.dashboard-card-grid-3 .dashboard-visual-base {
+  width: 58px;
+  height: 58px;
+}
+
+.dashboard-card-grid-3 .dashboard-visual-base svg {
+  width: 32px;
+  height: 32px;
+}
+
+.dashboard-card-visual::after {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  left: 14px;
+  height: 18px;
+  border-radius: 8px;
+  content: "";
+  opacity: 0.8;
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.dashboard-visual-base {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: 68px;
+  height: 68px;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.68);
+  color: #0b63c7;
+}
+
+.dashboard-visual-base svg {
+  width: 38px;
+  height: 38px;
+}
+
+.dashboard-visual-stud {
+  position: absolute;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.dashboard-visual-stud:nth-of-type(2) {
+  top: 70px;
+  left: 24px;
+}
+
+.dashboard-visual-stud:nth-of-type(3) {
+  top: 82px;
+  right: 26px;
+}
+
+.dashboard-visual-stud:nth-of-type(4) {
+  bottom: 30px;
+  left: 54px;
+}
+
+.dashboard-visual-pixel {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.5) 1px, transparent 1px) 0 0 / 18px 18px,
+    linear-gradient(rgba(255, 255, 255, 0.5) 1px, transparent 1px) 0 0 / 18px 18px,
+    linear-gradient(135deg, #fee44b, #3ecf7b 46%, #1d85ff);
+}
+
+.dashboard-visual-mountain,
+.dashboard-visual-terrain {
+  background:
+    linear-gradient(135deg, transparent 48%, rgba(255, 255, 255, 0.36) 49% 52%, transparent 53%),
+    linear-gradient(160deg, #cbd5e1, #ffffff 42%, #9ca3af 43% 62%, #68758a);
+}
+
+.dashboard-visual-vehicle {
+  background:
+    radial-gradient(circle at 36px 94px, #26384f 0 11px, transparent 12px),
+    radial-gradient(circle at 92px 94px, #26384f 0 11px, transparent 12px),
+    linear-gradient(180deg, transparent 0 42px, #1379db 43px 86px, transparent 87px),
+    linear-gradient(135deg, #ffe27a, #fff7ca);
+}
+
+.dashboard-visual-portrait {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.44) 1px, transparent 1px) 0 0 / 16px 16px,
+    linear-gradient(rgba(255, 255, 255, 0.44) 1px, transparent 1px) 0 0 / 16px 16px,
+    radial-gradient(circle at 62px 50px, #ffd37d 0 22px, transparent 23px),
+    linear-gradient(135deg, #14532d, #e1a53a 52%, #3f2d20);
+}
+
+.dashboard-visual-house {
+  background:
+    linear-gradient(145deg, transparent 0 38%, #0e7de0 39% 51%, transparent 52%),
+    linear-gradient(180deg, transparent 0 54px, #ffffff 55px 100px, #13a95c 101px),
+    #d9f0ff;
+}
+
+.dashboard-visual-castle {
+  background:
+    linear-gradient(180deg, #b4bfcc 0 44px, transparent 45px),
+    linear-gradient(90deg, transparent 0 18px, #9aa7b8 19px 44px, transparent 45px 84px, #9aa7b8 85px 110px, transparent 111px),
+    linear-gradient(180deg, transparent 0 58px, #d5b15a 59px 106px, #13a95c 107px);
+}
+
+.dashboard-visual-search {
+  background:
+    radial-gradient(circle at 58px 52px, transparent 0 24px, #8a62d9 25px 32px, transparent 33px),
+    linear-gradient(45deg, transparent 0 62%, #8a62d9 63% 70%, transparent 71%),
+    linear-gradient(135deg, #f5efff, #e5dbff);
+}
+
+.terrain-app {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.terrain-viewer {
+  position: relative;
+  align-self: start;
+  height: 100vh;
+  min-height: 100vh;
+}
+
+.terrain-canvas,
+.terrain-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.terrain-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  border-left: 1px solid rgba(23, 32, 27, 0.16);
+  background: rgba(247, 249, 246, 0.9);
+  padding: 28px;
+  backdrop-filter: blur(14px);
+}
+
+.terrain-panel h1 {
+  margin: 0;
+  color: #10271f;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.terrain-panel p {
+  margin: 8px 0 0;
+  color: #58645f;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.terrain-stats {
+  display: grid;
+  gap: 12px;
+}
+
+.terrain-page-switch {
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.terrain-page-switch:hover {
+  background: #f4f8f5;
+}
+
+.terrain-file-button {
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: #153d32;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.terrain-file-button:hover {
+  background: #1e5948;
+}
+
+.terrain-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.terrain-scale-control {
+  display: grid;
+  gap: 6px;
+  color: #31433a;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.terrain-scale-control input,
+.terrain-scale-control select {
+  height: 38px;
+  width: 100%;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #17201b;
+  padding: 0 10px;
+}
+
+.terrain-save-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.terrain-scale-stepper {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  gap: 8px;
+}
+
+.terrain-scale-stepper button {
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.terrain-overlay {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 10px 12px;
+  color: #153d32;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.terrain-progress {
+  width: 190px;
+  height: 7px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #dce8e1;
+}
+
+.terrain-progress div {
+  height: 100%;
+  border-radius: 8px;
+  background: #1f7a5a;
+  transition: width 180ms ease;
+}
+
+.terrain-error {
+  border: 1px solid rgba(176, 46, 46, 0.2);
+  border-radius: 8px;
+  background: #fff6f6;
+  padding: 10px 12px;
+  color: #a12b2b;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.terrain-models {
+  display: grid;
+  gap: 10px;
+}
+
+.terrain-models-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.terrain-models-header h2 {
+  margin: 0;
+  color: #10271f;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.terrain-models-header button {
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 7px 9px;
+  color: #153d32;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.terrain-model-list {
+  display: grid;
+  max-height: 220px;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.terrain-model-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+  color: #17201b;
+  cursor: pointer;
+  text-align: left;
+}
+
+.terrain-model-item:hover {
+  background: #f4f8f5;
+}
+
+.terrain-model-item span,
+.terrain-model-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terrain-model-item span {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.terrain-model-item strong {
+  color: #65716b;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.terrain-empty {
+  border: 1px dashed rgba(23, 32, 27, 0.22);
+  border-radius: 8px;
+  padding: 12px;
+  color: #65716b;
+  font-size: 13px;
+}
+
+.terrain-geojson-info {
+  display: grid;
+  gap: 10px;
+}
+
+.terrain-geojson-info h2 {
+  margin: 0;
+  color: #10271f;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.terrain-geojson-file {
+  display: grid;
+  gap: 8px;
+}
+
+.terrain-geojson-properties {
+  display: grid;
+  max-height: 220px;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.terrain-geojson-properties > div {
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 9px;
+}
+
+.terrain-geojson-properties em,
+.terrain-geojson-properties strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terrain-geojson-properties em {
+  color: #65716b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.terrain-geojson-properties strong {
+  color: #17201b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.terrain-metric {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.terrain-metric-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 8px;
+  background: #e3eee8;
+  color: #1f7a5a;
+}
+
+.terrain-metric svg,
+.terrain-file-button svg,
+.terrain-page-switch svg,
+.terrain-reset svg,
+.terrain-message svg,
+.terrain-overlay svg {
+  width: 18px;
+  height: 18px;
+}
+
+.terrain-metric span {
+  display: block;
+  color: #65716b;
+  font-size: 12px;
+}
+
+.terrain-metric strong {
+  display: block;
+  overflow: hidden;
+  color: #17201b;
+  font-size: 14px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terrain-reset {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #153d32;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.terrain-reset:hover {
+  background: #ffffff;
+  transform: translateY(-1px);
+}
+
+.terrain-guide {
+  position: absolute;
+  right: 18px;
+  bottom: 72px;
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+  pointer-events: none;
+}
+
+.terrain-compass {
+  display: grid;
+  grid-template-columns: 18px 72px;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 9px;
+  color: #153d32;
+  box-shadow: 0 10px 24px rgba(23, 32, 27, 0.1);
+}
+
+.terrain-compass svg,
+.terrain-normal-guide svg {
+  width: 18px;
+  height: 18px;
+}
+
+.terrain-compass-dial {
+  --terrain-compass-rotation: 0;
+
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border: 1px solid rgba(23, 32, 27, 0.18);
+  border-radius: 50%;
+  background: #f7faf8;
+  transform: rotate(calc(var(--terrain-compass-rotation) * 1rad));
+}
+
+.terrain-compass-dial span {
+  position: absolute;
+  color: #31433a;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.terrain-compass-north {
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.terrain-compass-east {
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+}
+
+.terrain-compass-south {
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.terrain-compass-west {
+  top: 50%;
+  left: 6px;
+  transform: translateY(-50%);
+}
+
+.terrain-compass-needle {
+  position: absolute;
+  top: 11px;
+  left: 50%;
+  width: 4px;
+  height: 27px;
+  border-radius: 8px;
+  background: #c84630;
+  transform: translateX(-50%);
+  transform-origin: 50% 100%;
+}
+
+.terrain-compass-needle::after {
+  position: absolute;
+  right: -4px;
+  bottom: -5px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #c84630;
+  border-radius: 50%;
+  background: #ffffff;
+  content: "";
+}
+
+.terrain-normal-guide {
+  display: inline-grid;
+  grid-template-columns: 18px auto auto;
+  gap: 7px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 8px 10px;
+  color: #153d32;
+  box-shadow: 0 10px 24px rgba(23, 32, 27, 0.1);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.terrain-normal-guide strong {
+  color: #c84630;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.terrain-message {
+  display: flex;
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #31433a;
+  font-size: 15px;
+}
+
+.asset-page,
+.placeholder-page {
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+}
+
+.asset-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.asset-header h1,
+.placeholder-page h1 {
+  margin: 0;
+  color: #10271f;
+  font-size: 24px;
+}
+
+.asset-header p,
+.placeholder-page p {
+  margin: 8px 0 0;
+  color: #65716b;
+  font-size: 14px;
+}
+
+.asset-header svg,
+.placeholder-page svg {
+  width: 28px;
+  height: 28px;
+  color: #1f7a5a;
+}
+
+.asset-table {
+  display: grid;
+  gap: 8px;
+}
+
+.asset-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(180px, 1.5fr) repeat(5, minmax(90px, 1fr)) 120px;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+  color: #31433a;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+}
+
+.asset-row-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.asset-row-actions button {
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  padding: 7px 9px;
+}
+
+.asset-row:hover {
+  background: #f4f8f5;
+}
+
+.asset-row strong,
+.asset-row span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-row strong {
+  color: #17201b;
+  font-size: 14px;
+}
+
+.asset-row span {
+  color: #65716b;
+  font-size: 12px;
+}
+
+.asset-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.asset-pagination button {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  padding: 0 10px;
+}
+
+.asset-pagination button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.asset-pagination svg {
+  width: 16px;
+  height: 16px;
+}
+
+.asset-empty,
+.asset-loading,
+.asset-error {
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 14px;
+}
+
+.asset-empty,
+.asset-loading {
+  border: 1px dashed rgba(23, 32, 27, 0.2);
+  color: #65716b;
+}
+
+.asset-error {
+  border: 1px solid rgba(176, 46, 46, 0.2);
+  background: #fff6f6;
+  color: #a12b2b;
+}
+
+.placeholder-page {
+  min-height: 100%;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.mesh-import-page {
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+}
+
+.mesh-import-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.mesh-import-panel,
+.mesh-viewer-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.mesh-import-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #153d32;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.mesh-import-title svg {
+  width: 18px;
+  height: 18px;
+}
+
+.mesh-color-list {
+  display: grid;
+  max-height: 420px;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.mesh-color-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #f8faf8;
+  padding: 9px;
+}
+
+.mesh-color-row > span {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(23, 32, 27, 0.18);
+  border-radius: 6px;
+}
+
+.mesh-color-row div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.mesh-color-row strong,
+.mesh-color-row em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-color-row strong {
+  color: #17201b;
+  font-size: 13px;
+}
+
+.mesh-color-row em {
+  color: #65716b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.mesh-viewer-canvas,
+.mesh-viewer-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.mesh-viewer-canvas {
+  min-height: calc(100vh - 72px);
+}
+
+.mesh-viewer-error {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  max-width: min(420px, calc(100% - 36px));
+}
+
+.model-viewer-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 100vh;
+  background: #eef3f0;
+}
+
+.model-viewer-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  border-bottom: 1px solid rgba(23, 32, 27, 0.14);
+  background: #ffffff;
+  padding: 16px 20px;
+}
+
+.model-viewer-header button {
+  display: inline-flex;
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  padding: 0 10px;
+}
+
+.model-viewer-header h1 {
+  margin: 0;
+  color: #10271f;
+  font-size: 20px;
+}
+
+.model-viewer-header p {
+  margin: 4px 0 0;
+  color: #65716b;
+  font-size: 13px;
+}
+
+.model-viewer-header svg {
+  width: 18px;
+  height: 18px;
+}
+
+.model-viewer-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  min-height: 0;
+}
+
+.model-viewer-canvas {
+  position: relative;
+  min-height: calc(100vh - 72px);
+}
+
+.model-viewer-heightmap {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: calc(100vh - 72px);
+  gap: 14px;
+  padding: 20px;
+}
+
+.model-viewer-panel {
+  border-left: 1px solid rgba(23, 32, 27, 0.14);
+  background: rgba(247, 249, 246, 0.9);
+  padding: 18px;
+}
+
+.lego-terrain-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 100vh;
+  background: #f2f5f1;
+}
+
+.lego-terrain-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid rgba(23, 32, 27, 0.14);
+  background: #ffffff;
+  padding: 18px 22px;
+}
+
+.lego-terrain-header h1,
+.lego-terrain-panel h2 {
+  margin: 0;
+  color: #10271f;
+  letter-spacing: 0;
+}
+
+.lego-terrain-header h1 {
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.lego-terrain-header p {
+  margin: 5px 0 0;
+  color: #65716b;
+  font-size: 13px;
+}
+
+.lego-terrain-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.lego-terrain-actions button,
+.lego-terrain-actions label,
+.lego-terrain-save-panel button {
+  display: inline-flex;
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  padding: 0 11px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lego-terrain-actions label {
+  background: #153d32;
+  color: #ffffff;
+}
+
+.lego-terrain-save-panel button {
+  justify-content: center;
+  background: #153d32;
+  color: #ffffff;
+}
+
+.lego-terrain-save-panel button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.lego-terrain-actions input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.lego-terrain-actions svg,
+.lego-terrain-save-panel svg,
+.lego-heightmap-title svg,
+.lego-terrain-progress svg,
+.lego-terrain-metric svg {
+  width: 17px;
+  height: 17px;
+}
+
+.lego-terrain-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 300px;
+  min-height: 0;
+}
+
+.lego-terrain-panel {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  border-right: 1px solid rgba(23, 32, 27, 0.14);
+  background: rgba(250, 251, 249, 0.92);
+  padding: 20px;
+}
+
+.lego-terrain-panel:last-child {
+  border-right: 0;
+  border-left: 1px solid rgba(23, 32, 27, 0.14);
+}
+
+.lego-terrain-panel h2 {
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.lego-terrain-control {
+  display: grid;
+  gap: 6px;
+  color: #31433a;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lego-terrain-control input,
+.lego-terrain-control select {
+  height: 38px;
+  width: 100%;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #17201b;
+  padding: 0 10px;
+}
+
+.lego-heightmap-workspace {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: calc(100vh - 75px);
+  gap: 14px;
+  padding: 20px;
+}
+
+.lego-heightmap-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #153d32;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.lego-heightmap-legend {
+  display: flex;
+  min-height: 34px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  color: #65716b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.lego-heightmap-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #31433a;
+  font-weight: 650;
+}
+
+.lego-heightmap-legend-item span {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 4px;
+}
+
+.lego-heightmap-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #d9e2dd;
+  image-rendering: pixelated;
+}
+
+.lego-heightmap-empty,
+.lego-terrain-error {
+  display: grid;
+  min-height: 420px;
+  place-items: center;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.lego-heightmap-empty {
+  border: 1px dashed rgba(23, 32, 27, 0.2);
+  color: #65716b;
+}
+
+.lego-terrain-error {
+  border: 1px solid rgba(176, 46, 46, 0.2);
+  background: #fff6f6;
+  color: #a12b2b;
+}
+
+.lego-terrain-progress {
+  position: absolute;
+  top: 56px;
+  left: 34px;
+  display: grid;
+  grid-template-columns: 17px auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 10px 12px;
+  color: #153d32;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lego-terrain-progress > div {
+  grid-column: 1 / -1;
+  width: 210px;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #dce8e1;
+}
+
+.lego-terrain-progress > div > div {
+  height: 100%;
+  border-radius: 8px;
+  background: #1f7a5a;
+}
+
+.lego-terrain-source {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.lego-terrain-source strong,
+.lego-terrain-source span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lego-terrain-source strong {
+  color: #17201b;
+  font-size: 13px;
+}
+
+.lego-terrain-source span {
+  color: #65716b;
+  font-size: 12px;
+}
+
+.lego-terrain-metrics {
+  display: grid;
+  gap: 10px;
+}
+
+.lego-terrain-save-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.lego-terrain-metric {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 3px 10px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.lego-terrain-metric div {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  grid-row: span 2;
+  place-items: center;
+  border-radius: 8px;
+  background: #e3eee8;
+  color: #1f7a5a;
+}
+
+.lego-terrain-metric span {
+  color: #65716b;
+  font-size: 12px;
+}
+
+.lego-terrain-metric strong {
+  overflow: hidden;
+  color: #17201b;
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pixel-art-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 100vh;
+  background: #f2f5f1;
+}
+
+.pixel-art-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid rgba(23, 32, 27, 0.14);
+  background: #ffffff;
+  padding: 18px 22px;
+}
+
+.pixel-art-header h1,
+.pixel-art-panel h2 {
+  margin: 0;
+  color: #10271f;
+  letter-spacing: 0;
+}
+
+.pixel-art-header h1 {
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.pixel-art-header p {
+  margin: 5px 0 0;
+  color: #65716b;
+  font-size: 13px;
+}
+
+.pixel-art-header label,
+.pixel-art-save {
+  display: inline-flex;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #153d32;
+  color: #ffffff;
+  cursor: pointer;
+  padding: 0 11px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pixel-art-header input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.pixel-art-header svg,
+.pixel-art-save svg,
+.pixel-art-title svg {
+  width: 17px;
+  height: 17px;
+}
+
+.pixel-art-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 300px;
+  min-height: 0;
+}
+
+.pixel-art-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  border-bottom: 1px solid rgba(23, 32, 27, 0.14);
+  background: #ffffff;
+  padding: 12px 22px;
+}
+
+.pixel-art-step {
+  min-height: 34px;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #f7faf8;
+  color: #65716b;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pixel-art-step-active {
+  border-color: rgba(31, 122, 90, 0.28);
+  background: #e3eee8;
+  color: #153d32;
+}
+
+.pixel-art-stage-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.pixel-art-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 300px;
+  min-height: 0;
+}
+
+.pixel-art-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  border-right: 1px solid rgba(23, 32, 27, 0.14);
+  background: rgba(250, 251, 249, 0.92);
+  padding: 20px;
+}
+
+.pixel-art-panel:last-child {
+  border-right: 0;
+  border-left: 1px solid rgba(23, 32, 27, 0.14);
+}
+
+.pixel-art-panel h2 {
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.pixel-art-control {
+  display: grid;
+  gap: 6px;
+  color: #31433a;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pixel-art-control input,
+.pixel-art-control select {
+  height: 38px;
+  width: 100%;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #17201b;
+  padding: 0 10px;
+}
+
+.pixel-art-checkbox-control {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.pixel-art-checkbox-control input {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+}
+
+.pixel-art-custom-ratio {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pixel-art-ratio-grid,
+.pixel-art-tool-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pixel-art-ratio-grid button,
+.pixel-art-tool-row button,
+.pixel-art-palette-row {
+  min-height: 38px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pixel-art-tool-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.pixel-art-tool-row button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.pixel-art-tool-row svg {
+  width: 16px;
+  height: 16px;
+}
+
+.pixel-art-ratio-active {
+  border-color: rgba(31, 122, 90, 0.35) !important;
+  background: #e3eee8 !important;
+  color: #153d32 !important;
+}
+
+.pixel-art-source,
+.pixel-art-metadata,
+.pixel-art-message {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.pixel-art-source img {
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #e7eee9;
+}
+
+.pixel-art-source strong,
+.pixel-art-source span,
+.pixel-art-metadata strong,
+.pixel-art-metadata span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pixel-art-source strong,
+.pixel-art-metadata strong {
+  color: #17201b;
+  font-size: 13px;
+}
+
+.pixel-art-source span,
+.pixel-art-metadata span {
+  color: #65716b;
+  font-size: 12px;
+}
+
+.pixel-art-empty,
+.pixel-art-canvas-empty {
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(23, 32, 27, 0.2);
+  border-radius: 8px;
+  color: #65716b;
+  font-size: 14px;
+}
+
+.pixel-art-empty {
+  min-height: 120px;
+}
+
+.pixel-art-workspace {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: calc(100vh - 75px);
+  gap: 14px;
+  padding: 20px;
+}
+
+.pixel-art-editor-column {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: calc(100vh - 128px);
+  gap: 14px;
+  padding: 20px;
+}
+
+.pixel-art-editor-column + .pixel-art-editor-column {
+  border-left: 1px solid rgba(23, 32, 27, 0.14);
+}
+
+.pixel-art-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #153d32;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.pixel-art-canvas,
+.pixel-art-canvas-empty {
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+}
+
+.pixel-art-canvas {
+  display: block;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #dce5df;
+  image-rendering: pixelated;
+  touch-action: none;
+}
+
+.pixel-art-editor-canvas {
+  min-height: 420px;
+}
+
+.pixel-art-save:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.pixel-art-secondary {
+  background: #ffffff;
+  color: #153d32;
+}
+
+.pixel-art-message {
+  color: #153d32;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.pixel-art-palette {
+  display: grid;
+  max-height: 280px;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.pixel-art-palette-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px;
+  font-size: 12px;
+  text-align: left;
+}
+
+.pixel-art-palette-row span {
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 5px;
+}
+
+.pixel-art-palette-row strong,
+.pixel-art-palette-row em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pixel-art-palette-row strong {
+  color: #17201b;
+  font-style: normal;
+}
+
+.pixel-art-palette-row em {
+  color: #65716b;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.pixel-art-grid-preview {
+  display: grid;
+  min-height: 520px;
+  place-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #dce5df;
+  padding: 22px;
+}
+
+.pixel-art-grid-preview > div {
+  display: grid;
+  width: min(100%, 760px);
+  max-height: 100%;
+  place-items: center;
+  gap: 6px;
+  border: 1px solid rgba(23, 32, 27, 0.18);
+  border-radius: 8px;
+  background-image:
+    linear-gradient(rgba(23, 32, 27, 0.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(23, 32, 27, 0.14) 1px, transparent 1px);
+  background-size: 16px 16px;
+  color: #153d32;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.pixel-art-grid-preview > div em {
+  color: #65716b;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.pixel-art-projects-page {
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+}
+
+.pixel-art-project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.pixel-art-project-card {
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.pixel-art-project-card img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #dce5df;
+  image-rendering: pixelated;
+}
+
+.pixel-art-project-card div {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.pixel-art-project-card svg {
+  width: 18px;
+  height: 18px;
+  color: #1f7a5a;
+}
+
+.pixel-art-project-card strong,
+.pixel-art-project-card span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pixel-art-project-card strong {
+  color: #17201b;
+  font-size: 14px;
+}
+
+.pixel-art-project-card span {
+  color: #65716b;
+  font-size: 12px;
+}
+
+.lego-design-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 100vh;
+  background: #f4f6f2;
+}
+
+.lego-design-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid rgba(23, 32, 27, 0.14);
+  background: #ffffff;
+  padding: 18px 22px;
+}
+
+.lego-design-header h1,
+.lego-design-panel h2,
+.lego-design-preview-panel h2 {
+  margin: 0;
+  color: #10271f;
+  letter-spacing: 0;
+}
+
+.lego-design-header h1 {
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.lego-design-header p {
+  margin: 5px 0 0;
+  color: #65716b;
+  font-size: 13px;
+}
+
+.lego-design-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.lego-design-actions button {
+  display: inline-flex;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  padding: 0 11px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lego-design-action-switch {
+  display: inline-flex;
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  padding: 0 11px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lego-design-action-switch input {
+  width: 34px;
+  height: 19px;
+  margin: 0;
+  accent-color: #1f7a5a;
+}
+
+.lego-design-action-switch span {
+  white-space: nowrap;
+}
+
+.lego-design-actions button:last-child {
+  background: #153d32;
+  color: #ffffff;
+}
+
+.lego-design-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.lego-design-actions svg,
+.lego-design-title svg,
+.lego-design-source svg {
+  width: 17px;
+  height: 17px;
+}
+
+.lego-design-layout {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.lego-design-layout-fullscreen {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.lego-design-layout-fullscreen .lego-design-panel:first-child {
+  display: none;
+}
+
+.lego-design-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  border-right: 1px solid rgba(23, 32, 27, 0.14);
+  background: rgba(250, 251, 249, 0.94);
+  padding: 20px;
+}
+
+.lego-design-panel:last-child {
+  border-right: 0;
+  border-left: 1px solid rgba(23, 32, 27, 0.14);
+}
+
+.lego-design-panel h2 {
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.lego-design-project-list {
+  display: grid;
+  max-height: calc(100vh - 260px);
+  gap: 10px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.lego-design-project-grid-modal {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.lego-design-project {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #17201b;
+  cursor: pointer;
+  padding: 9px;
+  text-align: left;
+}
+
+.lego-design-project:hover,
+.lego-design-project-active {
+  border-color: rgba(31, 122, 90, 0.34);
+  background: #edf5f0;
+}
+
+.lego-design-project img {
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #dce5df;
+  image-rendering: pixelated;
+}
+
+.lego-design-project > svg {
+  width: 28px;
+  height: 28px;
+  justify-self: center;
+  color: #1f7a5a;
+}
+
+.lego-design-project span,
+.lego-design-source span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.lego-design-project strong,
+.lego-design-project em,
+.lego-design-source strong,
+.lego-design-source em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lego-design-project strong,
+.lego-design-source strong {
+  color: #17201b;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.lego-design-project em,
+.lego-design-source em {
+  color: #65716b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.lego-design-project small {
+  color: #a95522;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.lego-design-full-button {
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #153d32;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lego-design-full-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.lego-design-full-button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.lego-design-progress {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 11px;
+}
+
+.lego-design-progress span {
+  color: #153d32;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.lego-design-progress > div {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #dce8e1;
+}
+
+.lego-design-progress > div > div {
+  height: 100%;
+  border-radius: 8px;
+  background: #1f7a5a;
+  transition: width 180ms ease;
+}
+
+.lego-design-workspace {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: calc(100vh - 75px);
+  gap: 14px;
+  padding: 20px;
+}
+
+.lego-design-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #153d32;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.lego-design-title > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lego-design-preview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.lego-design-preview-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.lego-design-preview-panel h2 {
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.lego-design-preview-panel > div {
+  display: grid;
+  min-height: 520px;
+  align-items: start;
+  justify-items: center;
+  overflow: auto;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #dfe7e1;
+  padding: 18px;
+}
+
+.lego-design-layout-fullscreen .lego-design-preview-panel > div {
+  min-height: calc(100vh - 156px);
+}
+
+.lego-design-preview-panel img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 6px;
+  image-rendering: pixelated;
+}
+
+.lego-design-board-shell {
+  flex: none;
+}
+
+.lego-design-board {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid rgba(23, 32, 27, 0.18);
+  border-radius: 8px;
+  background-color: #eef2ed;
+  background-image:
+    linear-gradient(rgba(23, 32, 27, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(23, 32, 27, 0.12) 1px, transparent 1px);
+  transform-origin: top left;
+}
+
+.lego-design-placement {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.18);
+  border-radius: 6px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 -2px 0 rgba(23, 32, 27, 0.14);
+  color: rgba(0, 0, 0, 0.68);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.lego-design-placement span {
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.lego-design-display-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.lego-design-switch-row,
+.lego-design-zoom-control,
+.lego-design-control-button {
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.lego-design-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 10px;
+}
+
+.lego-design-switch-row span,
+.lego-design-zoom-control > span {
+  color: #31433a;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.lego-design-switch-row input {
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  accent-color: #1f7a5a;
+}
+
+.lego-design-zoom-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 8px;
+}
+
+.lego-design-zoom-control > div {
+  display: grid;
+  grid-template-columns: 32px 62px 32px;
+  gap: 6px;
+  align-items: center;
+}
+
+.lego-design-zoom-control button,
+.lego-design-control-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #f7faf8;
+  color: #153d32;
+  cursor: pointer;
+}
+
+.lego-design-zoom-control button {
+  width: 32px;
+  height: 30px;
+}
+
+.lego-design-zoom-control button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.lego-design-zoom-control strong {
+  color: #17201b;
+  font-size: 14px;
+  font-weight: 750;
+  text-align: center;
+}
+
+.lego-design-zoom-control svg,
+.lego-design-control-button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.lego-design-control-button {
+  height: 38px;
+  gap: 8px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.lego-design-metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.lego-design-metric,
+.lego-design-source,
+.lego-design-color-row,
+.lego-design-bom-row {
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.lego-design-metric {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+
+.lego-design-metric span {
+  color: #65716b;
+  font-size: 12px;
+}
+
+.lego-design-metric strong {
+  overflow: hidden;
+  color: #17201b;
+  font-size: 14px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lego-design-source {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  padding: 11px;
+}
+
+.lego-design-source svg {
+  color: #1f7a5a;
+}
+
+.lego-design-list-section {
+  display: grid;
+  gap: 8px;
+}
+
+.lego-design-list-section h3 {
+  margin: 0;
+  color: #31433a;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.lego-design-strategy-description {
+  margin: 0;
+  color: #5d6d63;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.lego-design-control-field {
+  display: grid;
+  gap: 6px;
+  color: #31433a;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lego-design-control-field input,
+.lego-design-control-field select {
+  height: 36px;
+  width: 100%;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #17201b;
+  padding: 0 10px;
+}
+
+.lego-design-heightmap-preview {
+  display: grid;
+  grid-template-rows: auto minmax(360px, 1fr) auto;
+  gap: 12px;
+  min-height: 520px;
+}
+
+.lego-design-color-list,
+.lego-design-bom-list {
+  display: grid;
+  max-height: 260px;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.lego-design-color-row {
+  display: grid;
+  grid-template-columns: 22px 22px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+}
+
+.lego-design-color-row span,
+.lego-design-bom-row > span {
+  display: block;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 5px;
+}
+
+.lego-design-color-row span {
+  width: 22px;
+  height: 22px;
+}
+
+.lego-design-color-row strong {
+  overflow: hidden;
+  color: #17201b;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lego-design-bom-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  padding: 9px;
+}
+
+.lego-design-bom-row > span {
+  width: 24px;
+  height: 24px;
+}
+
+.lego-design-bom-row div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.lego-design-bom-row strong,
+.lego-design-bom-row em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lego-design-bom-row strong {
+  color: #17201b;
+  font-size: 13px;
+}
+
+.lego-design-bom-row em {
+  color: #65716b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.lego-design-bom-row b {
+  min-width: 24px;
+  color: #a95522;
+  font-size: 14px;
+  text-align: right;
+}
+
+.lego-design-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(23, 32, 27, 0.42);
+  padding: 24px;
+}
+
+.lego-design-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  width: min(960px, 100%);
+  max-height: min(760px, 100%);
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 18px;
+  box-shadow: 0 24px 70px rgba(23, 32, 27, 0.24);
+}
+
+.lego-design-project-modal {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.lego-design-modal header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.lego-design-modal h2 {
+  margin: 0;
+  color: #10271f;
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.lego-design-modal header div {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.lego-design-modal header button {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lego-design-modal header button:last-child {
+  background: #153d32;
+  color: #ffffff;
+}
+
+.lego-design-modal header button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.lego-design-floating-preview {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+  box-shadow: 0 24px 70px rgba(23, 32, 27, 0.24);
+}
+
+.lego-design-floating-preview header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: move;
+  user-select: none;
+}
+
+.lego-design-floating-preview h2 {
+  margin: 0;
+  color: #10271f;
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.lego-design-floating-preview button {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lego-design-floating-preview button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.lego-design-floating-preview img {
+  max-width: 100%;
+  max-height: min(640px, calc(100vh - 120px));
+  justify-self: center;
+  overflow: auto;
+  border-radius: 6px;
+  background: #dce5df;
+  image-rendering: pixelated;
+}
+
+.component-repo-page {
+  display: grid;
+  gap: 16px;
+  min-height: calc(100vh - 84px);
+  background: #f4f6f2;
+  padding: 28px;
+}
+
+.component-repo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid rgba(23, 32, 27, 0.1);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at right 28px top 22px, rgba(255, 255, 255, 0.48) 0 10px, transparent 11px),
+    linear-gradient(135deg, #ffffff, #f5fff8 62%, #ecf6ff);
+  padding: 18px 22px;
+}
+
+.component-repo-header h1 {
+  margin: 0;
+  color: #10271f;
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.component-repo-header p {
+  margin: 6px 0 0;
+  color: #65716b;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.component-repo-actions,
+.component-repo-inline-actions,
+.component-repo-toolbar,
+.component-repo-publish-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.component-repo-actions {
+  justify-content: flex-end;
+}
+
+.component-repo-actions button,
+.component-repo-inline-actions button,
+.component-repo-toolbar button,
+.component-repo-primary-button,
+.component-repo-secondary-button,
+.component-repo-card a,
+.component-repo-card button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #153d32;
+  cursor: pointer;
+  padding: 0 11px;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.component-repo-actions button:last-child,
+.component-repo-primary-button,
+.component-repo-publish-actions button:last-child {
+  background: #153d32;
+  color: #ffffff;
+}
+
+.component-repo-secondary-button {
+  width: 100%;
+}
+
+.component-repo-actions button:disabled,
+.component-repo-inline-actions button:disabled,
+.component-repo-toolbar button:disabled,
+.component-repo-primary-button:disabled,
+.component-repo-secondary-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.component-repo-actions svg,
+.component-repo-inline-actions svg,
+.component-repo-toolbar svg,
+.component-repo-card a svg,
+.component-repo-card button svg,
+.component-repo-panel-title svg {
+  width: 17px;
+  height: 17px;
+}
+
+.component-repo-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.component-repo-list-layout {
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+}
+
+.component-repo-workbench {
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+
+.component-repo-panel,
+.component-repo-workspace {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.component-repo-workspace {
+  align-content: start;
+  min-height: 560px;
+}
+
+.component-repo-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #153d32;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.component-repo-panel-title svg {
+  color: #1f7a5a;
+}
+
+.component-repo-table,
+.component-repo-card-list,
+.component-repo-relation-list,
+.component-repo-stepper,
+.component-repo-validation {
+  display: grid;
+  gap: 8px;
+}
+
+.component-repo-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) 110px minmax(90px, 0.7fr) minmax(160px, 1fr) 22px;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #31433a;
+  cursor: pointer;
+  padding: 12px;
+  text-align: left;
+}
+
+.component-repo-row:hover,
+.component-repo-row-active {
+  border-color: rgba(31, 122, 90, 0.22);
+  background: #f4f8f5;
+}
+
+.component-repo-row strong,
+.component-repo-row span,
+.component-repo-card strong,
+.component-repo-card span,
+.component-repo-summary-card strong,
+.component-repo-summary-card span,
+.component-repo-metric strong,
+.component-repo-metric span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-repo-row strong,
+.component-repo-card strong,
+.component-repo-summary-card strong,
+.component-repo-candidate-ready strong {
+  color: #17201b;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.component-repo-row span,
+.component-repo-card span,
+.component-repo-summary-card span,
+.component-repo-candidate-ready span {
+  color: #65716b;
+  font-size: 12px;
+}
+
+.component-repo-status {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 24px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 999px;
+  background: #f4f8f5;
+  color: #31433a;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.component-repo-status-published,
+.component-repo-status-active,
+.component-repo-status-confirmed,
+.component-repo-status-passed,
+.component-repo-status-pass {
+  border-color: rgba(31, 122, 90, 0.22);
+  background: #e8f7ef;
+  color: #0b6f40;
+}
+
+.component-repo-status-draft,
+.component-repo-status-pending {
+  border-color: rgba(255, 177, 31, 0.24);
+  background: #fff6df;
+  color: #a46300;
+}
+
+.component-repo-status-rejected,
+.component-repo-status-blocked,
+.component-repo-status-fail {
+  border-color: rgba(176, 46, 46, 0.2);
+  background: #fff0f0;
+  color: #a12b2b;
+}
+
+.component-repo-card,
+.component-repo-summary-card,
+.component-repo-metric,
+.component-repo-relation-card,
+.component-repo-candidate-ready,
+.component-repo-message {
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.component-repo-card,
+.component-repo-summary-card,
+.component-repo-candidate-ready {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+}
+
+.component-repo-card > div,
+.component-repo-validation > div,
+.component-repo-check {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.component-repo-metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.component-repo-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.component-repo-metric span {
+  color: #65716b;
+  font-size: 12px;
+}
+
+.component-repo-metric strong {
+  color: #17201b;
+  font-size: 14px;
+}
+
+.component-repo-file-field,
+.component-repo-control-field {
+  display: grid;
+  gap: 6px;
+  color: #31433a;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.component-repo-control-field input,
+.component-repo-control-field select {
+  width: 100%;
+  height: 38px;
+  border: 1px solid rgba(23, 32, 27, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #17201b;
+  padding: 0 10px;
+}
+
+.component-repo-message {
+  border-color: rgba(31, 122, 90, 0.18);
+  background: #f0fbf4;
+  color: #0b6f40;
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.component-repo-step {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #f8faf8;
+  color: #65716b;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.component-repo-step span {
+  width: 17px;
+  height: 17px;
+  border: 1px solid rgba(23, 32, 27, 0.2);
+  border-radius: 999px;
+}
+
+.component-repo-step-done {
+  border-color: rgba(31, 122, 90, 0.2);
+  background: #e8f7ef;
+  color: #0b6f40;
+}
+
+.component-repo-step svg {
+  width: 17px;
+  height: 17px;
+}
+
+.component-repo-validation {
+  border-top: 1px solid rgba(23, 32, 27, 0.1);
+  padding-top: 12px;
+}
+
+.component-repo-validation strong,
+.component-repo-check span {
+  color: #31433a;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.component-repo-toolbar {
+  justify-content: space-between;
+}
+
+.component-repo-relation-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.component-repo-relation-card > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.component-repo-relation-card > span {
+  color: #65716b;
+  font-size: 12px;
+}
+
+.component-repo-relation-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.component-repo-publish-actions {
+  align-items: stretch;
+}
+
+@media (max-width: 860px) {
+  .workbench {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .workbench-topbar {
+    position: relative;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 16px;
+  }
+
+  .workbench-nav {
+    border-right: 0;
+    border-bottom: 1px solid rgba(23, 32, 27, 0.14);
+    padding: 18px 16px;
+  }
+
+  .workbench-brand strong {
+    font-size: 19px;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .topbar-user-button {
+    flex: 1 1 auto;
+  }
+
+  .workbench-menu {
+    gap: 16px;
+  }
+
+  .menu-brick-scene {
+    display: none;
+  }
+
+  .dashboard-page {
+    min-height: auto;
+    padding: 0 16px 36px;
+  }
+
+  .dashboard-page::after {
+    left: 0;
+  }
+
+  .dashboard-hero {
+    flex-direction: column;
+    align-items: flex-start;
+    margin: 0 -16px 24px;
+    padding: 20px 18px;
+  }
+
+  .dashboard-hero-model {
+    width: 100%;
+    max-width: 270px;
+  }
+
+  .dashboard-welcome {
+    align-items: flex-start;
+  }
+
+  .dashboard-welcome h1 {
+    font-size: 22px;
+  }
+
+  .dashboard-card-grid,
+  .dashboard-card-grid-1,
+  .dashboard-card-grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-card,
+  .dashboard-card-grid-3 .dashboard-card {
+    grid-template-columns: 108px minmax(0, 1fr);
+    grid-template-areas:
+      "title title"
+      "visual body";
+  }
+
+  .dashboard-card-amber {
+    grid-template-columns: 108px minmax(0, 1fr);
+  }
+
+  .terrain-app {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .terrain-viewer {
+    position: relative;
+    top: auto;
+    height: 68vh;
+    min-height: 68vh;
+  }
+
+  .terrain-panel {
+    border-top: 1px solid rgba(23, 32, 27, 0.16);
+    border-left: 0;
+    padding: 18px;
+  }
+
+  .terrain-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .lego-terrain-layout,
+  .lego-design-layout,
+  .lego-design-preview-grid,
+  .mesh-import-layout,
+  .model-viewer-layout,
+  .component-repo-layout,
+  .component-repo-list-layout,
+  .component-repo-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .pixel-art-layout,
+  .pixel-art-stage-layout,
+  .pixel-art-editor-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .lego-terrain-panel,
+  .lego-design-panel,
+  .lego-design-panel:last-child,
+  .lego-terrain-panel:last-child,
+  .pixel-art-panel,
+  .pixel-art-panel:last-child {
+    border-right: 0;
+    border-left: 0;
+    border-bottom: 1px solid rgba(23, 32, 27, 0.14);
+  }
+
+  .lego-heightmap-workspace,
+  .lego-design-workspace,
+  .component-repo-workspace,
+  .pixel-art-workspace,
+  .pixel-art-editor-column {
+    min-height: 70vh;
+  }
+
+  .component-repo-header,
+  .component-repo-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .component-repo-row {
+    grid-template-columns: 1fr;
+  }
+
+  .pixel-art-editor-column + .pixel-art-editor-column {
+    border-left: 0;
+    border-top: 1px solid rgba(23, 32, 27, 0.14);
+  }
+}
+
+@media (max-width: 520px) {
+  .terrain-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .terrain-panel h1 {
+    font-size: 21px;
+  }
+}

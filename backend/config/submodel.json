@@ -1,0 +1,95 @@
+{
+  "description": "Reusable LDraw submodel assemblies built from multiple parts.",
+  "routes": {
+    "submodels": "/api/submodels",
+    "submodel": "/api/submodels/{submodel_id}"
+  },
+  "database": {
+    "submodel_table": "ldraw_submodels",
+    "part_table": "ldraw_submodel_parts",
+    "connector_table": "ldraw_submodel_connectors",
+    "string_lengths": {
+      "id": 64,
+      "name": 255,
+      "color_code": 32,
+      "ldraw_part_num": 128,
+      "connector_label": 128,
+      "connector_kind": 64,
+      "connector_type": 64,
+      "connector_gender": 16
+    },
+    "constraints": {
+      "part_line_unique": "uk_submodel_part_line",
+      "connector_label_unique": "uk_submodel_connector_label"
+    },
+    "indexes": {
+      "submodel_created": "idx_submodel_created",
+      "part_submodel": "idx_submodel_part_submodel",
+      "part_ldraw_num": "idx_submodel_part_ldraw_num",
+      "connector_submodel": "idx_submodel_connector_submodel",
+      "connector_type": "idx_submodel_connector_type"
+    }
+  },
+  "storage": {
+    "submodel_id_hex_length": 32
+  },
+  "pagination": {
+    "default_page": 1,
+    "default_page_size": 20,
+    "max_page_size": 100
+  },
+  "ldraw": {
+    "line_separator": "\n",
+    "line_number_start": 1,
+    "minimum_part_count": 2,
+    "part_line_type": "1",
+    "part_line_token_count": 15,
+    "indices": {
+      "line_type": 0,
+      "color_code": 1,
+      "pos_x": 2,
+      "pos_y": 3,
+      "pos_z": 4,
+      "ori_11": 5,
+      "ori_12": 6,
+      "ori_13": 7,
+      "ori_21": 8,
+      "ori_22": 9,
+      "ori_23": 10,
+      "ori_31": 11,
+      "ori_32": 12,
+      "ori_33": 13,
+      "ldraw_part_num": 14
+    }
+  },
+  "color_percentages": {
+    "minimum_percentage": 0,
+    "maximum_percentage": 100
+  },
+  "connection_points": {
+    "orientation_value_count": 9,
+    "orientation_indices": {
+      "ori_11": 0,
+      "ori_12": 1,
+      "ori_13": 2,
+      "ori_21": 3,
+      "ori_22": 4,
+      "ori_23": 5,
+      "ori_31": 6,
+      "ori_32": 7,
+      "ori_33": 8
+    }
+  },
+  "errors": {
+    "empty_ldraw_content": "Submodel LDraw content is required",
+    "invalid_ldraw_part_line": "Invalid LDraw part line at line {line_number}",
+    "invalid_color_percentage": "Color percentage is outside the configured range",
+    "invalid_connection_point_orientation": "Connection point orientation must contain the configured number of values",
+    "insufficient_parts": "Submodel must contain the configured minimum number of part lines",
+    "submodel_not_found": "Submodel not found"
+  },
+  "http_status": {
+    "bad_request": 400,
+    "not_found": 404
+  }
+}

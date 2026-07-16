@@ -1,0 +1,1 @@
+"""LEGO model asset helpers."""

@@ -1,0 +1,129 @@
+{
+  "expectedSchema": "terrain-dem-v1",
+  "assetUrl": "/terrain/taiwan-dem.json",
+  "jobApiUrl": "/api/terrain/dem/jobs",
+  "jobStatusApiUrl": "/api/terrain/dem/jobs/{jobId}",
+  "modelsApiUrl": "/api/terrain/dem/models",
+  "modelApiUrl": "/api/terrain/dem/models/{modelId}",
+  "routePlaceholders": {
+    "jobId": "{jobId}",
+    "modelId": "{modelId}"
+  },
+  "pollIntervalMs": 400,
+  "initialProgress": 0,
+  "completeProgress": 100,
+  "emptyFileCount": 0,
+  "singleAssetCount": 1,
+  "jobStatus": {
+    "complete": "complete",
+    "failed": "failed"
+  },
+  "geojsonFileInputId": "terrain-geojson-file",
+  "geojsonFileAccept": ".geojson,application/geo+json,application/json",
+  "geojson": {
+    "typeKey": "type",
+    "featuresKey": "features",
+    "featureCollectionType": "FeatureCollection",
+    "propertiesKey": "properties",
+    "modelNamePropertyKeys": ["name"],
+    "modelNameEmptyValue": "",
+    "propertyValueLimit": 6,
+    "nullValue": "null",
+    "arrayValue": "[array]",
+    "objectValue": "[object]",
+    "emptyValue": "-"
+  },
+  "demDatasets": {
+    "defaultKey": "dem_1km",
+    "options": [
+      {
+        "key": "dem_1km",
+        "label": "DEM 1km"
+      },
+      {
+        "key": "dem_250m",
+        "label": "DEM 250m"
+      }
+    ]
+  },
+  "demDatasetInputId": "terrain-dem-dataset",
+  "renderOptions": {
+    "defaultVerticalExaggeration": 8,
+    "minVerticalExaggeration": 1,
+    "maxVerticalExaggeration": 30,
+    "verticalExaggerationStep": 1
+  },
+  "testCamera": {
+    "aspect": 1,
+    "westPoint": [-1, 0, 0],
+    "eastPoint": [1, 0, 0],
+    "northPoint": [0, 0, -1],
+    "southPoint": [0, 0, 1]
+  },
+  "texts": {
+    "title": "台湾 DEM 地形",
+    "subtitle": "GeoJSON 边界裁剪 / 1km DEM / Three.js",
+    "loading": "正在加载地形数据",
+    "importing": "正在计算 DEM 模型",
+    "importGeojson": "导入 GeoJSON",
+    "demDataset": "DEM 数据源",
+    "previewScale": "预览缩放",
+    "confirmRerender": "确认重渲染",
+    "saveModel": "保存模型",
+    "modelName": "模型名称",
+    "modelNamePlaceholder": "输入模型名称",
+    "saved": "已保存",
+    "modelList": "DEM 模型列表",
+    "refreshModels": "刷新列表",
+    "noModels": "暂无已保存模型",
+    "resetView": "重置视角",
+    "guideLabel": "DEM 方向辅助",
+    "compassNorth": "N",
+    "compassEast": "E",
+    "compassSouth": "S",
+    "compassWest": "W",
+    "normalVectorLabel": "法线向量",
+    "normalVectorDirection": "+Y",
+    "source": "数据源",
+    "geojsonInfo": "Properties",
+    "geojsonNoProperties": "无 properties",
+    "sourceNameSeparator": " / ",
+    "assetCount": "DEM 数量",
+    "mixedValue": "混合",
+    "grid": "网格",
+    "elevation": "高程",
+    "validSamples": "有效采样",
+    "invalidAsset": "地形数据格式不匹配",
+    "invalidGeojson": "GeoJSON 文件格式不正确",
+    "loadFailed": "地形数据加载失败"
+  },
+  "scene": {
+    "backgroundColor": "#eef3f0",
+    "maxTerrainWidth": 12,
+    "maxTerrainDepth": 9.5,
+    "defaultVerticalExaggeration": 8,
+    "latitudeMetersPerDegree": 111320,
+    "radiansPerDegree": 0.017453292519943295,
+    "cameraPosition": [0, 5.5, 9.2],
+    "cameraTarget": [0, 0.35, 0],
+    "fieldOfView": 45,
+    "nearPlane": 0.1,
+    "farPlane": 100,
+    "ambientLightColor": "#ffffff",
+    "ambientLightIntensity": 1.8,
+    "directionalLightColor": "#ffffff",
+    "directionalLightIntensity": 2.2,
+    "directionalLightPosition": [4, 7, 5],
+    "terrainRoughness": 0.82,
+    "terrainMetalness": 0,
+    "compassRotationCssProperty": "--terrain-compass-rotation",
+    "boundaryColor": "#0f4c81",
+    "boundaryElevation": 0.03,
+    "boundaryLineWidth": 1,
+    "colorRamp": {
+      "low": "#1f7a5a",
+      "mid": "#d7c16b",
+      "high": "#f4f7f7"
+    }
+  }
+}

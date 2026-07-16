@@ -1,0 +1,264 @@
+{
+  "schema": "component-repo-v1",
+  "audit": {
+    "system_user": "system"
+  },
+  "storage": {
+    "default_provider": "supabase",
+    "local_provider": "local",
+    "supabase_provider": "supabase",
+    "bucket": "component-artifacts",
+    "object_prefix": "component-repo",
+    "local_root_path": "data/component_repo_artifacts",
+    "supabase_url_env": "SUPABASE_URL",
+    "supabase_storage_key_env": "SUPABASE_STORAGE_KEY",
+    "supabase_legacy_key_envs": ["SUPABASE_KEY"],
+    "content_type_binary": "application/octet-stream",
+    "content_type_ldraw": "text/plain; charset=utf-8"
+  },
+  "routes": {
+    "component_imports": "/api/component-imports",
+    "component_import": "/api/component-imports/{import_id}",
+    "component_import_parse": "/api/component-imports/{import_id}/parse",
+    "component_import_candidate": "/api/component-imports/{import_id}/candidate",
+    "candidate_relations": "/api/component-candidates/{candidate_id}/relations",
+    "candidate_relations_detect": "/api/component-candidates/{candidate_id}/relations/detect",
+    "candidate_relation_confirm": "/api/component-candidates/{candidate_id}/relations/{relation_id}/confirm",
+    "candidate_relation_reject": "/api/component-candidates/{candidate_id}/relations/{relation_id}/reject",
+    "candidate_free_connectors": "/api/component-candidates/{candidate_id}/connectors/free",
+    "candidate_interfaces": "/api/component-candidates/{candidate_id}/interfaces",
+    "candidate_validate": "/api/component-candidates/{candidate_id}/validate",
+    "candidate_approve": "/api/component-candidates/{candidate_id}/approve",
+    "components": "/api/components",
+    "component_detail": "/api/components/{component_id}",
+    "component_versions": "/api/components/{component_id}/versions",
+    "component_version": "/api/component-versions/{version_id}",
+    "component_version_publish": "/api/component-versions/{version_id}/publish",
+    "component_version_deprecate": "/api/component-versions/{version_id}/deprecate",
+    "component_version_archive": "/api/component-versions/{version_id}/archive",
+    "component_version_source": "/api/component-versions/{version_id}/source",
+    "component_artifact_source": "/api/component-artifacts/{artifact_id}/source"
+  },
+  "artifacts": {
+    "studio_io": "studio_io",
+    "ldraw_ldr": "ldraw_ldr",
+    "ldraw_mpd": "ldraw_mpd",
+    "allowed_types": ["studio_io", "ldraw_ldr", "ldraw_mpd"]
+  },
+  "ldraw": {
+    "parser_version": "component-repo-ldraw-parser-v1",
+    "line_separator": "\n",
+    "line_number_start": 1,
+    "meta_line_type": "0",
+    "part_line_type": "1",
+    "studio_v2_line_type": "11",
+    "file_meta_prefix": "0 FILE ",
+    "nofile_meta": "0 NOFILE",
+    "name_meta_prefix": "0 Name:",
+    "num_of_bricks_prefix": "0 NumOfBricks",
+    "type1_token_count": 15,
+    "transform_value_count": 12,
+    "model_id_prefix": "model",
+    "part_instance_id_prefix": "part",
+    "submodel_instance_id_prefix": "submodel",
+    "default_model_name": "root",
+    "issues": {
+      "unsupported_line_type": "unsupported_line_type",
+      "invalid_type1_line": "invalid_type1_line",
+      "duplicate_model_name": "duplicate_model_name",
+      "unclosed_model": "unclosed_model"
+    }
+  },
+  "imports": {
+    "status": {
+      "uploaded": "uploaded",
+      "parsing": "parsing",
+      "parsed": "parsed",
+      "failed": "failed"
+    }
+  },
+  "candidates": {
+    "status": {
+      "pending_review": "pending_review",
+      "in_review": "in_review",
+      "approved": "approved",
+      "rejected": "rejected"
+    }
+  },
+  "components": {
+    "status": {
+      "draft": "draft",
+      "active": "active",
+      "archived": "archived"
+    }
+  },
+  "part_library": {
+    "default_version_id": "partlib-v1",
+    "source_table": "connector_instances",
+    "status": {
+      "active": "active",
+      "deprecated": "deprecated"
+    }
+  },
+  "relations": {
+    "candidate_status": {
+      "pending": "pending",
+      "confirmed": "confirmed",
+      "rejected": "rejected",
+      "ambiguous": "ambiguous"
+    },
+    "detection_method": {
+      "automatic": "automatic",
+      "manual": "manual"
+    },
+    "joint_type": {
+      "fixed": "fixed",
+      "revolute": "revolute",
+      "unknown": "unknown"
+    },
+    "connector_capacity": 1,
+    "compatibility": [
+      {
+        "connector_type_a": "technic_pin",
+        "connector_type_b": "technic_pin_hole",
+        "gender_a": "M",
+        "gender_b": "F",
+        "connection_type": "pin_hole",
+        "joint_type": "revolute",
+        "candidate_lateral_ldu": 0.8,
+        "candidate_axis_angle_deg": 4.0,
+        "verified_lateral_ldu": 0.4,
+        "verified_axis_angle_deg": 2.0
+      },
+      {
+        "connector_type_a": "axle",
+        "connector_type_b": "axle_hole",
+        "gender_a": "M",
+        "gender_b": "F",
+        "connection_type": "axle_hole",
+        "joint_type": "fixed",
+        "candidate_lateral_ldu": 0.6,
+        "candidate_axis_angle_deg": 3.0,
+        "verified_lateral_ldu": 0.3,
+        "verified_axis_angle_deg": 1.5
+      },
+      {
+        "connector_type_a": "stud",
+        "connector_type_b": "anti_stud",
+        "gender_a": "M",
+        "gender_b": "F",
+        "connection_type": "stud_tube",
+        "joint_type": "fixed",
+        "candidate_lateral_ldu": 1.0,
+        "candidate_axis_angle_deg": 5.0,
+        "verified_lateral_ldu": 0.5,
+        "verified_axis_angle_deg": 2.0
+      }
+    ]
+  },
+  "versions": {
+    "status": {
+      "draft": "draft",
+      "validating": "validating",
+      "ready_to_publish": "ready_to_publish",
+      "blocked": "blocked",
+      "published": "published",
+      "deprecated": "deprecated",
+      "archived": "archived"
+    }
+  },
+  "interfaces": {
+    "exposure": {
+      "external": "external",
+      "conditional": "conditional",
+      "reserved": "reserved"
+    },
+    "status": {
+      "pending": "pending",
+      "confirmed": "confirmed",
+      "rejected": "rejected"
+    },
+    "default_behavior": {
+      "fixed": "fixed",
+      "revolute": "revolute",
+      "free": "free"
+    }
+  },
+  "validation": {
+    "level": {
+      "draft": "draft",
+      "publish": "publish"
+    },
+    "validator_version": "component-repo-validator-v1",
+    "check_status": {
+      "pass": "pass",
+      "fail": "fail",
+      "warn": "warn"
+    }
+  },
+  "database": {
+    "artifact_table": "component_artifacts",
+    "import_table": "component_imports",
+    "scene_snapshot_table": "component_scene_snapshots",
+    "candidate_table": "component_candidates",
+    "part_library_version_table": "part_library_versions",
+    "part_connector_definition_table": "part_connector_definitions",
+    "relation_candidate_table": "component_relation_candidates",
+    "assembly_relation_table": "component_assembly_relations",
+    "component_table": "components",
+    "component_version_table": "component_versions",
+    "component_interface_table": "component_interfaces",
+    "validation_report_table": "component_validation_reports",
+    "string_lengths": {
+      "id": 36,
+      "artifact_type": 32,
+      "provider": 32,
+      "bucket": 128,
+      "sha256": 64,
+      "mime_type": 128,
+      "status": 32,
+      "schema": 64,
+      "parser_version": 64,
+      "connection_type": 64,
+      "connector_type": 64,
+      "connector_gender": 16,
+      "joint_type": 64,
+      "method": 64,
+      "user": 128
+    },
+    "indexes": {
+      "artifact_type": "idx_component_artifacts_type",
+      "artifact_sha": "idx_component_artifacts_sha256",
+      "artifact_uploaded": "idx_component_artifacts_uploaded_at",
+      "import_status": "idx_component_imports_status",
+      "import_created": "idx_component_imports_created_at",
+      "snapshot_import": "idx_component_scene_snapshots_import",
+      "snapshot_created": "idx_component_scene_snapshots_created_at",
+      "candidate_import": "idx_component_candidates_import",
+      "candidate_status": "idx_component_candidates_status",
+      "candidate_created": "idx_component_candidates_created_at",
+      "part_library_status": "idx_part_library_versions_status",
+      "part_connector_definition_version": "idx_part_connector_definitions_version",
+      "part_connector_definition_part": "idx_part_connector_definitions_part",
+      "part_connector_definition_type": "idx_part_connector_definitions_type",
+      "relation_candidate_component": "idx_component_relation_candidates_candidate",
+      "relation_candidate_status": "idx_component_relation_candidates_status",
+      "assembly_relation_candidate": "idx_component_assembly_relations_candidate",
+      "component_status": "idx_components_status",
+      "component_category": "idx_components_category",
+      "component_version_component": "idx_component_versions_component",
+      "component_version_status": "idx_component_versions_status",
+      "component_interface_candidate": "idx_component_interfaces_candidate",
+      "component_interface_status": "idx_component_interfaces_status",
+      "validation_report_candidate": "idx_component_validation_reports_candidate",
+      "validation_report_version": "idx_component_validation_reports_version"
+    }
+  },
+  "errors": {
+    "invalid_artifact_type": "Unsupported component artifact type: {artifact_type}",
+    "missing_supabase_config": "Missing Supabase Storage configuration",
+    "immutable_artifact_exists": "Immutable artifact already exists at storage key: {storage_key}",
+    "artifact_not_found": "Component artifact not found: {artifact_id}",
+    "hash_mismatch": "Component artifact hash mismatch: {artifact_id}"
+  }
+}

@@ -1,0 +1,381 @@
+{
+  "texts": {
+    "appTitle": "BrickBuilder",
+    "appSubtitle": "3D LEGO 建模工作台",
+    "build3d": "构建 3D 模型",
+    "directImport": "直接导入 3D 模型",
+    "demBuilder": "在线生成地理 DEM 模型",
+    "modelAssets": "查看 3D 模型列表",
+    "legoBuilder": "构建 LEGO 模型",
+    "legoDesign": "LEGO 设计图",
+    "pixelArt": "图片像素化",
+    "pixelArtProjects": "像素图列表",
+    "partSearch": "零件搜索",
+    "componentRepo": "组件仓库",
+    "componentRepoTitle": "组件仓库",
+    "componentRepoSubtitle": "管理可发布、可复用的 LEGO 组件版本",
+    "componentRepoImportTitle": "导入组件",
+    "componentRepoImportSubtitle": "上传 Studio 原始文件和可选 LDraw 交换文件；也支持直接上传 .ldr/.mpd 生成候选组件",
+    "componentRepoCandidateTitle": "候选组件工作台",
+    "componentRepoCandidateSubtitle": "审核连接关系、标记外部接口、验证并发布组件版本",
+    "directImportTitle": "直接导入 3D 模型",
+    "directImportPending": "选择 GLB 文件导入并提取材质颜色",
+    "meshModelName": "模型名称",
+    "meshModelNamePlaceholder": "输入模型名称",
+    "meshFile": "GLB 文件",
+    "meshUpload": "导入模型",
+    "meshUploadComplete": "导入完成",
+    "meshColorSummary": "材质颜色",
+    "meshNoColors": "未找到材质颜色",
+    "meshFaceCount": "三角面",
+    "modelListTitle": "3D 模型资产",
+    "modelListSubtitle": "数据库分页查询已保存模型资产",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "viewAsset": "查看",
+    "deleteAsset": "删除",
+    "emptyModels": "暂无模型资产",
+    "modelViewerTitle": "模型展示",
+    "backToModelList": "返回模型列表",
+    "unsupportedModelType": "当前模型类型暂未支持展示",
+    "loading": "正在加载",
+    "loadFailed": "模型资产加载失败",
+    "componentRepoNewImport": "导入新组件",
+    "componentRepoBackToList": "返回组件列表",
+    "componentRepoCreateImport": "创建导入",
+    "componentRepoParse": "解析 LDraw",
+    "componentRepoDetectRelations": "识别连接",
+    "componentRepoValidate": "运行验证",
+    "componentRepoApprove": "生成 Draft",
+    "componentRepoPublish": "发布版本",
+    "componentRepoSourceFile": "Source .io/.ldr/.mpd 文件",
+    "componentRepoExchangeFile": "可选 LDraw .ldr/.mpd 文件",
+    "componentRepoEmpty": "暂无已发布组件",
+    "componentRepoCandidateReady": "候选组件已生成",
+    "componentRepoNoCandidate": "请先上传并解析组件文件",
+    "componentRepoNoRelations": "暂无连接候选",
+    "componentRepoNoConnectors": "暂无可外露连接点",
+    "componentRepoNoInterfaces": "暂无外部接口",
+    "componentRepoInterfaceName": "接口名称",
+    "componentRepoInterfaceNamePlaceholder": "例如 mount_axle / top_pin",
+    "componentRepoCreateInterface": "标记外部接口",
+    "componentRepoComponentName": "组件名称",
+    "componentRepoComponentNamePlaceholder": "例如 wheel_shell_component2",
+    "componentRepoCategory": "分类",
+    "componentRepoCategoryPlaceholder": "例如 technic / chassis",
+    "componentRepoVersion": "版本号",
+    "componentRepoReleaseNote": "发布说明",
+    "componentRepoDownloadSource": "下载原始 .io"
+  },
+  "errors": {
+    "unknownIcon": "菜单图标配置不存在",
+    "unknownRoute": "页面路由配置不存在"
+  },
+  "initialPage": "dashboard",
+  "modelAssetsApiUrl": "/api/model-assets",
+  "meshModelsApiUrl": "/api/mesh-models",
+  "meshModelFileApiUrl": "/api/mesh-models/{modelId}/file",
+  "componentRepoApi": {
+    "components": "/api/components",
+    "componentImports": "/api/component-imports",
+    "componentImportParse": "/api/component-imports/{importId}/parse",
+    "componentImportCandidate": "/api/component-imports/{importId}/candidate",
+    "candidateRelations": "/api/component-candidates/{candidateId}/relations",
+    "candidateRelationsDetect": "/api/component-candidates/{candidateId}/relations/detect",
+    "candidateRelationConfirm": "/api/component-candidates/{candidateId}/relations/{relationId}/confirm",
+    "candidateRelationReject": "/api/component-candidates/{candidateId}/relations/{relationId}/reject",
+    "candidateFreeConnectors": "/api/component-candidates/{candidateId}/connectors/free",
+    "candidateInterfaces": "/api/component-candidates/{candidateId}/interfaces",
+    "candidateValidate": "/api/component-candidates/{candidateId}/validate",
+    "candidateApprove": "/api/component-candidates/{candidateId}/approve",
+    "componentVersions": "/api/components/{componentId}/versions",
+    "componentVersionPublish": "/api/component-versions/{versionId}/publish",
+    "componentVersionSource": "/api/component-versions/{versionId}/source"
+  },
+  "meshFileAccept": ".glb",
+  "meshFileInputId": "mesh-model-file",
+  "meshRoutePlaceholders": {
+    "modelId": "{modelId}"
+  },
+  "meshViewer": {
+    "backgroundColor": "#e4ebe6",
+    "fieldOfView": 45,
+    "nearPlane": 0.1,
+    "farPlane": 10000,
+    "cameraDistanceMultiplier": 2.4,
+    "minimumCameraDistance": 4,
+    "ambientLightColor": "#ffffff",
+    "ambientLightIntensity": 0.85,
+    "directionalLightColor": "#ffffff",
+    "directionalLightIntensity": 1.4,
+    "directionalLightPosition": [4, 6, 5],
+    "defaultMeshScale": 1,
+    "resizeWidthFallback": 1,
+    "resizeHeightFallback": 1,
+    "coveragePercentMultiplier": 100
+  },
+  "modelAssetPageSize": 10,
+  "modelTypes": {
+    "dem": "dem",
+    "legoHeightmap": "lego_heightmap",
+    "mesh": "mesh"
+  },
+  "pages": {
+    "dashboard": "dashboard",
+    "directImport": "directImport",
+    "demBuilder": "demBuilder",
+    "modelAssets": "modelAssets",
+    "legoBuilder": "legoBuilder",
+    "legoDesign": "legoDesign",
+    "pixelArt": "pixelArt",
+    "pixelArtProjects": "pixelArtProjects",
+    "partSearch": "partSearch",
+    "componentRepo": "componentRepo",
+    "componentRepoImport": "componentRepoImport",
+    "componentRepoCandidate": "componentRepoCandidate"
+  },
+  "router": {
+    "rootPath": "/",
+    "unmatchedPath": "*"
+  },
+  "routePaths": {
+    "dashboard": "/dashboard",
+    "directImport": "/direct-import",
+    "demBuilder": "/dem-builder",
+    "modelAssets": "/model-assets",
+    "legoBuilder": "/lego-builder",
+    "legoDesign": "/lego-design",
+    "pixelArt": "/pixel-art",
+    "pixelArtProjects": "/pixel-art-projects",
+    "partSearch": "/part-search",
+    "componentRepo": "/component-repo",
+    "componentRepoImport": "/component-repo/import",
+    "componentRepoCandidate": "/component-repo/candidates/:candidateId"
+  },
+  "topbar": {
+    "homeLabel": "首页",
+    "helpLabel": "帮助",
+    "notificationLabel": "通知",
+    "notificationCount": "3",
+    "authSignInLabel": "Google 登录",
+    "authNotConfiguredLabel": "登录未配置",
+    "userLabel": "Brick Master"
+  },
+  "menuGroups": [
+    {
+      "id": "assetManagement",
+      "title": "资产管理",
+      "icon": "box",
+      "tone": "blue",
+      "items": [
+        {
+          "id": "pixelAssetManagement",
+          "label": "像素图管理",
+          "icon": "image",
+          "page": "pixelArt"
+        },
+        {
+          "id": "demAssetManagement",
+          "label": "DEM模型管理",
+          "icon": "map",
+          "page": "demBuilder"
+        },
+        {
+          "id": "meshAssetManagement",
+          "label": "3D模型管理",
+          "icon": "cube",
+          "page": "directImport"
+        }
+      ]
+    },
+    {
+      "id": "legoBuild",
+      "title": "构建LEGO模型",
+      "icon": "boxes",
+      "tone": "green",
+      "items": [
+        {
+          "id": "pixelLegoBuild",
+          "label": "构建像素图LEGO模型",
+          "icon": "image",
+          "page": "legoDesign"
+        },
+        {
+          "id": "terrainLegoBuild",
+          "label": "构建山体LEGO模型",
+          "icon": "map",
+          "page": "legoBuilder"
+        },
+        {
+          "id": "meshLegoBuild",
+          "label": "构建3D LEGO模型",
+          "icon": "wand",
+          "page": "directImport"
+        }
+      ]
+    },
+    {
+      "id": "modelView",
+      "title": "查看模型",
+      "icon": "database",
+      "tone": "amber",
+      "items": [
+        {
+          "id": "legoModelManagement",
+          "label": "LEGO 模型管理",
+          "icon": "database",
+          "page": "modelAssets"
+        },
+        {
+          "id": "componentRepo",
+          "label": "组件仓库",
+          "icon": "boxes",
+          "page": "componentRepo"
+        }
+      ]
+    },
+    {
+      "id": "partLookup",
+      "title": "查找零件",
+      "icon": "search",
+      "tone": "purple",
+      "items": [
+        {
+          "id": "partSearch",
+          "label": "零件搜索",
+          "icon": "search",
+          "page": "partSearch"
+        }
+      ]
+    }
+  ],
+  "dashboard": {
+    "welcomeTitle": "欢迎回来，Brick Master!",
+    "welcomeSubtitle": "选择一个功能开始你的创作之旅",
+    "heroIcon": "box",
+    "sections": [
+      {
+        "id": "assetManagement",
+        "title": "资产管理",
+        "icon": "box",
+        "tone": "blue",
+        "cards": [
+          {
+            "id": "pixelAssetManagement",
+            "title": "像素图管理",
+            "icon": "image",
+            "visual": "pixel",
+            "tone": "blue",
+            "page": "pixelArt",
+            "action": "进入管理",
+            "features": ["上传图片", "像素化处理", "查看像素图列表"]
+          },
+          {
+            "id": "demAssetManagement",
+            "title": "DEM模型管理",
+            "icon": "map",
+            "visual": "mountain",
+            "tone": "slate",
+            "page": "demBuilder",
+            "action": "进入管理",
+            "features": ["上传DEM文件", "在线构建DEM", "查看DEM列表"]
+          },
+          {
+            "id": "meshAssetManagement",
+            "title": "3D模型管理",
+            "icon": "cube",
+            "visual": "vehicle",
+            "tone": "sand",
+            "page": "directImport",
+            "action": "进入管理",
+            "features": ["上传3D模型", "查看模型列表", "管理模型信息"]
+          }
+        ]
+      },
+      {
+        "id": "legoBuild",
+        "title": "构建LEGO模型",
+        "icon": "boxes",
+        "tone": "green",
+        "cards": [
+          {
+            "id": "pixelLegoBuild",
+            "title": "构建像素图LEGO模型",
+            "icon": "image",
+            "visual": "portrait",
+            "tone": "green",
+            "page": "legoDesign",
+            "action": "开始构建",
+            "features": ["颜色匹配算法", "优化拼搭算法", "自定义参数设置"]
+          },
+          {
+            "id": "terrainLegoBuild",
+            "title": "构建山体LEGO模型",
+            "icon": "map",
+            "visual": "terrain",
+            "tone": "mint",
+            "page": "legoBuilder",
+            "action": "开始构建",
+            "features": ["Surface 算法", "Replacement 算法", "地形参数设置"]
+          },
+          {
+            "id": "meshLegoBuild",
+            "title": "构建3D LEGO模型",
+            "icon": "wand",
+            "visual": "house",
+            "tone": "green",
+            "page": "directImport",
+            "action": "开始构建",
+            "features": ["零件召回算法", "智能拼搭优化", "结构分析"]
+          }
+        ]
+      },
+      {
+        "id": "modelView",
+        "title": "查看模型",
+        "icon": "database",
+        "tone": "amber",
+        "cards": [
+          {
+            "id": "legoModelManagement",
+            "title": "LEGO 模型管理",
+            "icon": "database",
+            "visual": "castle",
+            "tone": "amber",
+            "page": "modelAssets",
+            "action": "进入管理",
+            "features": ["查看保存的设计图纸", "预览和渲染模型", "导出和分享"]
+          },
+          {
+            "id": "componentRepo",
+            "title": "组件仓库",
+            "icon": "boxes",
+            "visual": "castle",
+            "tone": "amber",
+            "page": "componentRepo",
+            "action": "进入仓库",
+            "features": ["导入 Studio 组件", "审核连接接口", "发布不可变版本"]
+          }
+        ]
+      },
+      {
+        "id": "partLookup",
+        "title": "查找零件",
+        "icon": "search",
+        "tone": "purple",
+        "cards": [
+          {
+            "id": "partSearch",
+            "title": "零件搜索",
+            "icon": "search",
+            "visual": "search",
+            "tone": "purple",
+            "page": "partSearch",
+            "action": "开始查找",
+            "features": ["按名称查找", "按尺寸查找", "候选零件召回"]
+          }
+        ]
+      }
+    ]
+  }
+}

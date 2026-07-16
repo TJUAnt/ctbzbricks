@@ -1,0 +1,40 @@
+{
+  "description": "Phase 3 LDCad Shadow Library raw import configuration.",
+  "shadow_root": "C:/Users/tjuan/PycharmProjects/ctbzbricks/LDCadShadowLibrary",
+  "scan_directories": [
+    "parts",
+    "p"
+  ],
+  "file_extension": ".dat",
+  "batch_size": 1000,
+  "ldcad_meta_prefix": "0 !LDCAD ",
+  "snap_meta_prefix": "SNAP_",
+  "mirror_meta_prefix": "MIRROR",
+  "snap_include_meta_type": "SNAP_INCL",
+  "parsed_status": "parsed",
+  "failed_status": "failed",
+  "pending_status": "pending",
+  "source_repo": "ldcad_shadow",
+  "source_commit": null,
+  "param_pattern": "\\[([^=\\]]+)=([^\\]]*)\\]",
+  "sequence_param_keys": [
+    "pos",
+    "ori",
+    "grid",
+    "secs"
+  ],
+  "include_ref_key": "ref",
+  "validation_required_meta_types": [
+    "SNAP_CYL",
+    "SNAP_INCL",
+    "SNAP_CLEAR"
+  ],
+  "validation_sample": {
+    "ldraw_part_num": "3020.dat",
+    "meta_type": "SNAP_CYL",
+    "required_param_keys": [
+      "secs",
+      "grid"
+    ]
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "description": "Unified candidate profiles for 3D model fitting recall.",
+  "database": {
+    "table": "fitting_candidate_profiles",
+    "string_lengths": {
+      "candidate_type": 32,
+      "candidate_id": 128,
+      "profile_key": 64,
+      "profile_status": 32,
+      "source_hash": 64,
+      "shape_signature": 255
+    },
+    "constraints": {
+      "candidate_profile_unique": "uk_fitting_candidate_profile"
+    },
+    "indexes": {
+      "type": "idx_fitting_candidate_type",
+      "status": "idx_fitting_candidate_status",
+      "profile_key": "idx_fitting_candidate_profile_key",
+      "signature": "idx_fitting_candidate_signature"
+    }
+  },
+  "profile": {
+    "default_profile_key": "candidate-v1",
+    "ready_status": "ready",
+    "failed_status": "failed",
+    "candidate_types": {
+      "part": "part",
+      "submodel": "submodel"
+    },
+    "unknown_connector_type": "unknown_connector_type",
+    "unknown_connector_gender": "unknown_connector_gender"
+  },
+  "signature": {
+    "part_template": "part:{candidate_id}:bbox:{width_ldu}x{height_ldu}x{depth_ldu}:logical:{width_stud}x{depth_stud}x{height_plate}:samples:{samples_per_stud_axis}",
+    "submodel_template": "submodel:{candidate_id}:bbox:{width_ldu}x{height_ldu}x{depth_ldu}:parts:{part_count}:connectors:{connector_count}",
+    "failed_submodel_template": "submodel:{candidate_id}:failed:{source_hash}"
+  },
+  "geometry": {
+    "ldu_per_stud": 20,
+    "ldu_per_plate": 8,
+    "hash_encoding": "utf-8",
+    "coordinate_axes": ["x", "y", "z"],
+    "position_fields": {
+      "x": "pos_x",
+      "y": "pos_y",
+      "z": "pos_z"
+    },
+    "bbox_axes": {
+      "x": {"min": "minX", "max": "maxX"},
+      "y": {"min": "minY", "max": "maxY"},
+      "z": {"min": "minZ", "max": "maxZ"}
+    },
+    "bbox_model_fields": {
+      "x": {"min": "bbox_min_x", "max": "bbox_max_x"},
+      "y": {"min": "bbox_min_y", "max": "bbox_max_y"},
+      "z": {"min": "bbox_min_z", "max": "bbox_max_z"}
+    },
+    "bbox_dimensions": {
+      "width_ldu": "widthLdu",
+      "height_ldu": "heightLdu",
+      "depth_ldu": "depthLdu"
+    },
+    "bbox_axis_dimensions": {
+      "x": "width_ldu",
+      "y": "height_ldu",
+      "z": "depth_ldu"
+    },
+    "bbox_dimension_model_fields": {
+      "width_ldu": "width_ldu",
+      "height_ldu": "height_ldu",
+      "depth_ldu": "depth_ldu"
+    },
+    "bbox_corner_selectors": [
+      {"x": "min", "y": "min", "z": "min"},
+      {"x": "min", "y": "min", "z": "max"},
+      {"x": "min", "y": "max", "z": "min"},
+      {"x": "min", "y": "max", "z": "max"},
+      {"x": "max", "y": "min", "z": "min"},
+      {"x": "max", "y": "min", "z": "max"},
+      {"x": "max", "y": "max", "z": "min"},
+      {"x": "max", "y": "max", "z": "max"}
+    ],
+    "orientation_fields": [
+      "ori_11",
+      "ori_12",
+      "ori_13",
+      "ori_21",
+      "ori_22",
+      "ori_23",
+      "ori_31",
+      "ori_32",
+      "ori_33"
+    ],
+    "transform_matrix": {
+      "x": ["ori_11", "ori_12", "ori_13"],
+      "y": ["ori_21", "ori_22", "ori_23"],
+      "z": ["ori_31", "ori_32", "ori_33"]
+    }
+  },
+  "json_keys": {
+    "category": "category",
+    "name": "name",
+    "bbox": "bbox",
+    "logical_size": "logicalSize",
+    "surface_profile": "surfaceProfile",
+    "collision_profile": "collisionProfile",
+    "connection_mask": "connectionMask",
+    "connectors": "connectors",
+    "total_count": "totalCount",
+    "by_type_gender": "byTypeGender",
+    "connector_type": "connectorType",
+    "connector_gender": "connectorGender",
+    "count": "count",
+    "source_shape_profile_key": "sourceShapeProfileKey",
+    "remarks": "remarks",
+    "color_percentages": "colorPercentages",
+    "parts": "parts",
+    "part_count": "partCount",
+    "connector_count": "connectorCount",
+    "part_summary": "partSummary",
+    "by_part": "byPart",
+    "by_color": "byColor",
+    "by_category": "byCategory",
+    "line_no": "lineNo",
+    "color_code": "colorCode",
+    "ldraw_part_num": "ldrawPartNum",
+    "position": "position",
+    "orientation": "orientation",
+    "part_bbox": "partBbox",
+    "submodel_connectors": "submodelConnectors",
+    "connector_label": "connectorLabel",
+    "part_line_no": "partLineNo",
+    "metadata": "metadata",
+    "source_submodel_updated_at": "sourceSubmodelUpdatedAt",
+    "width_stud": "widthStud",
+    "depth_stud": "depthStud",
+    "height_plate": "heightPlate",
+    "ldraw_content": "ldrawContent",
+    "profile_error": "profileError"
+  },
+  "build": {
+    "default_batch_size": 100,
+    "default_limit": 0,
+    "default_offset": 0,
+    "default_missing_only": true
+  },
+  "errors": {
+    "candidate_not_found": "Fitting candidate profile not found: {candidate_type}:{candidate_id}",
+    "unsupported_candidate_type": "Unsupported fitting candidate type: {candidate_type}",
+    "submodel_not_found": "Submodel not found for fitting candidate profile: {submodel_id}",
+    "submodel_has_no_parts": "Submodel has no parts for fitting candidate profile: {submodel_id}",
+    "submodel_part_geometry_not_found": "Submodel part geometry not found: {ldraw_part_num}"
+  }
+}

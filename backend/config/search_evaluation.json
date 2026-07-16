@@ -1,0 +1,28 @@
+{
+  "description": "Batch evaluation configuration for search_part_candidates.",
+  "default_cases_path": "data/search_eval_cases.json",
+  "default_log_dir": "logs",
+  "log_file_prefix": "search_eval",
+  "default_top_n": 10,
+  "pass_status": "pass",
+  "fail_status": "fail",
+  "expected_query_keys": [
+    "logical_size",
+    "bbox",
+    "strict_bbox",
+    "bbox_tolerance_ldu",
+    "allow_rotate",
+    "category",
+    "rebrickable_part_num",
+    "required_connectors",
+    "include_substitutes",
+    "exclude_obsolete",
+    "limit"
+  ],
+  "expect_keys": {
+    "top1": "top1",
+    "hit_any": "hit_any",
+    "relation_type": "relation_type",
+    "min_results": "min_results"
+  }
+}

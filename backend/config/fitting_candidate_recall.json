@@ -1,0 +1,72 @@
+{
+  "description": "Recall API for fitting candidate profiles.",
+  "routes": {
+    "recall": "/api/fitting/candidates/recall"
+  },
+  "defaults": {
+    "limit": 50,
+    "include_irregular": false,
+    "bbox_tolerance_ldu": 0,
+    "logical_size_tolerance": 0,
+    "candidate_types": ["part", "submodel"],
+    "profile_statuses": ["ready"]
+  },
+  "limits": {
+    "max_limit": 200
+  },
+  "scoring": {
+    "base_score": 1000.0,
+    "bbox_weight": 1.0,
+    "logical_size_weight": 10.0,
+    "connector_bonus": 25.0,
+    "category_bonus": 20.0,
+    "color_bonus": 10.0,
+    "irregular_penalty": 200.0
+  },
+  "irregular": {
+    "candidate_type": "part",
+    "degraded_profile_status": "failed",
+    "source": "ldraw_part_shape_profiles",
+    "allowed_error_types": ["non_grid_dimension"]
+  },
+  "json_keys": {
+    "bbox": "bbox",
+    "width_ldu": "widthLdu",
+    "height_ldu": "heightLdu",
+    "depth_ldu": "depthLdu",
+    "logical_size": "logicalSize",
+    "width_stud": "widthStud",
+    "depth_stud": "depthStud",
+    "height_plate": "heightPlate",
+    "category": "category",
+    "name": "name",
+    "total_count": "totalCount",
+    "by_type_gender": "byTypeGender",
+    "connector_type": "connectorType",
+    "connector_gender": "connectorGender",
+    "count": "count",
+    "part_summary": "partSummary",
+    "by_category": "byCategory",
+    "color_code": "colorCode",
+    "profile_error_type": "profileErrorType"
+  },
+  "response": {
+    "ready_source": "fitting_candidate_profiles",
+    "irregular_reason": "irregular_failed_shape_profile",
+    "bbox_filter_reason": "bbox",
+    "logical_size_filter_reason": "logical_size",
+    "connector_filter_reason": "connector",
+    "category_filter_reason": "category",
+    "color_filter_reason": "color",
+    "status_filter_reason": "status",
+    "candidate_type_filter_reason": "candidate_type"
+  },
+  "http_status": {
+    "bad_request": 400
+  },
+  "errors": {
+    "invalid_limit": "Recall limit must be greater than zero",
+    "unsupported_candidate_type": "Unsupported recall candidate type: {candidate_type}",
+    "unsupported_profile_status": "Unsupported recall profile status: {profile_status}"
+  }
+}

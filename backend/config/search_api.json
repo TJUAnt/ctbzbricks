@@ -1,0 +1,99 @@
+{
+  "description": "Local search API configuration.",
+  "app": {
+    "title": "ctbzbricks search API",
+    "health_status": "ok"
+  },
+  "cors": {
+    "allow_origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+    "allow_methods": ["GET", "POST", "PUT", "DELETE"],
+    "allow_headers": ["*"]
+  },
+  "routes": {
+    "health": "/api/health",
+    "search": "/api/search",
+    "terrain_jobs": "/api/terrain/dem/jobs",
+    "terrain_job": "/api/terrain/dem/jobs/{job_id}",
+    "terrain_models": "/api/terrain/dem/models",
+    "terrain_model": "/api/terrain/dem/models/{model_id}",
+    "lego_heightmap_models": "/api/lego/heightmap/models",
+    "lego_heightmap_from_dem": "/api/lego/heightmap/models/from-dem",
+    "lego_heightmap_model": "/api/lego/heightmap/models/{model_id}",
+    "model_assets": "/api/model-assets",
+    "model_asset": "/api/model-assets/{asset_id}"
+  },
+  "model_assets": {
+    "default_page": 1,
+    "default_page_size": 10,
+    "max_page_size": 50,
+    "dem_model_type": "dem",
+    "dem_source_type": "geojson_dem",
+    "lego_heightmap_model_type": "lego_heightmap",
+    "lego_heightmap_source_type": "dem_heightmap",
+    "complete_status": "complete"
+  },
+  "default_limit": null,
+  "max_limit": null,
+  "image_lookup_limit": 1,
+  "image_lookup_sql": "select img_url from rb_part_images where part_num = :part_num limit :limit",
+  "ldraw_suffix": ".dat",
+  "logical_size_pattern": "(\\d+(?:\\.\\d+)?)\\s*x\\s*(\\d+(?:\\.\\d+)?)(?:\\s*x\\s*(\\d+(?:\\.\\d+)?))?",
+  "logical_size_match_groups": {
+    "width": 1,
+    "depth": 2,
+    "height": 3
+  },
+  "part_number_pattern": "^[a-zA-Z0-9_]+(?:[a-zA-Z0-9_]+)?$",
+  "part_number_rejected_terms": [" ", "x"],
+  "category_terms": [
+    {
+      "terms": ["plate", "板"],
+      "category": "Plate",
+      "default_height_plate": 1
+    },
+    {
+      "terms": ["brick", "砖"],
+      "category": "Brick",
+      "default_height_plate": 3
+    }
+  ],
+  "connector_terms": [
+    {
+      "terms": ["technic hole", "pin hole", "孔"],
+      "type": "technic_pin_hole",
+      "gender": "F"
+    },
+    {
+      "terms": ["technic pin", "pin", "销"],
+      "type": "technic_pin",
+      "gender": "M"
+    },
+    {
+      "terms": ["anti stud", "anti-stud", "底柱"],
+      "type": "anti_stud",
+      "gender": "F"
+    },
+    {
+      "terms": ["stud", "凸点"],
+      "type": "stud",
+      "gender": "M"
+    }
+  ],
+  "side_terms": ["side", "侧", "侧向"],
+  "vertical_terms": ["vertical", "top", "bottom", "垂直", "顶部", "底部"],
+  "direction_groups": {
+    "side": "side",
+    "vertical": "vertical"
+  },
+  "connector_requirement_fields": {
+    "type": "type",
+    "gender": "gender",
+    "direction_group": "direction_group",
+    "min_count": "min_count"
+  },
+  "default_connector_min_count": 1,
+  "image_part_candidates": {
+    "include_mapping_rebrickable": true,
+    "include_ldraw_stem": true
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Rebrickable part relationship import configuration.",
+  "csv_path": "data/part_relationships.csv",
+  "batch_size": 1000,
+  "columns": {
+    "rel_type": "rel_type",
+    "part_num": "child_part_num",
+    "related_part_num": "parent_part_num"
+  }
+}

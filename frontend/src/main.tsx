@@ -1,0 +1,411 @@
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import {
+  Bell,
+  Box,
+  Boxes,
+  ChevronDown,
+  ChevronRight,
+  Database,
+  HelpCircle,
+  Home,
+  Image as ImageIcon,
+  Map,
+  Search,
+  Upload,
+  User,
+  Wand2,
+} from 'lucide-react';
+import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
+import appConfig from './app/appConfig.json';
+import { ModelAssetsPage } from './assets/ModelAssetsPage';
+import { ModelViewerPage } from './assets/ModelViewerPage';
+import type { ModelAsset } from './assets/modelAssetApi';
+import { AuthProvider, useAuth } from './auth/AuthContext';
+import { ComponentCandidateWorkbenchPage } from './componentRepo/ComponentCandidateWorkbenchPage';
+import { ComponentImportPage } from './componentRepo/ComponentImportPage';
+import { ComponentRepoPage } from './componentRepo/ComponentRepoPage';
+import { LegoDesignPage } from './legoDesign/LegoDesignPage';
+import { LegoTerrainBuilderPage } from './legoTerrain/LegoTerrainBuilderPage';
+import { DirectModelImportPage } from './modelImport/DirectModelImportPage';
+import { PartSearchPage } from './parts/PartSearchPage';
+import { PixelArtPage } from './pixelArt/PixelArtPage';
+import { PixelArtProjectsPage } from './pixelArt/PixelArtProjectsPage';
+import { TerrainDemPage } from './terrain/TerrainDemPage';
+import './styles.css';
+
+const iconByName = {
+  bell: Bell,
+  box: Box,
+  boxes: Boxes,
+  cube: Box,
+  database: Database,
+  help: HelpCircle,
+  home: Home,
+  image: ImageIcon,
+  map: Map,
+  search: Search,
+  upload: Upload,
+  user: User,
+  wand: Wand2,
+};
+
+type IconName = keyof typeof iconByName;
+type PageKey = keyof typeof appConfig.pages;
+type RoutePaths = Record<PageKey, string>;
+
+type MenuItemConfig = {
+  id: string;
+  icon: IconName;
+  label: string;
+  page: PageKey;
+};
+
+type MenuGroupConfig = {
+  id: string;
+  icon: IconName;
+  items: MenuItemConfig[];
+  title: string;
+  tone: string;
+};
+
+type DashboardCardConfig = {
+  action: string;
+  features: string[];
+  icon: IconName;
+  id: string;
+  page: PageKey;
+  title: string;
+  tone: string;
+  visual: string;
+};
+
+type DashboardSectionConfig = {
+  cards: DashboardCardConfig[];
+  icon: IconName;
+  id: string;
+  title: string;
+  tone: string;
+};
+
+type DashboardConfig = {
+  heroIcon: IconName;
+  sections: DashboardSectionConfig[];
+  welcomeSubtitle: string;
+  welcomeTitle: string;
+};
+
+const routePaths = appConfig.routePaths as RoutePaths;
+const menuGroups = appConfig.menuGroups as MenuGroupConfig[];
+const dashboardConfig = appConfig.dashboard as DashboardConfig;
+
+function App() {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <WorkbenchShell />
+      </BrowserRouter>
+    </AuthProvider>
+  );
+}
+
+function WorkbenchShell() {
+  const [selectedModelAsset, setSelectedModelAsset] = React.useState<ModelAsset | null>(null);
+
+  return (
+    <main className="workbench">
+      <WorkbenchTopbar />
+      <aside className="workbench-nav">
+        <WorkbenchNav clearSelectedModel={() => setSelectedModelAsset(null)} />
+      </aside>
+
+      <section className="workbench-content">
+        <WorkbenchRoutes
+          clearSelectedModel={() => setSelectedModelAsset(null)}
+          openAsset={(asset) => setSelectedModelAsset(asset)}
+          selectedModelAsset={selectedModelAsset}
+        />
+      </section>
+    </main>
+  );
+}
+
+function WorkbenchTopbar() {
+  const { error, isConfigured, isLoading, signInWithGoogle, signOut, user } = useAuth();
+  const userLabel = authUserLabel(user?.email ?? null, isConfigured, isLoading);
+  const userAction = user ? signOut : signInWithGoogle;
+
+  return (
+    <header className="workbench-topbar">
+      <NavLink
+        aria-label={appConfig.topbar.homeLabel}
+        className="workbench-brand"
+        to={routePathFor(appConfig.pages.dashboard as PageKey)}
+      >
+        <span className="brand-mark">
+          <Boxes aria-hidden="true" />
+        </span>
+        <span>
+          <strong>{appConfig.texts.appTitle}</strong>
+          <em>{appConfig.texts.appSubtitle}</em>
+        </span>
+      </NavLink>
+
+      <div className="topbar-actions">
+        <NavLink
+          aria-label={appConfig.topbar.homeLabel}
+          className="topbar-icon-button"
+          to={routePathFor(appConfig.pages.dashboard as PageKey)}
+        >
+          <Home aria-hidden="true" />
+        </NavLink>
+        <button aria-label={appConfig.topbar.helpLabel} className="topbar-icon-button" type="button">
+          <HelpCircle aria-hidden="true" />
+        </button>
+        <button aria-label={appConfig.topbar.notificationLabel} className="topbar-icon-button" type="button">
+          <Bell aria-hidden="true" />
+          <span>{appConfig.topbar.notificationCount}</span>
+        </button>
+        <button
+          className="topbar-user-button"
+          disabled={!isConfigured || isLoading}
+          onClick={() => {
+            void userAction();
+          }}
+          title={error ?? undefined}
+          type="button"
+        >
+          <span className="topbar-avatar">
+            <User aria-hidden="true" />
+          </span>
+          {userLabel}
+          <ChevronDown aria-hidden="true" />
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function WorkbenchNav({
+  clearSelectedModel,
+}: {
+  clearSelectedModel: () => void;
+}) {
+  return (
+    <nav className="workbench-menu" aria-label={appConfig.texts.appTitle}>
+      {menuGroups.map((group) => (
+        <section className="menu-group" key={group.id}>
+          <div className={`menu-title menu-title-${group.tone}`}>
+            <Icon name={group.icon} />
+            <span>{group.title}</span>
+            <ChevronDown aria-hidden="true" />
+          </div>
+          {group.items.map((item) => (
+            <MenuLink
+              icon={item.icon}
+              key={item.id}
+              label={item.label}
+              onNavigate={clearSelectedModel}
+              page={item.page}
+              tone={group.tone}
+            />
+          ))}
+        </section>
+      ))}
+      <div className="menu-brick-scene" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+    </nav>
+  );
+}
+
+function MenuLink({
+  icon,
+  label,
+  onNavigate,
+  page,
+  tone,
+}: {
+  icon: IconName;
+  label: string;
+  onNavigate: () => void;
+  page: PageKey;
+  tone: string;
+}) {
+  return (
+    <NavLink
+      className={({ isActive }) =>
+        isActive ? `menu-button menu-button-${tone} menu-button-active` : `menu-button menu-button-${tone}`
+      }
+      onClick={onNavigate}
+      to={routePathFor(page)}
+    >
+      <Icon name={icon} />
+      <span>{label}</span>
+    </NavLink>
+  );
+}
+
+function WorkbenchRoutes({
+  clearSelectedModel,
+  openAsset,
+  selectedModelAsset,
+}: {
+  clearSelectedModel: () => void;
+  openAsset: (asset: ModelAsset) => void;
+  selectedModelAsset: ModelAsset | null;
+}) {
+  const navigate = useNavigate();
+
+  if (selectedModelAsset) {
+    return (
+      <ModelViewerPage
+        modelAsset={selectedModelAsset}
+        onBack={() => {
+          clearSelectedModel();
+          navigate(routePathFor(appConfig.pages.modelAssets as PageKey));
+        }}
+      />
+    );
+  }
+
+  return (
+    <Routes>
+      <Route
+        element={<Navigate replace to={routePathFor(appConfig.initialPage as PageKey)} />}
+        path={appConfig.router.rootPath}
+      />
+      <Route element={<DashboardPage />} path={routePathFor(appConfig.pages.dashboard as PageKey)} />
+      <Route element={<DirectModelImportPage />} path={routePathFor(appConfig.pages.directImport as PageKey)} />
+      <Route element={<TerrainDemPage />} path={routePathFor(appConfig.pages.demBuilder as PageKey)} />
+      <Route
+        element={<ModelAssetsPage onOpenAsset={openAsset} />}
+        path={routePathFor(appConfig.pages.modelAssets as PageKey)}
+      />
+      <Route element={<LegoTerrainBuilderPage />} path={routePathFor(appConfig.pages.legoBuilder as PageKey)} />
+      <Route element={<LegoDesignPage />} path={routePathFor(appConfig.pages.legoDesign as PageKey)} />
+      <Route element={<PixelArtPage />} path={routePathFor(appConfig.pages.pixelArt as PageKey)} />
+      <Route element={<PixelArtProjectsPage />} path={routePathFor(appConfig.pages.pixelArtProjects as PageKey)} />
+      <Route element={<PartSearchPage />} path={routePathFor(appConfig.pages.partSearch as PageKey)} />
+      <Route element={<ComponentRepoPage />} path={routePathFor(appConfig.pages.componentRepo as PageKey)} />
+      <Route element={<ComponentImportPage />} path={routePathFor(appConfig.pages.componentRepoImport as PageKey)} />
+      <Route
+        element={<ComponentCandidateWorkbenchPage />}
+        path={routePathFor(appConfig.pages.componentRepoCandidate as PageKey)}
+      />
+      <Route
+        element={<Navigate replace to={routePathFor(appConfig.initialPage as PageKey)} />}
+        path={appConfig.router.unmatchedPath}
+      />
+    </Routes>
+  );
+}
+
+function DashboardPage() {
+  return (
+    <section className="dashboard-page">
+      <header className="dashboard-hero">
+        <div className="dashboard-welcome">
+          <span className="dashboard-hero-icon">
+            <Icon name={dashboardConfig.heroIcon} />
+          </span>
+          <div>
+            <h1>{dashboardConfig.welcomeTitle}</h1>
+            <p>{dashboardConfig.welcomeSubtitle}</p>
+          </div>
+        </div>
+        <div className="dashboard-hero-model" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+      </header>
+
+      <div className="dashboard-sections">
+        {dashboardConfig.sections.map((section) => (
+          <DashboardSection key={section.id} section={section} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DashboardSection({ section }: { section: DashboardSectionConfig }) {
+  return (
+    <section className={`dashboard-section dashboard-section-${section.tone}`}>
+      <div className={`dashboard-section-tab dashboard-section-tab-${section.tone}`}>
+        <Icon name={section.icon} />
+        <span>{section.title}</span>
+      </div>
+      <div className={`dashboard-card-grid dashboard-card-grid-${section.cards.length}`}>
+        {section.cards.map((card) => (
+          <DashboardCard card={card} key={card.id} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DashboardCard({ card }: { card: DashboardCardConfig }) {
+  return (
+    <NavLink className={`dashboard-card dashboard-card-${card.tone}`} to={routePathFor(card.page)}>
+      <h2>{card.title}</h2>
+      <DashboardVisual card={card} />
+      <div className="dashboard-card-body">
+        <ul>
+          {card.features.map((feature) => (
+            <li key={feature}>{feature}</li>
+          ))}
+        </ul>
+        <span className={`dashboard-card-action dashboard-card-action-${card.tone}`}>
+          {card.action}
+          <ChevronRight aria-hidden="true" />
+        </span>
+      </div>
+    </NavLink>
+  );
+}
+
+function DashboardVisual({ card }: { card: DashboardCardConfig }) {
+  return (
+    <div className={`dashboard-card-visual dashboard-visual-${card.visual}`}>
+      <span className="dashboard-visual-base">
+        <Icon name={card.icon} />
+      </span>
+      <span className="dashboard-visual-stud" />
+      <span className="dashboard-visual-stud" />
+      <span className="dashboard-visual-stud" />
+    </div>
+  );
+}
+
+function Icon({ name }: { name: IconName }) {
+  const IconComponent = iconByName[name];
+  if (!IconComponent) {
+    throw new Error(appConfig.errors.unknownIcon);
+  }
+  return <IconComponent aria-hidden="true" />;
+}
+
+function routePathFor(page: PageKey) {
+  const routePath = routePaths[page];
+  if (!routePath) {
+    throw new Error(appConfig.errors.unknownRoute);
+  }
+  return routePath;
+}
+
+function authUserLabel(email: string | null, isConfigured: boolean, isLoading: boolean): string {
+  if (!isConfigured) {
+    return appConfig.topbar.authNotConfiguredLabel;
+  }
+  if (isLoading) {
+    return appConfig.texts.loading;
+  }
+  return email ?? appConfig.topbar.authSignInLabel;
+}
+
+ReactDOM.createRoot(document.getElementById('root')!).render(<App />);

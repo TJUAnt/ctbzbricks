@@ -1,0 +1,160 @@
+{
+  "metadataApiUrl": "/api/lego/design/metadata",
+  "jobsApiUrl": "/api/lego/design/jobs",
+  "demFinalDesignApiUrl": "/api/dem-lego-design/final-design",
+  "demFinalDesignLdrawApiUrl": "/api/dem-lego-design/final-design/ldraw",
+  "jobApiUrl": "/api/lego/design/jobs/{jobId}",
+  "exportApiUrl": "/api/lego/design/jobs/{jobId}/ldraw",
+  "exportPlanApiUrl": "/api/lego/design/jobs/{jobId}/plan",
+  "projectApiUrl": "/api/pixel-art/projects/{projectId}",
+  "projectsApiUrl": "/api/pixel-art/projects",
+  "routePlaceholders": {
+    "projectId": "{projectId}",
+    "jobId": "{jobId}"
+  },
+  "pageSize": 12,
+  "demAssetPageSize": 50,
+  "demFinalDesign": {
+    "planFileName": "dem-lego-final-design.json",
+    "planContentType": "application/json",
+    "planIndentation": 2
+  },
+  "demGenerationStrategy": {
+    "default": "surface-plan",
+    "options": [
+      {
+        "value": "surface-plan",
+        "label": "Surface Plan",
+        "description": "完整表面规划，支持预览、BOM 和 LDraw 导出"
+      },
+      {
+        "value": "colored-replacement",
+        "label": "Colored Replacement",
+        "description": "基于带颜色 Heightmap 和数据库坡件模式生成"
+      }
+    ]
+  },
+  "emptyCount": 0,
+  "supportBase": {
+    "defaultEnabled": true,
+    "queryParam": "include_base"
+  },
+  "download": {
+    "defaultFileName": "lego-design.ldr",
+    "defaultPlanFileName": "lego-design-plan.json",
+    "contentDispositionHeader": "Content-Disposition",
+    "fileNameParameter": "filename="
+  },
+  "polling": {
+    "intervalMs": 500
+  },
+  "jobStatus": {
+    "queued": "queued",
+    "running": "running",
+    "complete": "complete",
+    "failed": "failed"
+  },
+  "draggablePreview": {
+    "initialX": 120,
+    "initialY": 96
+  },
+  "pagination": {
+    "initialPage": 1,
+    "pageStep": 1
+  },
+  "preview": {
+    "cellSizePixels": 24,
+    "minimumCellSizePixels": 8,
+    "maximumCellSizePixels": 34,
+    "sizeLabelsDefaultVisible": true,
+    "fullscreenDefault": false,
+    "zoomDefault": 1,
+    "zoomMinimum": 0.5,
+    "zoomMaximum": 3,
+    "zoomStep": 0.25,
+    "zoomPrecision": 2,
+    "zoomSuffix": "x",
+    "borderColor": "rgba(23, 32, 27, 0.18)",
+    "gridColor": "rgba(23, 32, 27, 0.12)",
+    "studHighlight": "rgba(255, 255, 255, 0.42)"
+  },
+  "dimensions": {
+    "precision": 2,
+    "separator": " x ",
+    "studUnit": "stud",
+    "plateUnit": "plate",
+    "centimeterUnit": "cm"
+  },
+  "texts": {
+    "title": "LEGO 设计图",
+    "subtitle": "从已保存像素图生成按零件拼接的 LEGO 图示",
+    "sourceProjects": "像素图",
+    "sourceDemModels": "DEM 模型",
+    "refresh": "刷新",
+    "generate": "生成设计图",
+    "generating": "正在计算",
+    "exportDesign": "导出设计图",
+    "exportPlan": "导出数据图纸",
+    "exporting": "正在导出",
+    "exportingPlan": "正在导出数据",
+    "exportFailed": "设计图导出失败",
+    "exportPlanFailed": "数据图纸导出失败",
+    "addSupportBase": "添加白色底板",
+    "loading": "正在加载",
+    "select": "选择",
+    "selected": "已选择",
+    "emptyProjects": "暂无已保存像素图",
+    "loadFailed": "数据加载失败",
+    "metadataFailed": "LEGO 元数据加载失败",
+    "projectFailed": "像素图加载失败",
+    "designFailed": "设计图生成失败",
+    "noSelection": "请选择一张像素图",
+    "noMetadata": "缺少 LEGO 元数据",
+    "noParts": "数据库中没有可用于设计图纸的板件",
+    "workspace": "拼接图示",
+    "choosePixelArt": "选择像素图",
+    "chooseDemModel": "选择 DEM 模型",
+    "generateDemDesign": "生成 DEM 图纸",
+    "confirm": "确认",
+    "cancel": "取消",
+    "openBom": "查看零件清单",
+    "openPixelPreview": "查看像素图",
+    "close": "关闭",
+    "sourcePreview": "原始像素图",
+    "legoPreview": "LEGO 拼接图",
+    "bom": "零件清单",
+    "palette": "颜色映射",
+    "sizeLabels": "显示 size 标识",
+    "zoom": "缩放",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fullscreen": "全屏显示",
+    "windowed": "窗口显示",
+    "projectId": "项目 ID",
+    "modelId": "模型 ID",
+    "heightmapScale": "Heightmap 参数",
+    "demGenerationStrategy": "DEM 生成策略",
+    "replacementDiagnostics": "Replacement 诊断",
+    "replacementCoverage": "坡度覆盖",
+    "replacementMissingColors": "缺色类型",
+    "replacementColorSubstitutions": "近似颜色",
+    "replacementPhases": "阶段摘要",
+    "replacementPhaseIncrement": "新增",
+    "replacementMissingReason": "原因",
+    "replacementNearestColorDistance": "最近颜色距离",
+    "horizontalKmPerStud": "1 stud = km",
+    "verticalMetersPerPlate": "1 plate = meters",
+    "coverage": "Minimum coverage",
+    "grid": "网格",
+    "modelDimensions": "模型尺寸",
+    "physicalDimensions": "实物尺寸",
+    "colors": "颜色",
+    "parts": "零件数",
+    "uniqueParts": "零件种类",
+    "mappedTo": "映射为",
+    "availableColors": "数据库颜色",
+    "availableParts": "数据库板件",
+    "emptyDesign": "生成后显示拼接图示",
+    "unavailableColor": "该颜色无可用板件"
+  }
+}

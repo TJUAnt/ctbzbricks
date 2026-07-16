@@ -1,0 +1,75 @@
+{
+  "description": "Persisted LDraw part shape profiles for 3D fitting candidate recall.",
+  "database": {
+    "table": "ldraw_part_shape_profiles",
+    "string_lengths": {
+      "profile_key": 64,
+      "profile_status": 32,
+      "source_hash": 64,
+      "profile_error_type": 64
+    },
+    "constraints": {
+      "part_profile_unique": "uk_part_shape_profile"
+    },
+    "indexes": {
+      "part": "idx_part_shape_profile_part",
+      "status": "idx_part_shape_profile_status",
+      "profile_key": "idx_part_shape_profile_key",
+      "samples": "idx_part_shape_profile_samples"
+    }
+  },
+  "profile": {
+    "default_profile_key": "surface-v1",
+    "ready_status": "ready",
+    "failed_status": "failed",
+    "failed_samples_per_stud_axis": 0,
+    "source_hash_missing": "missing-source-hash",
+    "profile_error_unknown": "unknown",
+    "profile_error_types": [
+      {
+        "type": "non_grid_dimension",
+        "pattern": "is not aligned to the stud grid",
+        "initial_candidate_policy": "exclude"
+      },
+      {
+        "type": "mesh_parse_error",
+        "pattern": "LDraw file is missing|Missing LDraw reference|Cannot decode LDraw file|Maximum LDraw recursion depth|Recursive LDraw include",
+        "initial_candidate_policy": "exclude"
+      },
+      {
+        "type": "empty_mesh",
+        "pattern": "contains no triangles|no supported geometry vertices found",
+        "initial_candidate_policy": "exclude"
+      }
+    ]
+  },
+  "json_keys": {
+    "part_id": "partId",
+    "ldraw_origin_to_base_ldu": "ldrawOriginToBaseLdu",
+    "ldraw_center_x_ldu": "ldrawCenterXLdu",
+    "ldraw_center_z_ldu": "ldrawCenterZLdu",
+    "width_stud": "widthStud",
+    "depth_stud": "depthStud",
+    "samples_per_stud_axis": "samplesPerStudAxis",
+    "surface_height_plate": "surfaceHeightPlate",
+    "collision_intervals_plate": "collisionIntervalsPlate",
+    "bottom_contact": "bottomContact",
+    "top_connection_mask": "topConnectionMask",
+    "bbox": "bbox",
+    "logical_size": "logicalSize",
+    "source_hash": "sourceHash"
+  },
+  "build": {
+    "default_batch_size": 100,
+    "default_limit": 0,
+    "default_offset": 0,
+    "default_missing_only": true,
+    "pilot_categories": ["Plate", "Brick", "Slope"]
+  },
+  "errors": {
+    "part_not_found": "LDraw part not found for shape profile: {part_id}",
+    "profile_not_found": "LDraw part shape profile not found: {part_id}",
+    "missing_ldraw_file": "LDraw file is missing for shape profile: {part_id}",
+    "mesh_error_separator": "; "
+  }
+}

@@ -1,0 +1,542 @@
+{
+  "description": "Independent DEM LEGO BaseH structure generation configuration.",
+  "routes": {
+    "base_h_structure": "/api/dem-lego-design/base-h/structure",
+    "part_surface_profile": "/api/dem-lego-design/parts/{part_id}/surface-profile",
+    "surface_patch_candidates": "/api/dem-lego-design/surface-patch/candidates",
+    "surface_plan": "/api/dem-lego-design/surface-plan",
+    "final_design": "/api/dem-lego-design/final-design",
+    "final_design_ldraw": "/api/dem-lego-design/final-design/ldraw"
+  },
+  "parts": {
+    "name_space_separator": " ",
+    "geometry_status": "parsed",
+    "minimum_dimension_stud": 1,
+    "maximum_area_stud": 64,
+    "specs": {
+      "plate": {
+        "role": "plate",
+        "category": "Plate",
+        "height_plate": 1,
+        "geometry_height_plate": 1,
+        "geometry_height_tolerance_plate": 0.001,
+        "name_pattern": "^Plate [0-9]+ x [0-9]+$"
+      },
+      "brick": {
+        "role": "brick",
+        "category": "Brick",
+        "height_plate": 3,
+        "geometry_height_plate": 3,
+        "geometry_height_tolerance_plate": 0.001,
+        "name_pattern": "^Brick [0-9]+ x [0-9]+$"
+      }
+    },
+    "xref_exact_relation": "exact",
+    "xref_exact_rank": 0,
+    "xref_mapped_rank": 1,
+    "xref_missing_rank": 2
+  },
+  "structure": {
+    "strategy": "solid-bottom-up",
+    "color": {
+      "id": 15,
+      "name": "White",
+      "rgb": "#FFFFFF",
+      "ldraw_code": "15"
+    }
+  },
+  "design_input": {
+    "minimum_stud_count": 1,
+    "minimum_plate_height": 0,
+    "empty_elevation_height_plate": 0,
+    "minimum_surface_height_plate": 1,
+    "latitude_meters_per_degree": 111320,
+    "radians_per_degree": 0.017453292519943295,
+    "meters_per_kilometer": 1000,
+    "kilometers_per_meter": 0.001,
+    "coordinate_average_divisor": 2,
+    "coverage_precision": 100,
+    "percentile_ratio": 0.75,
+    "samples_per_stud_axis": 4,
+    "sample_center_fraction": 0.5,
+    "stud_center_offset": 0.5,
+    "surface_precision": 6,
+    "decimal_radix": 10,
+    "default_color_id": 15,
+    "surface_color_reference_part_num": "3024",
+    "color_distance_exponent": 2,
+    "color_hex_radix": 16,
+    "color_hex_prefix": "#",
+    "color_channels": {
+      "red_start": 0,
+      "red_end": 2,
+      "green_start": 2,
+      "green_end": 4,
+      "blue_start": 4,
+      "blue_end": 6
+    },
+    "aggregations": {
+      "mean": "mean",
+      "maximum": "max",
+      "percentile": "percentile"
+    },
+    "part_ids": [
+      "3024.dat", "54200.dat", "7826.dat", "7827.dat", "5404.dat", "85984.dat",
+      "3040b.dat", "3044b.dat", "3039.dat", "3045.dat", "3046.dat",
+      "3300.dat", "4286.dat", "4569.dat", "5654.dat", "60477.dat",
+      "15672.dat", "35464.dat", "3038.dat", "3042.dat", "3298.dat",
+      "4161.dat", "11477.dat", "50950.dat", "11153.dat", "15068.dat",
+      "41855.dat", "99301.dat", "3675.dat", "43708.dat", "22388.dat"
+    ],
+    "errors": {
+      "aggregation_invalid": "DEM height aggregation is not configured"
+    }
+  },
+  "algorithm": {
+    "no_rotation_degrees": 0,
+    "rotation_degrees": 90,
+    "minimum_height_plate": 0,
+    "minimum_part_height_plate": 1,
+    "minimum_part_area": 1,
+    "minimum_area": 1,
+    "beam_size": 20,
+    "max_candidates_per_cell": 30,
+    "fragment_penalty": 0.4,
+    "isolated_penalty": 0.8,
+    "hex_radix": 16,
+    "hex_color_length": 6,
+    "hex_color_prefix": "#",
+    "hex_pad_value": "0",
+    "cell_key_separator": ":",
+    "rgb_channels": {
+      "red_start": 0,
+      "red_end": 2,
+      "green_start": 2,
+      "green_end": 4,
+      "blue_start": 4,
+      "blue_end": 6
+    },
+    "scan_orders": [
+      {"x_direction": 1, "z_direction": 1},
+      {"x_direction": -1, "z_direction": 1},
+      {"x_direction": -1, "z_direction": -1},
+      {"x_direction": 1, "z_direction": -1}
+    ]
+  },
+  "surface_profile": {
+    "description": "Real LDraw mesh sampling used by DEM surface patch matching.",
+    "ldraw_root": "D:\\Program Files\\LDraw",
+    "part_id_pattern": "^[A-Za-z0-9_-]+\\.dat$",
+    "part_path_template": "parts/{part_id}",
+    "mesh_error_separator": "; ",
+    "mesh": {
+      "file_pattern": "*.dat",
+      "text_encodings": ["utf-8", "latin-1"],
+      "maximum_recursion_depth": 64,
+      "line_type": {
+        "comment": "0",
+        "reference": "1",
+        "triangle": "3",
+        "quadrilateral": "4"
+      },
+      "ignored_missing_references": ["6221655zc01.dat"],
+      "surface_excluded_path_patterns": ["(^|/)stud[0-9a-z]*\\.dat$"],
+      "top_connection_path_patterns": [
+        "(^|/)stud(?:2|5|6|7|9|10|13|14|15|17|19|20|26)?[a-z]?\\.dat$"
+      ],
+      "syntax": {
+        "reference_token_count": 15,
+        "triangle_vertex_count": 3,
+        "quadrilateral_vertex_count": 4,
+        "face_header_token_count": 2,
+        "coordinate_count": 3
+      },
+      "errors": {
+        "text_decode": "Cannot decode LDraw file {path}: {errors}",
+        "maximum_recursion": "Maximum LDraw recursion depth reached at {path}",
+        "recursive_include": "Recursive LDraw include detected at {path}",
+        "missing_file": "LDraw file is missing: {path}",
+        "invalid_line": "Invalid LDraw geometry line at {path}:{line}",
+        "missing_reference": "Missing LDraw reference {reference} at {path}:{line}"
+      }
+    },
+    "sampling": {
+      "ldu_per_stud": 20,
+      "ldu_per_plate": 8,
+      "samples_per_stud_axis": 4,
+      "sample_center_fraction": 0.5,
+      "dimension_tolerance_stud": 0.001,
+      "ray_tolerance_ldu": 0.000001,
+      "bottom_contact_tolerance_ldu": 0.1,
+      "connection_position_tolerance_ldu": 0.001,
+      "center_divisor": 2,
+      "rounding_decimal_places": 6,
+      "errors": {
+        "empty_mesh": "LDraw part mesh contains no triangles",
+        "non_stud_width": "LDraw part {part_id} width is not aligned to the stud grid",
+        "non_stud_depth": "LDraw part {part_id} depth is not aligned to the stud grid"
+      }
+    }
+  },
+  "surface_patch": {
+    "description": "Generate real-part candidates without choosing the final global cover.",
+    "matching": {
+      "minimum_base_height_plate": 0,
+      "maximum_absolute_error_plate": 0.5,
+      "approximate_maximum_absolute_error_plate": 0.6,
+      "unbounded_error_part_ids": ["3024.dat"],
+      "unbounded_error_maximum_base_candidates": 1,
+      "rounding_decimal_places": 6,
+      "base_height_offsets": [-1, 0, 1],
+      "slope_directions": {
+        "minimum_delta_plate": 0.001,
+        "neighbors": [
+          {"x": 1, "z": 0, "positive": "east", "negative": "west"},
+          {"x": 0, "z": 1, "positive": "south", "negative": "north"}
+        ],
+        "order": ["north", "east", "south", "west"]
+      },
+      "top_connection_classes": {
+        "connected": "top_connected",
+        "finished": "top_finished"
+      },
+      "rotations": [
+        {"degrees": 0, "quarter_turns": 0},
+        {"degrees": 90, "quarter_turns": 1},
+        {"degrees": 180, "quarter_turns": 2},
+        {"degrees": 270, "quarter_turns": 3}
+      ],
+      "errors": {
+        "target_surface_empty": "Target surface must contain at least one sample",
+        "target_surface_not_rectangular": "Target surface rows must have equal lengths",
+        "target_color_not_rectangular": "Target color rows must have equal lengths",
+        "target_dimensions_mismatch": "Target surface dimensions must equal target color dimensions multiplied by the profile sample rate",
+        "profile_sample_rate_mismatch": "All surface profiles must use the same sample rate"
+      }
+    },
+    "errors": {
+      "part_ids_empty": "At least one LDraw surface part id is required",
+      "part_ids_duplicate": "LDraw surface part ids must be unique"
+    }
+  },
+  "surface_plan": {
+    "description": "Greedily replace logical terrain with connected slopes, then finish unresolved slope edges.",
+    "strategy": "connected-first-slope-replacement",
+    "collision_tolerance_plate": 0.000001,
+    "rounding_decimal_places": 6,
+    "top_connection_phase_order": ["top_connected", "top_finished"],
+    "surface_fill_connection_class": "surface_fill",
+    "seam_neighbor_offsets": [
+      {"x": 1, "z": 0},
+      {"x": 0, "z": 1}
+    ],
+    "errors": {
+      "surface_not_coverable": "No remaining slope replacement produces a buildable BaseH",
+      "candidate_outside_target": "Surface patch candidate extends outside the target",
+      "candidate_cells_empty": "Surface patch candidate must cover at least one stud cell",
+      "target_height_dimensions_mismatch": "Target height dimensions must equal target color dimensions"
+    }
+  },
+  "colored_replacement": {
+    "description": "Match persisted slope patterns inside exact-color Heightmap connected regions.",
+    "strategy": "colored-region-replacement",
+    "final_strategy": "colored-replacement-final-design",
+    "supplement_connection_class": "colored_replacement_supplement",
+    "excluded_candidate_families": ["inverted"],
+    "excluded_candidate_name_patterns": ["\\bInverted\\b"],
+    "transient_heightmap_model_id_template": "transient-colored-heightmap-{source_dem_model_id}",
+    "missing_surface_fill_color": "Colored replacement final design is missing a usable surface fill color",
+    "errors": {
+      "heightmap_cells_missing": "Colored Heightmap cells are missing",
+      "heightmap_dimensions_invalid": "Colored Heightmap dimensions do not match its cells",
+      "target_dimensions_mismatch": "Colored replacement target dimensions must match Heightmap dimensions",
+      "rotation_missing": "Colored replacement rotation is not configured"
+    },
+    "minimum_base_height_plate": 0,
+    "maximum_height_error_plate": 0,
+    "maximum_match_examples": 500,
+    "maximum_missing_color_examples": 200,
+    "maximum_unresolved_slope_edge_examples": 200,
+    "maximum_supplement_rejection_examples": 200,
+    "connectivity": [
+      {"x": 0, "z": -1},
+      {"x": 1, "z": 0},
+      {"x": 0, "z": 1},
+      {"x": -1, "z": 0}
+    ],
+    "rotations": [
+      {"degrees": 0, "quarter_turns": 0},
+      {"degrees": 90, "quarter_turns": 1},
+      {"degrees": 180, "quarter_turns": 2},
+      {"degrees": 270, "quarter_turns": 3}
+    ],
+    "direction_rotation_clockwise": {
+      "north": "east",
+      "east": "south",
+      "south": "west",
+      "west": "north"
+    },
+    "slope_neighbors": [
+      {"x": 1, "z": 0, "positive": "east", "negative": "west"},
+      {"x": 0, "z": 1, "positive": "south", "negative": "north"}
+    ],
+    "color": {
+      "exact_match": "exact",
+      "nearest_match": "nearest",
+      "rgb_prefix": "#",
+      "hex_radix": 16,
+      "distance_exponent": 2,
+      "maximum_squared_distance": 900,
+      "transparent": false,
+      "xref_relation": "exact",
+      "rgb_channels": {
+        "red_start": 0,
+        "red_end": 2,
+        "green_start": 2,
+        "green_end": 4,
+        "blue_start": 4,
+        "blue_end": 6
+      }
+    },
+    "missing_color_reasons": {
+      "no_inventory_color": "candidate_part_has_no_inventory_color",
+      "nearest_color_exceeds_threshold": "candidate_part_nearest_color_exceeds_threshold"
+    },
+    "supplement_rejection_reasons": {
+      "no_slope_edges": "candidate_has_no_slope_edges",
+      "approximate_geometry": "candidate_uses_approximate_geometry",
+      "overlaps_replacement": "candidate_overlaps_replacement",
+      "no_unresolved_edge_match": "candidate_solves_no_unresolved_edge",
+      "overlaps_selected_supplement": "candidate_overlaps_selected_supplement",
+      "unsupported_base_h": "candidate_breaks_surface_support",
+      "base_h_collision": "candidate_collides_with_surface_base_h"
+    }
+  },
+  "support_base": {
+    "description": "Pixel-design style support base below the DEM terrain.",
+    "part_role": "plate",
+    "placement_ref_kinds": {
+      "white_base": "whiteBase",
+      "black_support": "blackSupport"
+    },
+    "generated_keys": {
+      "white_base": "whiteBase",
+      "black_support": "blackSupport"
+    },
+    "roles": {
+      "white_base": "white_base",
+      "black_support": "black_support"
+    },
+    "ldraw": {
+      "white_base_y_ldu": 0,
+      "black_support_y_ldu": 8,
+      "seam_connector_before_stud": 1,
+      "seam_connector_after_stud": 1,
+      "border_width_stud": 2,
+      "minimum_support_width_stud": 2,
+      "support_maximum_extra_cells_per_part": 1,
+      "support_minimum_covered_cells_per_part": 2,
+      "support_colors": {
+        "white": {
+          "id": 15,
+          "name": "White",
+          "rgb": "#FFFFFF",
+          "ldraw_code": "15"
+        },
+        "black": {
+          "id": 0,
+          "name": "Black",
+          "rgb": "#000000",
+          "ldraw_code": "0"
+        }
+      }
+    },
+    "steps": {
+      "base_step_white_plate_limit": 4,
+      "step_index_start": 1,
+      "step_id_separator": "-",
+      "layers": {
+        "base": "base"
+      },
+      "step_id_prefixes": {
+        "base": "base"
+      },
+      "base_plate": -2,
+      "step_names": {
+        "base": "Support base {index}"
+      }
+    },
+    "plan_export": {
+      "layer_ids": {
+        "black_support": "blackSupport",
+        "white_base": "whiteBase"
+      }
+    },
+    "errors": {
+      "support_base_failed": "DEM support base could not be generated"
+    }
+  },
+  "vertical_continuity": {
+    "description": "Check every one-LDU X/Z column for a continuous occupied interval from the ground upward.",
+    "samples_per_stud_axis": 20,
+    "ldu_per_stud": 20,
+    "ldu_per_plate": 8,
+    "ground_ldu": 0,
+    "sample_center_offset_ldu": 0.5,
+    "rounding_decimal_places": 6,
+    "maximum_gap_examples": 50,
+    "rotations": [
+      {"degrees": 0, "quarter_turns": 0},
+      {"degrees": 90, "quarter_turns": 1},
+      {"degrees": 180, "quarter_turns": 2},
+      {"degrees": 270, "quarter_turns": 3}
+    ],
+    "errors": {
+      "rotation_missing": "Vertical continuity rotation is not configured",
+      "sample_resolution": "Vertical continuity must sample exactly one column per LDU",
+      "profile_sample_resolution": "Vertical continuity profile resolution does not match one LDU",
+      "profile_missing": "Vertical continuity profile is missing for {part_id}"
+    }
+  },
+  "final_design": {
+    "description": "Return only a surface plan whose solid BaseH can be tiled and globally validated.",
+    "strategy": "surface-structure-validated",
+    "strategies": {
+      "surface_plan": "surface-plan",
+      "colored_replacement": "colored-replacement"
+    },
+    "surface_candidate_layers": [
+      {"allow_nearest_color": false, "allow_approximate_geometry": false},
+      {"allow_nearest_color": true, "allow_approximate_geometry": false},
+      {"allow_nearest_color": false, "allow_approximate_geometry": true},
+      {"allow_nearest_color": true, "allow_approximate_geometry": true}
+    ],
+    "roles": {
+      "surface": "surface"
+    },
+    "bom_role_order": ["black_support", "white_base", "surface", "brick", "plate"],
+    "color": {
+      "rgb_prefix": "#",
+      "ldraw_code_template": "{color_id}"
+    },
+    "inventory_colors": {
+      "xref_relation": "exact",
+      "part_number_fallbacks": {
+        "3046.dat": ["3046a", "3046b"]
+      },
+      "hex_radix": 16,
+      "distance_exponent": 2,
+      "maximum_squared_distance": 900,
+      "rgb_channels": {
+        "red_start": 0,
+        "red_end": 2,
+        "green_start": 2,
+        "green_end": 4,
+        "blue_start": 4,
+        "blue_end": 6
+      },
+      "errors": {
+        "target_color_missing": "Final DEM design target color metadata is missing"
+      }
+    },
+    "steps": {
+      "index_start": 1,
+      "id_template": "dem-step-{index}",
+      "structure_name_template": "Base layer {base_plate}",
+      "structure_stage": "structure",
+      "surface_ref_kind": "surface",
+      "surface_phases": [
+        {
+          "connection_class": "top_connected",
+          "name_template": "Connected slope replacement {base_plate}",
+          "stage": "surface-connected"
+        },
+        {
+          "connection_class": "top_finished",
+          "name_template": "Finished slope decoration {base_plate}",
+          "stage": "surface-finished"
+        },
+        {
+          "connection_class": "colored_replacement_supplement",
+          "name_template": "Colored replacement supplement {base_plate}",
+          "stage": "surface-supplement"
+        },
+        {
+          "connection_class": "surface_fill",
+          "name_template": "Surface fill {base_plate}",
+          "stage": "surface-fill"
+        }
+      ],
+      "maximum_placements_per_step": 100
+    },
+    "errors": {
+      "strategy_invalid": "DEM final design strategy is not configured",
+      "part_metadata_missing": "Final DEM design is missing LDraw part metadata",
+      "color_metadata_missing": "Final DEM design is missing color metadata",
+      "structure_not_coverable": "No globally selected surface plan has a buildable BaseH structure",
+      "validation_failed": "Final DEM design failed global validation"
+    }
+  },
+  "errors": {
+    "base_h_empty": "BaseH must contain at least one row and one column",
+    "base_h_not_rectangular": "BaseH rows must have equal lengths",
+    "base_h_negative": "BaseH heights must be non-negative integers",
+    "part_metadata_missing": "DEM BaseH requires configured brick and plate candidates",
+    "base_h_uncovered": "DEM BaseH cannot be covered by the configured LEGO parts",
+    "surface_profile_part_id": "LDraw part id must include a valid .dat file name"
+  },
+  "http_status": {
+    "bad_request": 400
+  },
+  "dem_ldraw": {
+    "content_type": "text/plain; charset=utf-8",
+    "filename_template": "dem-lego-design.ldr",
+    "content_disposition_header": "Content-Disposition",
+    "content_disposition_template": "attachment; filename=\"{filename}\"",
+    "line_separator": "\n",
+    "metadata_line_type": 0,
+    "part_line_type": 1,
+    "file_command": "FILE",
+    "name_command": "Name:",
+    "author_command": "Author:",
+    "author": "ctbzbricks",
+    "model_file_name": "dem-lego-design.ldr",
+    "comment_prefix": "//",
+    "step_command": "STEP",
+    "ldu_per_stud": 20,
+    "ldu_per_plate": 8,
+    "y_ground_ldu": 0,
+    "y_direction": -1,
+    "coordinate_precision": 6,
+    "support_origin_to_base_ldu": 0,
+    "support_origin_center_x_ldu": 0,
+    "support_origin_center_z_ldu": 0,
+    "part_origin_offset_divisor": 2,
+    "x_origin_grid_width_multiplier": 0,
+    "x_direction": 1,
+    "z_origin_grid_height_multiplier": 1,
+    "z_direction": -1,
+    "structure_rotation_matrices": {
+      "0": [0, 0, 1, 0, 1, 0, -1, 0, 0],
+      "90": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+      "180": [0, 0, -1, 0, 1, 0, 1, 0, 0],
+      "270": [-1, 0, 0, 0, 1, 0, 0, 0, -1]
+    },
+    "surface_rotation_matrices": {
+      "0": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+      "90": [0, 0, 1, 0, 1, 0, -1, 0, 0],
+      "180": [-1, 0, 0, 0, 1, 0, 0, 0, -1],
+      "270": [0, 0, -1, 0, 1, 0, 1, 0, 0]
+    },
+    "placement_ref_kinds": {
+      "structure": "structure",
+      "surface": "surface",
+      "white_base": "whiteBase",
+      "black_support": "blackSupport"
+    },
+    "steps": {
+      "maximum_placements_per_step": 30,
+      "maximum_part_types_per_step": 10
+    }
+  }
+}

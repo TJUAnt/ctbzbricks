@@ -1,0 +1,136 @@
+{
+  "description": "Taiwan GeoJSON to 1km DEM terrain asset generation.",
+  "geojson_path": "data/台湾省.geojson",
+  "output_path": "frontend/public/terrain/taiwan-dem.json",
+  "text_encoding": "utf-8",
+  "default_source_name": "taiwan.geojson",
+  "source_name_dataset_separator": " + ",
+  "dem_datasets": {
+    "default_key": "dem_1km",
+    "options": [
+      {
+        "key": "dem_1km",
+        "label": "DEM 1km",
+        "dataset_path": "data/818bb-main/818bb-main/dem/dem_1km/dem_1km",
+        "target_sample_spacing_meters": 1000
+      },
+      {
+        "key": "dem_250m",
+        "label": "DEM 250m",
+        "dataset_path": "data/818bb-main/818bb-main/dem/dem_250m/dem_250m",
+        "target_sample_spacing_meters": 250
+      }
+    ]
+  },
+  "latitude_meters_per_degree": 111320,
+  "radians_per_degree": 0.017453292519943295,
+  "coordinate_average_divisor": 2,
+  "sample_chunk_size": 1000,
+  "mask_worker_count": 4,
+  "mask_rows_per_task": 32,
+  "coordinate_decimals": 6,
+  "elevation_decimals": 1,
+  "nodata_value": -32768,
+  "worldcover": {
+    "dataset_glob": "data/worldcover/*/*_Map.tif",
+    "nodata_value": 0,
+    "class_colors": {
+      "10": {
+        "label": "Tree cover",
+        "color": "#2f6b35"
+      },
+      "20": {
+        "label": "Shrubland",
+        "color": "#b6a04b"
+      },
+      "30": {
+        "label": "Grassland",
+        "color": "#8fbf4f"
+      },
+      "40": {
+        "label": "Cropland",
+        "color": "#d6c05b"
+      },
+      "50": {
+        "label": "Built-up",
+        "color": "#b55048"
+      },
+      "60": {
+        "label": "Bare/sparse vegetation",
+        "color": "#bfa77a"
+      },
+      "70": {
+        "label": "Snow and ice",
+        "color": "#f2f7fb"
+      },
+      "80": {
+        "label": "Permanent water bodies",
+        "color": "#3f78b5"
+      },
+      "90": {
+        "label": "Herbaceous wetland",
+        "color": "#6e9f8e"
+      },
+      "95": {
+        "label": "Mangroves",
+        "color": "#27634d"
+      },
+      "100": {
+        "label": "Moss and lichen",
+        "color": "#9bb07a"
+      }
+    }
+  },
+  "asset_schema": "terrain-dem-v1",
+  "heightmap_asset_schema": "lego-heightmap-v1",
+  "heightmap_generation": {
+    "latitude_meters_per_degree": 111320,
+    "radians_per_degree": 0.017453292519943295,
+    "kilometers_per_meter": 0.001,
+    "coordinate_average_divisor": 2,
+    "minimum_stud_count": 1,
+    "minimum_plate_height": 0,
+    "empty_elevation_height_plate": 0,
+    "coverage_precision": 100,
+    "rounding_offset": 0.5,
+    "aggregation": {
+      "percentile": "percentile",
+      "mean": "mean",
+      "max": "max"
+    },
+    "percentile_ratio": 0.75
+  },
+  "render_options": {
+    "default_vertical_exaggeration": 8
+  },
+  "model_store_path": "data/generated_dem_models",
+  "lego_heightmap_model_store_path": "data/generated_lego_heightmap_models",
+  "model_file_extension": ".json",
+  "model_id_hex_length": 32,
+  "progress": {
+    "queued": 0,
+    "polygons": 15,
+    "coordinates": 25,
+    "sampling_start": 30,
+    "sampling_end": 75,
+    "masking": 90,
+    "saved": 100
+  },
+  "job_status": {
+    "queued": "queued",
+    "running": "running",
+    "complete": "complete",
+    "failed": "failed"
+  },
+  "http_status": {
+    "bad_request": 400,
+    "not_found": 404
+  },
+  "errors": {
+    "invalid_dem_dataset": "DEM dataset is not configured",
+    "invalid_dem_model": "DEM model not found",
+    "invalid_heightmap_aggregation": "Unsupported height aggregation",
+    "missing_heightmap_land_cover": "Valid DEM samples require land cover",
+    "missing_heightmap_land_cover_color": "DEM land cover class requires a color"
+  }
+}

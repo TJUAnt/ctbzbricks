@@ -1,0 +1,103 @@
+{
+  "description": "Catalog every database LDraw Slope part by its sampled DEM surface capability.",
+  "source": {
+    "category": "Slope",
+    "geometry_status": "parsed",
+    "dem_design_config_file": "dem_lego_design.json",
+    "current_candidate_config_path": "backend/config/dem_lego_design.json",
+    "current_candidate_key_path": ["design_input", "part_ids"],
+    "printed_relationship_type": "P",
+    "printed_xref_relation": "exact"
+  },
+  "classification": {
+    "quantization_step_plate": 0.125,
+    "value_precision": 3,
+    "flat_surface_range_plate": 0.125,
+    "orientation_degrees": [0, 90, 180, 270],
+    "family_patterns": [
+      {"family": "curved", "pattern": "\\bCurved|\\bRound(?:ed)?\\b"},
+      {"family": "double_concave", "pattern": "\\bDouble Concave\\b"},
+      {"family": "double_convex", "pattern": "\\bDouble Convex\\b"},
+      {"family": "corner", "pattern": "\\bCorner\\b"},
+      {"family": "inverted", "pattern": "\\bInverted\\b"},
+      {"family": "wedge", "pattern": "\\bWedge\\b"},
+      {"family": "quadruple", "pattern": "\\bQuadruple\\b"},
+      {"family": "triple", "pattern": "\\bTriple\\b"},
+      {"family": "straight", "pattern": "^Slope (?:Brick|Plate)"}
+    ],
+    "families": {
+      "flat_top": "flat_top",
+      "unclassified": "unclassified"
+    },
+    "part_flags": {
+      "obsolete_pattern": "^~.*\\bObsolete\\b",
+      "moved_pattern": "^~Moved to\\b",
+      "printed_name_pattern": "(?:\\bPattern\\b|\\bPatt\\.)",
+      "sticker_name_pattern": "\\bStickers?\\b",
+      "printed_part_id_pattern": "^[0-9]+[a-z]*p[a-z0-9]+\\.dat$",
+      "sticker_part_id_pattern": "^[0-9]+[a-z]*d[a-z0-9]+\\.dat$",
+      "shortcut_assembly_name_pattern": "\\(Complete\\)",
+      "shortcut_assembly_part_id_pattern": "^[0-9]+[a-z]*c[a-z0-9]+\\.dat$"
+    },
+    "group_hash_algorithm": "sha256",
+    "group_id_prefix": "slope-",
+    "group_id_length": 12
+  },
+  "recommendation": {
+    "maximum_area_stud": 16,
+    "excluded_families": ["flat_top", "inverted", "unclassified"]
+  },
+  "database": {
+    "description": "Database schema for persisted DEM slope candidates and their ranked Heightmap pattern capabilities.",
+    "candidate_table": "dem_slope_candidates",
+    "pattern_table": "dem_slope_candidate_patterns",
+    "maximum_patterns_per_candidate": 3,
+    "string_lengths": {
+      "catalog_status": 32,
+      "family": 64,
+      "group_id": 64,
+      "pattern_key": 64,
+      "source_hash": 64
+    },
+    "constraints": {
+      "candidate_part_unique": "uk_dem_slope_candidate_part",
+      "pattern_rank_unique": "uk_dem_slope_pattern_rank",
+      "pattern_key_unique": "uk_dem_slope_pattern_key",
+      "pattern_rank_check": "ck_dem_slope_pattern_rank"
+    },
+    "indexes": {
+      "candidate_enabled": "idx_dem_slope_candidate_enabled",
+      "candidate_family": "idx_dem_slope_candidate_family",
+      "candidate_group": "idx_dem_slope_candidate_group",
+      "pattern_lookup": "idx_dem_slope_pattern_lookup",
+      "pattern_key": "idx_dem_slope_pattern_key"
+    },
+    "errors": {
+      "missing_ldraw_parts": "DEM slope catalog references missing LDraw parts: {part_ids}"
+    }
+  },
+  "pattern_generation": {
+    "description": "Build approximate four-direction Heightmap patterns from the footprint and highest cells.",
+    "highest_point_tolerance_plate": 0.125,
+    "source_rotation_degrees": 0,
+    "pattern_hash_algorithm": "sha256",
+    "pattern_hash_length": 64,
+    "progress_interval": 25,
+    "directions": [
+      {"name": "north", "x": 0, "z": -1},
+      {"name": "east", "x": 1, "z": 0},
+      {"name": "south", "x": 0, "z": 1},
+      {"name": "west", "x": -1, "z": 0}
+    ],
+    "errors": {
+      "empty_pattern_surface": "DEM slope pattern surface is empty",
+      "missing_source_rotation": "DEM slope capability is missing the configured source rotation",
+      "pattern_table_not_empty": "DEM slope candidate pattern table must be empty before schema recreation"
+    }
+  },
+  "output": {
+    "markdown_path": "docs/design/pixel_design/dem_slope_catalog.md",
+    "progress_interval": 25,
+    "markdown_title": "DEM Slope Capability Catalog"
+  }
+}

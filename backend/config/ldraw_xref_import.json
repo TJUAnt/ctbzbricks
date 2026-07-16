@@ -1,0 +1,93 @@
+{
+  "description": "Phase 2 xref import rules. Missing keys are treated as startup errors.",
+  "batch_size": 1000,
+  "ldraw_part_suffix": ".dat",
+  "direct_exact_relation_type": "exact",
+  "direct_exact_source": "rb_part_num_plus_ldraw_dat",
+  "direct_exact_confidence": "1.0000",
+  "default_recall_relation_types": [
+    "exact",
+    "geometry_equivalent"
+  ],
+  "substitute_recall_relation_types": [
+    "exact",
+    "geometry_equivalent",
+    "substitute_candidate"
+  ],
+  "relation_type_sort_priority": {
+    "exact": 0,
+    "geometry_equivalent": 1,
+    "substitute_candidate": 2
+  },
+  "exclude_obsolete_candidates_by_default": true,
+  "obsolete_ldraw_name_prefixes": [
+    "~"
+  ],
+  "obsolete_ldraw_name_tokens": [
+    "moved to",
+    "obsolete"
+  ],
+  "relationship_mappings": [
+    {
+      "rebrickable_rel_type": "P",
+      "xref_relation_type": "geometry_equivalent",
+      "xref_source": "rb_part_relationships_P",
+      "confidence": "0.9000"
+    },
+    {
+      "rebrickable_rel_type": "T",
+      "xref_relation_type": "geometry_equivalent",
+      "xref_source": "rb_part_relationships_T",
+      "confidence": "0.9000"
+    },
+    {
+      "rebrickable_rel_type": "M",
+      "xref_relation_type": "substitute_candidate",
+      "xref_source": "rb_part_relationships_M",
+      "confidence": "0.7000"
+    },
+    {
+      "rebrickable_rel_type": "A",
+      "xref_relation_type": "substitute_candidate",
+      "xref_source": "rb_part_relationships_A",
+      "confidence": "0.7000"
+    }
+  ],
+  "deferred_rebrickable_rel_types": [
+    "B",
+    "R"
+  ],
+  "validation_required_mappings": [
+    {
+      "rebrickable_part_num": "3001",
+      "ldraw_part_num": "3001.dat",
+      "relation_type": "exact"
+    },
+    {
+      "rebrickable_part_num": "3020",
+      "ldraw_part_num": "3020.dat",
+      "relation_type": "exact"
+    },
+    {
+      "rebrickable_part_num": "3626cpr3662",
+      "ldraw_part_num": "3626c.dat",
+      "relation_type": "geometry_equivalent"
+    },
+    {
+      "rebrickable_part_num": "11120",
+      "ldraw_part_num": "3007.dat",
+      "relation_type": "substitute_candidate"
+    }
+  ],
+  "validation_default_excluded_relation_type": "substitute_candidate",
+  "validation_substitute_sample": {
+    "rebrickable_part_num": "11120",
+    "ldraw_part_num": "3007.dat",
+    "relation_type": "substitute_candidate"
+  },
+  "validation_obsolete_substitute_sample": {
+    "rebrickable_part_num": "3192a",
+    "ldraw_part_num": "3192.dat",
+    "relation_type": "substitute_candidate"
+  }
+}

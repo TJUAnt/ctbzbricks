@@ -1,0 +1,358 @@
+{
+  "description": "Persistent model fitting jobs, target analysis, blocks, and editable solutions.",
+  "routes": {
+    "jobs": "/api/model-fitting/jobs",
+    "job": "/api/model-fitting/jobs/{job_id}",
+    "job_blocks": "/api/model-fitting/jobs/{job_id}/blocks",
+    "solution": "/api/model-fitting/solutions/{solution_id}"
+  },
+  "database": {
+    "job_table": "model_fitting_jobs",
+    "target_block_table": "model_fitting_target_blocks",
+    "solution_table": "model_fitting_solutions",
+    "placement_table": "model_fitting_solution_placements",
+    "edit_table": "model_fitting_solution_edits",
+    "string_lengths": {
+      "id": 64,
+      "name": 255,
+      "status": 64,
+      "schema": 64,
+      "block_type": 64,
+      "candidate_type": 32,
+      "candidate_id": 128,
+      "source": 64,
+      "color_code": 32,
+      "edit_type": 64
+    },
+    "indexes": {
+      "job_model": "idx_model_fitting_job_model",
+      "job_status": "idx_model_fitting_job_status",
+      "job_created": "idx_model_fitting_job_created",
+      "block_job": "idx_model_fitting_block_job",
+      "solution_job": "idx_model_fitting_solution_job",
+      "solution_status": "idx_model_fitting_solution_status",
+      "placement_solution": "idx_model_fitting_placement_solution",
+      "placement_block": "idx_model_fitting_placement_block",
+      "edit_solution": "idx_model_fitting_edit_solution"
+    }
+  },
+  "schema": {
+    "job": "model-fitting-job-v1",
+    "target_block": "model-fitting-target-block-v1",
+    "solution": "model-fitting-solution-v1",
+    "placement": "model-fitting-placement-v1",
+    "edit": "model-fitting-edit-v1"
+  },
+  "storage": {
+    "id_hex_length": 32
+  },
+  "job_status": {
+    "complete": "complete",
+    "failed": "failed"
+  },
+  "solution_status": {
+    "draft": "draft"
+  },
+  "target_block": {
+    "whole_model_type": "whole_model",
+    "vehicle_region_type": "vehicle_region",
+    "whole_model_id": "whole-model",
+    "whole_model_name": "Whole model",
+    "default_origin": [0, 0, 0]
+  },
+  "semantic": {
+    "default_model_type_hint": "freeform",
+    "default_semantic_preset": "freeform-basic",
+    "source_vehicle_preset": "vehicle_8_wide_preset",
+    "confidence_vehicle_preset": 0.7,
+    "freeform_preset": "freeform-basic",
+    "vehicle_model_type": "vehicle",
+    "vehicle_8_wide_preset": "vehicle-8-wide",
+    "default_target_width_stud": 8,
+    "ldu_per_stud": 20,
+    "roles": {
+      "chassis": "vehicle.chassis",
+      "front_body": "vehicle.frontBody",
+      "rear_body": "vehicle.rearBody",
+      "cabin": "vehicle.cabin",
+      "roof": "vehicle.roof",
+      "left_side": "vehicle.leftSide",
+      "right_side": "vehicle.rightSide",
+      "wheel_assembly": "vehicle.wheelAssembly",
+      "front_detail": "vehicle.frontDetail",
+      "rear_detail": "vehicle.rearDetail"
+    },
+    "block_templates": [
+      {
+        "id": "chassis",
+        "name": "Chassis",
+        "semantic_type": "vehicle.chassis",
+        "target_role": "chassis",
+        "bbox_fraction": {"minX": 0, "maxX": 1, "minY": 0, "maxY": 0.28, "minZ": 0, "maxZ": 1},
+        "shape_hints": ["plate", "brick", "technic"],
+        "categories": ["Plate", "Brick"],
+        "include_irregular": false,
+        "reuse_group": null,
+        "symmetry_group": null
+      },
+      {
+        "id": "front-body",
+        "name": "Front Body",
+        "semantic_type": "vehicle.frontBody",
+        "target_role": "frontBody",
+        "bbox_fraction": {"minX": 0, "maxX": 1, "minY": 0.2, "maxY": 0.75, "minZ": 0.68, "maxZ": 1},
+        "shape_hints": ["slope", "wedge", "curved"],
+        "categories": ["Slope", "Plate"],
+        "include_irregular": true,
+        "reuse_group": null,
+        "symmetry_group": "vehicle-body"
+      },
+      {
+        "id": "rear-body",
+        "name": "Rear Body",
+        "semantic_type": "vehicle.rearBody",
+        "target_role": "rearBody",
+        "bbox_fraction": {"minX": 0, "maxX": 1, "minY": 0.2, "maxY": 0.75, "minZ": 0, "maxZ": 0.32},
+        "shape_hints": ["slope", "wedge", "curved"],
+        "categories": ["Slope", "Plate"],
+        "include_irregular": true,
+        "reuse_group": null,
+        "symmetry_group": "vehicle-body"
+      },
+      {
+        "id": "cabin",
+        "name": "Cabin",
+        "semantic_type": "vehicle.cabin",
+        "target_role": "cabin",
+        "bbox_fraction": {"minX": 0.15, "maxX": 0.85, "minY": 0.45, "maxY": 0.95, "minZ": 0.32, "maxZ": 0.68},
+        "shape_hints": ["transparent", "panel", "slope"],
+        "categories": ["Slope", "Plate"],
+        "include_irregular": true,
+        "reuse_group": null,
+        "symmetry_group": null
+      },
+      {
+        "id": "roof",
+        "name": "Roof",
+        "semantic_type": "vehicle.roof",
+        "target_role": "roof",
+        "bbox_fraction": {"minX": 0.18, "maxX": 0.82, "minY": 0.78, "maxY": 1, "minZ": 0.34, "maxZ": 0.66},
+        "shape_hints": ["tile", "plate", "slope"],
+        "categories": ["Plate", "Tile"],
+        "include_irregular": true,
+        "reuse_group": null,
+        "symmetry_group": null
+      },
+      {
+        "id": "left-side",
+        "name": "Left Side",
+        "semantic_type": "vehicle.leftSide",
+        "target_role": "leftSide",
+        "bbox_fraction": {"minX": 0, "maxX": 0.18, "minY": 0.25, "maxY": 0.8, "minZ": 0.12, "maxZ": 0.88},
+        "shape_hints": ["panel", "tile", "slope"],
+        "categories": ["Plate", "Slope"],
+        "include_irregular": true,
+        "reuse_group": null,
+        "symmetry_group": "vehicle-sides"
+      },
+      {
+        "id": "right-side",
+        "name": "Right Side",
+        "semantic_type": "vehicle.rightSide",
+        "target_role": "rightSide",
+        "bbox_fraction": {"minX": 0.82, "maxX": 1, "minY": 0.25, "maxY": 0.8, "minZ": 0.12, "maxZ": 0.88},
+        "shape_hints": ["panel", "tile", "slope"],
+        "categories": ["Plate", "Slope"],
+        "include_irregular": true,
+        "reuse_group": null,
+        "symmetry_group": "vehicle-sides"
+      },
+      {
+        "id": "wheel-front-left",
+        "name": "Front Left Wheel",
+        "semantic_type": "vehicle.wheelAssembly",
+        "target_role": "wheel",
+        "bbox_fraction": {"minX": 0, "maxX": 0.22, "minY": 0, "maxY": 0.42, "minZ": 0.65, "maxZ": 0.88},
+        "shape_hints": ["round", "cylindrical"],
+        "categories": ["Wheel", "Tyre"],
+        "include_irregular": true,
+        "reuse_group": "wheel-assembly",
+        "symmetry_group": "vehicle-wheels"
+      },
+      {
+        "id": "wheel-front-right",
+        "name": "Front Right Wheel",
+        "semantic_type": "vehicle.wheelAssembly",
+        "target_role": "wheel",
+        "bbox_fraction": {"minX": 0.78, "maxX": 1, "minY": 0, "maxY": 0.42, "minZ": 0.65, "maxZ": 0.88},
+        "shape_hints": ["round", "cylindrical"],
+        "categories": ["Wheel", "Tyre"],
+        "include_irregular": true,
+        "reuse_group": "wheel-assembly",
+        "symmetry_group": "vehicle-wheels"
+      },
+      {
+        "id": "wheel-rear-left",
+        "name": "Rear Left Wheel",
+        "semantic_type": "vehicle.wheelAssembly",
+        "target_role": "wheel",
+        "bbox_fraction": {"minX": 0, "maxX": 0.22, "minY": 0, "maxY": 0.42, "minZ": 0.12, "maxZ": 0.35},
+        "shape_hints": ["round", "cylindrical"],
+        "categories": ["Wheel", "Tyre"],
+        "include_irregular": true,
+        "reuse_group": "wheel-assembly",
+        "symmetry_group": "vehicle-wheels"
+      },
+      {
+        "id": "wheel-rear-right",
+        "name": "Rear Right Wheel",
+        "semantic_type": "vehicle.wheelAssembly",
+        "target_role": "wheel",
+        "bbox_fraction": {"minX": 0.78, "maxX": 1, "minY": 0, "maxY": 0.42, "minZ": 0.12, "maxZ": 0.35},
+        "shape_hints": ["round", "cylindrical"],
+        "categories": ["Wheel", "Tyre"],
+        "include_irregular": true,
+        "reuse_group": "wheel-assembly",
+        "symmetry_group": "vehicle-wheels"
+      },
+      {
+        "id": "front-detail",
+        "name": "Front Detail",
+        "semantic_type": "vehicle.frontDetail",
+        "target_role": "detail",
+        "bbox_fraction": {"minX": 0.15, "maxX": 0.85, "minY": 0.18, "maxY": 0.55, "minZ": 0.9, "maxZ": 1},
+        "shape_hints": ["light", "grille", "small"],
+        "categories": ["Plate", "Tile"],
+        "include_irregular": true,
+        "reuse_group": null,
+        "symmetry_group": null
+      },
+      {
+        "id": "rear-detail",
+        "name": "Rear Detail",
+        "semantic_type": "vehicle.rearDetail",
+        "target_role": "detail",
+        "bbox_fraction": {"minX": 0.15, "maxX": 0.85, "minY": 0.18, "maxY": 0.55, "minZ": 0, "maxZ": 0.1},
+        "shape_hints": ["tailLight", "small"],
+        "categories": ["Plate", "Tile"],
+        "include_irregular": true,
+        "reuse_group": null,
+        "symmetry_group": null
+      }
+    ]
+  },
+  "recall": {
+    "default_limit": 20,
+    "bbox_tolerance_ldu": 0,
+    "include_irregular": true
+  },
+  "model_asset": {
+    "required_model_type": "mesh"
+  },
+  "normalization": {
+    "default_scale_to_ldu": 20,
+    "axis_order": ["x", "y", "z"],
+    "up_axis": "y",
+    "source_unit": "model_unit",
+    "unit": "ldu"
+  },
+  "glb": {
+    "magic": "glTF",
+    "version": 2,
+    "header_struct": "<4sII",
+    "chunk_header_struct": "<II",
+    "header_length": 12,
+    "chunk_header_length": 8,
+    "json_chunk_type": 1313821514,
+    "bin_chunk_type": 5130562,
+    "binary_encoding": "ascii",
+    "json_encoding": "utf-8",
+    "triangles_mode": 4,
+    "indices_per_triangle": 3,
+    "position_attribute": "POSITION",
+    "float_component_type": 5126,
+    "unsigned_short_component_type": 5123,
+    "unsigned_int_component_type": 5125,
+    "vec3_type": "VEC3",
+    "component_type_struct": {
+      "5126": "f",
+      "5123": "H",
+      "5125": "I"
+    },
+    "struct_endian_prefix": "<",
+    "component_type_size": {
+      "5126": 4,
+      "5123": 2,
+      "5125": 4
+    },
+    "accessor_type_components": {
+      "VEC3": 3,
+      "SCALAR": 1
+    }
+  },
+  "json_keys": {
+    "asset_path": "assetPath",
+    "target_bbox": "targetBBox",
+    "normalized_bbox": "normalizedBBox",
+    "mesh_stats": "meshStats",
+    "color_summary": "colorSummary",
+    "normalization": "normalization",
+    "materials": "materials",
+    "meshes": "meshes",
+    "primitives": "primitives",
+    "attributes": "attributes",
+    "accessors": "accessors",
+    "buffer_views": "bufferViews",
+    "buffers": "buffers",
+    "byte_offset": "byteOffset",
+    "byte_stride": "byteStride",
+    "buffer_view": "bufferView",
+    "component_type": "componentType",
+    "type": "type",
+    "count": "count",
+    "min": "min",
+    "max": "max",
+    "mode": "mode",
+    "indices": "indices",
+    "x": "x",
+    "y": "y",
+    "z": "z",
+    "min_x": "minX",
+    "min_y": "minY",
+    "min_z": "minZ",
+    "max_x": "maxX",
+    "max_y": "maxY",
+    "max_z": "maxZ",
+    "width": "width",
+    "height": "height",
+    "depth": "depth",
+    "vertex_count": "vertexCount",
+    "triangle_count": "triangleCount",
+    "primitive_count": "primitiveCount",
+    "mesh_count": "meshCount",
+    "source_unit": "sourceUnit",
+    "target_unit": "targetUnit",
+    "scale_to_ldu": "scaleToLdu",
+    "up_axis": "upAxis",
+    "model_type_hint": "modelTypeHint",
+    "semantic_preset": "semanticPreset",
+    "target_width_stud": "targetWidthStud"
+  },
+  "http_status": {
+    "bad_request": 400,
+    "not_found": 404
+  },
+  "errors": {
+    "model_not_found": "Model fitting source model not found: {model_id}",
+    "unsupported_model_type": "Model fitting requires a mesh model asset: {model_id}",
+    "model_file_not_found": "Model fitting source model file not found: {model_id}",
+    "invalid_glb": "Invalid GLB mesh file for model fitting",
+    "missing_position_accessor": "GLB mesh primitive is missing POSITION accessor",
+    "unsupported_accessor_component_type": "Unsupported GLB accessor component type: {component_type}",
+    "unsupported_accessor_type": "Unsupported GLB accessor type: {accessor_type}",
+    "solution_not_found": "Model fitting solution not found: {solution_id}",
+    "job_not_found": "Model fitting job not found: {job_id}",
+    "invalid_target_width": "Model fitting target width must be greater than zero",
+    "invalid_source_width": "Model fitting source model width must be greater than zero"
+  }
+}

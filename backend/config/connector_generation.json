@@ -1,0 +1,153 @@
+{
+  "description": "Phase 4 connector instance generation configuration.",
+  "batch_size": 1000,
+  "shadow_source_type": "ldcad_shadow",
+  "snap_cyl_meta_type": "SNAP_CYL",
+  "connector_kind_cyl": "cyl",
+  "unknown_connector_type": "cyl_unknown",
+  "default_confidence": "1.0000",
+  "default_orientation": [
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1
+  ],
+  "default_position": [
+    0,
+    0,
+    0
+  ],
+  "direction": {
+    "axis_column": 2,
+    "tolerance": 0.0001,
+    "labels": {
+      "x_pos": "side_x_pos",
+      "x_neg": "side_x_neg",
+      "y_pos": "top",
+      "y_neg": "bottom",
+      "z_pos": "side_z_pos",
+      "z_neg": "side_z_neg",
+      "unknown": "unknown"
+    },
+    "groups": {
+      "x": "side",
+      "y": "vertical",
+      "z": "side",
+      "unknown": "unknown"
+    }
+  },
+  "param_keys": {
+    "id": "id",
+    "alternate_id": "ID",
+    "gender": "gender",
+    "secs": "secs",
+    "pos": "pos",
+    "ori": "ori",
+    "grid": "grid",
+    "caps": "caps",
+    "center": "center",
+    "slide": "slide"
+  },
+  "grid": {
+    "expected_length": 6,
+    "compact_length": 5,
+    "extended_length": 7,
+    "center_token": "C",
+    "x_mode_index": 0,
+    "x_count_index": 1,
+    "z_mode_index": 2,
+    "z_count_index": 3,
+    "x_step_index": 4,
+    "z_step_index": 5
+  },
+  "include": {
+    "snap_include_meta_type": "SNAP_INCL",
+    "max_depth": 8,
+    "ref_key": "ref",
+    "reference_candidate_formats": [
+      "{ref}",
+      "p/{ref}",
+      "parts/{ref}"
+    ]
+  },
+  "section_profile_tokens": {
+    "round": "R",
+    "square": "S",
+    "axle": "A"
+  },
+  "normalized_rules": {
+    "axle_profile": {
+      "M": "axle",
+      "F": "axle_hole"
+    },
+    "male_round_radius": {
+      "6": "stud",
+      "4": "technic_pin"
+    },
+    "female_round_radius": {
+      "6": "anti_stud"
+    },
+    "female_square_radius": {
+      "6": "anti_stud"
+    },
+    "female_technic_hole_profile_radii": [
+      [
+        "R",
+        8
+      ],
+      [
+        "R",
+        6
+      ],
+      [
+        "R",
+        8
+      ]
+    ],
+    "female_technic_hole_type": "technic_pin_hole"
+  },
+  "validation_samples": [
+    {
+      "ldraw_part_num": "3020.dat",
+      "normalized_connector_type": "anti_stud",
+      "connector_gender": "F",
+      "minimum_count": 8
+    },
+    {
+      "ldraw_part_num": "p/stud.dat",
+      "normalized_connector_type": "stud",
+      "connector_gender": "M",
+      "minimum_count": 1
+    },
+    {
+      "ldraw_part_num": "p/connhole.dat",
+      "normalized_connector_type": "technic_pin_hole",
+      "connector_gender": "F",
+      "minimum_count": 1
+    },
+    {
+      "ldraw_part_num": "3003.dat",
+      "normalized_connector_type": "anti_stud",
+      "connector_gender": "F",
+      "minimum_count": 4
+    },
+    {
+      "ldraw_part_num": "3004.dat",
+      "normalized_connector_type": "anti_stud",
+      "connector_gender": "F",
+      "minimum_count": 2
+    },
+    {
+      "ldraw_part_num": "10089.dat",
+      "normalized_connector_type": "technic_pin_hole",
+      "connector_gender": "F",
+      "direction_group": "side",
+      "minimum_count": 4
+    }
+  ]
+}
