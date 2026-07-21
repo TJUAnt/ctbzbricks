@@ -1,4 +1,6 @@
+import { requestJson } from '../api/client';
 import type { LegoHeightmap } from './legoHeightmap';
+import { currentTaskContext } from '../api/taskContext';
 
 export type LegoHeightmapAsset = LegoHeightmap & {
   schema: string;
@@ -40,16 +42,15 @@ export async function saveLegoHeightmapModel(
   name: string,
   asset: LegoHeightmapAsset,
 ): Promise<LegoHeightmapModelMetadata> {
-  const response = await fetch(apiUrl, {
+  return requestJson<LegoHeightmapModelMetadata>(apiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, asset: { ...asset, name } }),
+    body: JSON.stringify({
+      name,
+      asset: { ...asset, name },
+      contentLocale: currentTaskContext().locale,
+    }),
   });
-  if (!response.ok) {
-    const errorBody = (await response.json()) as { detail?: string };
-    throw new Error(errorBody.detail ?? response.statusText);
-  }
-  return (await response.json()) as LegoHeightmapModelMetadata;
 }
 
 export async function loadLegoHeightmapModel(
@@ -57,12 +58,7 @@ export async function loadLegoHeightmapModel(
   expectedSchema: string,
   invalidAssetMessage: string,
 ): Promise<LegoHeightmapAsset> {
-  const response = await fetch(apiUrl);
-  if (!response.ok) {
-    const errorBody = (await response.json()) as { detail?: string };
-    throw new Error(errorBody.detail ?? response.statusText);
-  }
-  const asset = (await response.json()) as LegoHeightmapAsset;
+  const asset = await requestJson<LegoHeightmapAsset>(apiUrl);
   if (asset.schema !== expectedSchema) {
     throw new Error(invalidAssetMessage);
   }

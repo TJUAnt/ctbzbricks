@@ -1,6 +1,6 @@
 import React from 'react';
 import { ArrowLeft, Box } from 'lucide-react';
-import appConfig from '../app/appConfig.json';
+import appConfig from '../app/appConfig';
 import {
   HeightmapCanvas,
   HeightmapLegend,
@@ -11,9 +11,9 @@ import {
   type LegoHeightmapAsset,
 } from '../legoTerrain/legoHeightmapAsset';
 import { MeshModelViewer } from '../modelImport/MeshModelViewer';
-import legoTerrainConfig from '../legoTerrain/legoTerrainConfig.json';
+import legoTerrainConfig from '../legoTerrain/legoTerrainConfig';
 import { loadTerrainModel, routeWithParam } from '../terrain/terrainApi';
-import terrainConfig from '../terrain/terrainConfig.json';
+import terrainConfig from '../terrain/terrainConfig';
 import { TerrainScene, TerrainStats } from '../terrain/TerrainDemPage';
 import type { TerrainAsset } from '../terrain/terrainTypes';
 import type { ModelAsset } from './modelAssetApi';

@@ -3,9 +3,10 @@
 from typing import Any
 
 from pydantic import BaseModel, Field
+from src.api.schemas.domain_content import ContentLocaleRequest
 
 
-class LegoHeightmapSaveRequest(BaseModel):
+class LegoHeightmapSaveRequest(ContentLocaleRequest):
     name: str
     asset: dict[str, Any]
 
@@ -17,7 +18,7 @@ class LegoHeightmapScaleRequest(BaseModel):
     minCoverageRatio: float = Field(ge=0, le=1)
 
 
-class LegoHeightmapFromDemRequest(BaseModel):
+class LegoHeightmapFromDemRequest(ContentLocaleRequest):
     name: str
     modelId: str
     scale: LegoHeightmapScaleRequest

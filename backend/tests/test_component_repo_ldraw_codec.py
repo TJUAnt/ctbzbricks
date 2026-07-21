@@ -80,8 +80,8 @@ class ComponentRepoLDrawCodecTest(unittest.TestCase):
         self.assertEqual(first_leaf.transform.position, (-40.0, -48.0, 120.0))
         self.assertEqual(first_leaf.transform.matrix, (-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0))
         self.assertEqual(
-            [issue.issue_type for issue in document.parse_issues],
-            [config["ldraw"]["issues"]["duplicate_model_name"]],
+            [issue.code for issue in document.parse_issues],
+            [f"component_repo.parse.{config['ldraw']['issues']['duplicate_model_name']}"],
         )
 
     def test_deserialize_records_studio_type11_as_parse_issue(self) -> None:
@@ -98,8 +98,13 @@ class ComponentRepoLDrawCodecTest(unittest.TestCase):
         self.assertEqual(len(document.leaf_part_references()), 0)
         self.assertEqual(len(document.parse_issues), 1)
         self.assertEqual(
-            document.parse_issues[0].issue_type,
-            config["ldraw"]["issues"]["unsupported_line_type"],
+            document.parse_issues[0].to_dict(),
+            {
+                "code": f"component_repo.parse.{config['ldraw']['issues']['unsupported_line_type']}",
+                "severity": "warning",
+                "params": {"line": 2},
+                "path": ["lines", 2],
+            },
         )
 
     def test_serialize_then_deserialize_keeps_component_structure_counts(self) -> None:

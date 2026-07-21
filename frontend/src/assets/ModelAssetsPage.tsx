@@ -1,6 +1,7 @@
 import React from 'react';
 import { Database, ChevronLeft, ChevronRight } from 'lucide-react';
-import appConfig from '../app/appConfig.json';
+import appConfig from '../app/appConfig';
+import { formatDateTime, formatNumber } from '../i18n/formatters';
 import {
   deleteModelAsset,
   loadModelAssetPage,
@@ -93,8 +94,8 @@ export function ModelAssetsPage({ onOpenAsset }: { onOpenAsset: (asset: ModelAss
               <div>
                 {asset.columns && asset.rows ? `${asset.columns} x ${asset.rows}` : '-'}
               </div>
-              <div>{asset.validSampleCount?.toLocaleString() ?? '-'}</div>
-              <div>{new Date(asset.createdAt).toLocaleString()}</div>
+              <div>{asset.validSampleCount == null ? '-' : formatNumber(asset.validSampleCount)}</div>
+              <div>{formatDateTime(asset.createdAt)}</div>
               <div className="asset-row-actions">
                 <button onClick={() => onOpenAsset(asset)} type="button">
                   {appConfig.texts.viewAsset}

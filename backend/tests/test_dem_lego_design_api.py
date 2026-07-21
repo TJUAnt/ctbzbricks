@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from fastapi import HTTPException
+from src.api.errors import DomainError
 
 from src.api.routes.dem_lego_design import create_dem_lego_design_router
 from src.api.schemas.dem_lego_design import (
@@ -30,6 +30,7 @@ API_CONFIG = {
         "surface_plan": "/api/dem-lego-design/surface-plan",
         "final_design": "/api/dem-lego-design/final-design",
         "final_design_ldraw": "/api/dem-lego-design/final-design/ldraw",
+        "final_design_report": "/api/dem-lego-design/final-design/report",
     },
     "http_status": {"bad_request": 400},
     "design_input": {"part_ids": ["3024.dat"]},
@@ -169,11 +170,11 @@ class DemLegoDesignApiTest(unittest.TestCase):
 
     @patch("src.api.routes.dem_lego_design.load_dem_structure_parts", return_value=PARTS)
     def test_create_base_h_structure_rejects_negative_height(self, _load_parts) -> None:
-        with self.assertRaises(HTTPException) as raised:
+        with self.assertRaises(DomainError) as raised:
             self.endpoint(DemBaseHStructureRequest(baseH=[[1, -1]]), self.request)
 
-        self.assertEqual(raised.exception.status_code, API_CONFIG["http_status"]["bad_request"])
-        self.assertEqual(raised.exception.detail, CONFIG["errors"]["base_h_negative"])
+        self.assertEqual(raised.exception.http_status, API_CONFIG["http_status"]["bad_request"])
+        self.assertEqual(raised.exception.code, "dem_lego_design.base_h_failed")
 
     @patch(
         "src.api.routes.dem_lego_design.load_part_surface_profile",
@@ -251,6 +252,8 @@ class DemLegoDesignApiTest(unittest.TestCase):
     @patch("src.api.routes.dem_lego_design.load_model_asset", return_value={"model": "asset"})
     def test_create_final_design(self, load_asset, load_targets, load_final_design) -> None:
         body = DemFinalDesignModelRequest(
+            locale="en-US",
+            timezone="UTC",
             modelId="model-id",
             strategy=API_CONFIG["final_design"]["strategies"]["surface_plan"],
             horizontalKmPerStud=20,
@@ -284,7 +287,10 @@ class DemLegoDesignApiTest(unittest.TestCase):
             self.request.app.state.db_engine,
             API_CONFIG,
         )
-        self.assertEqual(result, FINAL_DESIGN)
+        self.assertEqual(result["modelId"], "model-id")
+        self.assertEqual(result["exportContext"]["locale"], "en-US")
+        self.assertIn("catalogVersion", result["exportContext"])
+        self.assertEqual(result["strategy"], FINAL_DESIGN["strategy"])
 
     @patch(
         "src.api.routes.dem_lego_design.load_colored_replacement_final_dem_design",
@@ -312,6 +318,8 @@ class DemLegoDesignApiTest(unittest.TestCase):
         load_replacement_final,
     ) -> None:
         body = DemFinalDesignModelRequest(
+            locale="en-US",
+            timezone="UTC",
             modelId="model-id",
             strategy=API_CONFIG["final_design"]["strategies"]["colored_replacement"],
             horizontalKmPerStud=20,

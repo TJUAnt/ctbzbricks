@@ -1,6 +1,8 @@
 import React from 'react';
 import { BarChart3, FileJson, Grid3X3, Layers3, Mountain, RefreshCw, Save } from 'lucide-react';
-import legoTerrainConfig from './legoTerrainConfig.json';
+import { localizeStructuredMessage } from '../api/client';
+import { formatNumber as formatLocalizedNumber } from '../i18n/formatters';
+import legoTerrainConfig from './legoTerrainConfig';
 import {
   createLegoHeightmapAsset,
   saveLegoHeightmapModel,
@@ -19,7 +21,7 @@ import {
   loadTerrainJob,
   routeWithParam,
 } from '../terrain/terrainApi';
-import terrainConfig from '../terrain/terrainConfig.json';
+import terrainConfig from '../terrain/terrainConfig';
 import type { TerrainAsset, TerrainJob } from '../terrain/terrainTypes';
 
 type LegoTerrainState =
@@ -43,6 +45,7 @@ export function LegoTerrainBuilderPage() {
   });
   const [modelName, setModelName] = React.useState(legoTerrainConfig.texts.title);
   const [saveMessage, setSaveMessage] = React.useState<string | null>(null);
+  const [progressMessage, setProgressMessage] = React.useState('');
 
   const loadDefaultAsset = React.useCallback(async () => {
     setTerrainState({
@@ -130,8 +133,9 @@ export function LegoTerrainBuilderPage() {
           status: 'importing',
           asset: currentState.asset,
           error: null,
-          progress: Math.round(job.progress),
+          progress: job.progress.percent,
         }));
+        setProgressMessage(localizeStructuredMessage(job.progress, 'tasks'));
       });
       if (!completedJob.asset) {
         throw new Error(legoTerrainConfig.texts.loadFailed);
@@ -174,7 +178,11 @@ export function LegoTerrainBuilderPage() {
       onProgress(currentJob);
     }
     if (currentJob.status === terrainConfig.jobStatus.failed) {
-      throw new Error(currentJob.error ?? legoTerrainConfig.texts.loadFailed);
+      throw new Error(
+        currentJob.error
+          ? localizeStructuredMessage(currentJob.error)
+          : legoTerrainConfig.texts.loadFailed,
+      );
     }
     return currentJob;
   };
@@ -304,7 +312,7 @@ export function LegoTerrainBuilderPage() {
               <span>
                 {terrainState.status === 'loading'
                   ? legoTerrainConfig.texts.loading
-                  : legoTerrainConfig.texts.importing}
+                  : progressMessage || legoTerrainConfig.texts.importing}
               </span>
               <div>
                 <div style={{ width: `${terrainState.progress}${legoTerrainConfig.units.percent}` }} />
@@ -622,7 +630,7 @@ function terrainExpressionLabel(maxHeightPlate: number): string {
 }
 
 function formatNumber(value: number): string {
-  return value.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  return formatLocalizedNumber(value, { maximumFractionDigits: 1 });
 }
 
 function wait(milliseconds: number): Promise<void> {

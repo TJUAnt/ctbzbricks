@@ -71,12 +71,12 @@
     "has_base_color_texture": "hasBaseColorTexture"
   },
   "errors": {
-    "missing_filename": "Uploaded mesh file must have a filename",
-    "unsupported_extension": "Only GLB mesh files are supported",
-    "unsupported_content_type": "Unsupported mesh content type",
-    "file_too_large": "Mesh file is too large",
-    "invalid_glb": "Invalid GLB mesh file",
-    "model_not_found": "Mesh model not found"
+    "missing_filename": "mesh_model.missing_filename",
+    "unsupported_extension": "mesh_model.unsupported_extension",
+    "unsupported_content_type": "mesh_model.unsupported_content_type",
+    "file_too_large": "mesh_model.file_too_large",
+    "invalid_glb": "mesh_model.invalid_glb",
+    "model_not_found": "mesh_model.model_not_found"
   },
   "http_status": {
     "bad_request": 400,

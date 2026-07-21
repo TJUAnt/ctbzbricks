@@ -1,6 +1,9 @@
+import { apiFetch, requestJson } from '../api/client';
+
 export type ModelAsset = {
   id: string;
   name: string;
+  contentLocale: 'zh-CN' | 'en-US';
   modelType: string;
   sourceType: string;
   sourceName: string;
@@ -31,18 +34,11 @@ export async function loadModelAssetPage(
   const url = new URL(apiUrl, window.location.origin);
   url.searchParams.set('page', String(page));
   url.searchParams.set('page_size', String(pageSize));
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(response.statusText);
-  }
-  return (await response.json()) as ModelAssetPage;
+  return requestJson<ModelAssetPage>(url);
 }
 
 export async function deleteModelAsset(apiUrl: string, assetId: string): Promise<void> {
-  const response = await fetch(`${apiUrl}/${encodeURIComponent(assetId)}`, {
+  await apiFetch(`${apiUrl}/${encodeURIComponent(assetId)}`, {
     method: 'DELETE',
   });
-  if (!response.ok) {
-    throw new Error(response.statusText);
-  }
 }

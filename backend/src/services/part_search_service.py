@@ -11,6 +11,7 @@ from src.api.schemas.part_search import (
 )
 from src.ldraw.models import PartSearchCandidate
 from src.ldraw.search import search_part_candidates
+from src.services.domain_content_service import localized_part_content_by_number
 
 
 def contains_term(query: str, terms: list[str]) -> bool:
@@ -183,11 +184,15 @@ def candidate_response(
     candidate: PartSearchCandidate,
     engine: Engine,
     config: dict,
+    content: dict[str, Any],
 ) -> PartSearchCandidateResponse:
     part_nums = image_part_nums(candidate, config)
     return PartSearchCandidateResponse(
         ldrawPartNum=candidate.geometry.ldraw_part_num,
-        name=candidate.geometry.name,
+        name=content["name"],
+        description=content["description"],
+        contentLocale=content["contentLocale"],
+        translationStatus=content["translationStatus"],
         category=candidate.geometry.category,
         relationType=candidate.mapping.relation_type if candidate.mapping else None,
         rebrickablePartNum=(
@@ -229,13 +234,32 @@ def search_parts(
     page_size = max(request.page_size, 1)
     start = (page - 1) * page_size
     candidates = candidates[start:start + page_size]
+    localized_content = localized_part_content_by_number(
+        engine,
+        [candidate.geometry.ldraw_part_num for candidate in candidates],
+        request.contentLocale,
+    )
 
     return PartSearchResponse(
         query=request.query,
+        requestedContentLocale=request.contentLocale,
         parsed={"searches": kwargs_options},
         count=total,
         candidates=[
-            candidate_response(candidate, engine, config)
+            candidate_response(
+                candidate,
+                engine,
+                config,
+                localized_content.get(
+                    candidate.geometry.ldraw_part_num,
+                    {
+                        "name": candidate.geometry.name,
+                        "description": None,
+                        "contentLocale": "en-US",
+                        "translationStatus": "source",
+                    },
+                ),
+            )
             for candidate in candidates
         ],
     )

@@ -1,6 +1,8 @@
+import { requestJson } from '../api/client';
+import { currentTaskContext, type TaskContext } from '../api/taskContext';
 import type { TerrainAsset, TerrainJob, TerrainModelMetadata } from './terrainTypes';
 
-export type TerrainUploadPayload = {
+export type TerrainUploadPayload = TaskContext & {
   source_name: string;
   geojson: Record<string, unknown>;
   dem_dataset_key: string;
@@ -59,6 +61,7 @@ export function createTerrainUploadPayload(
     source_name: sourceName,
     geojson: geojson as Record<string, unknown>,
     dem_dataset_key: demDatasetKey,
+    ...currentTaskContext(),
   };
 }
 
@@ -144,7 +147,7 @@ export async function saveTerrainModel(
   return requestJson<TerrainModelMetadata>(apiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, asset }),
+    body: JSON.stringify({ name, asset, contentLocale: currentTaskContext().locale }),
   });
 }
 
@@ -223,13 +226,4 @@ function geojsonPropertyValue(value: unknown, config: TerrainGeojsonInfoConfig):
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  if (!response.ok) {
-    const errorBody = (await response.json()) as { detail?: string };
-    throw new Error(errorBody.detail ?? response.statusText);
-  }
-  return (await response.json()) as T;
 }

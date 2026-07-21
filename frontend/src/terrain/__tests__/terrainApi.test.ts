@@ -34,18 +34,19 @@ const TEST_API_CONFIG = {
 describe('terrain api helpers', () => {
   it('creates upload payload with source name and geojson object', () => {
     const geojson = { type: 'FeatureCollection', features: [] };
-    expect(
-      createTerrainUploadPayload(
-        TEST_API_CONFIG.sourceName,
-        geojson,
-        TEST_API_CONFIG.demDatasetKey,
-        TEST_API_CONFIG.invalidGeojsonMessage,
-      ),
-    ).toEqual({
+    const payload = createTerrainUploadPayload(
+      TEST_API_CONFIG.sourceName,
+      geojson,
+      TEST_API_CONFIG.demDatasetKey,
+      TEST_API_CONFIG.invalidGeojsonMessage,
+    );
+    expect(payload).toMatchObject({
       source_name: TEST_API_CONFIG.sourceName,
       geojson,
       dem_dataset_key: TEST_API_CONFIG.demDatasetKey,
     });
+    expect(["zh-CN", "en-US"]).toContain(payload.locale);
+    expect(payload.timezone).not.toBe("");
   });
 
   it('rejects non-object geojson payloads', () => {

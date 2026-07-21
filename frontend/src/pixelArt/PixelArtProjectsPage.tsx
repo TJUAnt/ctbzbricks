@@ -1,9 +1,12 @@
 import React from 'react';
 import { ChevronLeft, ChevronRight, Image as ImageIcon, RefreshCw } from 'lucide-react';
 import { loadPixelArtProjects, type PixelArtProjectList } from './pixelArtApi';
-import pixelArtConfig from './pixelArtConfig.json';
+import pixelArtConfig from './pixelArtConfig';
+import { useAppTranslation } from '../i18n';
+import { formatDateTime } from '../i18n/formatters';
 
 export function PixelArtProjectsPage() {
+  const tr = useAppTranslation();
   const [page, setPage] = React.useState(pixelArtConfig.workflow.initialStep);
   const [projectList, setProjectList] = React.useState<PixelArtProjectList | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -56,8 +59,8 @@ export function PixelArtProjectsPage() {
             </div>
             <span>{project.source}</span>
             <span>{project.gridWidth} x {project.gridHeight}</span>
-            <span>{project.colorCount} colors</span>
-            <span>{new Date(project.createdAt).toLocaleString()}</span>
+            <span>{project.colorCount} {tr('pixelArt:colors')}</span>
+            <span>{formatDateTime(project.createdAt)}</span>
           </article>
         ))}
       </section>

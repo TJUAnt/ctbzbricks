@@ -146,11 +146,13 @@ def _extract_meta_rows(root: Path, path: Path, config: dict) -> tuple[dict, list
         try:
             parsed_json = _parse_params(line, config)
             parse_status = config["parsed_status"]
-            parse_error = None
-        except ValueError as error:
+            parse_error_code = None
+            parse_error_params = None
+        except ValueError:
             parsed_json = None
             parse_status = config["failed_status"]
-            parse_error = str(error)
+            parse_error_code = "ldraw.shadow.meta_parse_failed"
+            parse_error_params = {"line": line_no}
 
         meta_rows.append(
             {
@@ -159,7 +161,8 @@ def _extract_meta_rows(root: Path, path: Path, config: dict) -> tuple[dict, list
                 "raw_line": line.strip(),
                 "parsed_json": parsed_json,
                 "parse_status": parse_status,
-                "parse_error": parse_error,
+                "parse_error_code": parse_error_code,
+                "parse_error_params_json": parse_error_params,
             }
         )
 
@@ -172,7 +175,8 @@ def _extract_meta_rows(root: Path, path: Path, config: dict) -> tuple[dict, list
         "has_snap_meta": has_snap_meta,
         "has_mirror_meta": has_mirror_meta,
         "import_status": config["parsed_status"],
-        "parse_error": None,
+        "parse_error_code": None,
+        "parse_error_params_json": None,
     }
     return file_record, meta_rows
 
@@ -192,7 +196,8 @@ def _upsert_shadow_files(session, file_records: list[dict], batch_size: int) -> 
                     "has_snap_meta",
                     "has_mirror_meta",
                     "import_status",
-                    "parse_error",
+                    "parse_error_code",
+                    "parse_error_params_json",
                 ),
             )
         )
@@ -268,7 +273,8 @@ def _replace_include_rows(session, config: dict, batch_size: int) -> int:
                 "grid_json": params.get("grid"),
                 "raw_params": params,
                 "expand_status": config["pending_status"],
-                "expand_error": None,
+                "expand_error_code": None,
+                "expand_error_params_json": None,
             }
         )
 

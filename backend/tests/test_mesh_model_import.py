@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 
 from src.config.app_settings import load_json_config
 from src.mesh.glb_color import extract_glb_material_color_summary
@@ -30,6 +30,35 @@ REQUIRED_CONFIG_KEYS = (
 
 
 class MeshModelImportTest(unittest.TestCase):
+    def test_legacy_model_asset_table_is_upgraded_with_content_locale(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE model_assets ("
+                    "id VARCHAR(64) PRIMARY KEY, name VARCHAR(255) NOT NULL)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO model_assets (id, name) "
+                    "VALUES ('legacy-asset', 'Legacy asset')"
+                )
+            )
+
+        ensure_model_asset_table(engine)
+
+        columns = {column["name"] for column in inspect(engine).get_columns("model_assets")}
+        with engine.connect() as connection:
+            content_locale = connection.scalar(
+                text(
+                    "SELECT content_locale FROM model_assets "
+                    "WHERE id = 'legacy-asset'"
+                )
+            )
+        self.assertIn("content_locale", columns)
+        self.assertEqual(content_locale, "zh-CN")
+
     def test_glb_material_colors_include_face_coverage_and_texture_flag(self) -> None:
         config = load_json_config("mesh_model_import.json", REQUIRED_CONFIG_KEYS)
         summary = extract_glb_material_color_summary(config, sample_glb())
@@ -64,11 +93,13 @@ class MeshModelImportTest(unittest.TestCase):
                 "uploaded.glb",
                 "model/gltf-binary",
                 sample_glb(),
+                "en-US",
             )
             page = paginated_model_assets(engine, 1, 10)
 
             self.assertEqual(saved_asset["modelType"], "mesh")
             self.assertEqual(saved_asset["sourceType"], "direct_upload")
+            self.assertEqual(saved_asset["contentLocale"], "en-US")
             self.assertTrue(Path(saved_asset["assetPath"]).exists())
             self.assertEqual(page["total"], 1)
             self.assertEqual(page["items"][0]["metadata"]["colorSummary"]["colors"][0]["hex"], "#CC0000")

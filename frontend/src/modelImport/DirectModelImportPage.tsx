@@ -1,6 +1,6 @@
 import React from 'react';
 import { Palette, Upload } from 'lucide-react';
-import appConfig from '../app/appConfig.json';
+import appConfig from '../app/appConfig';
 import type { ModelAsset } from '../assets/modelAssetApi';
 import { uploadMeshModel } from './meshModelApi';
 

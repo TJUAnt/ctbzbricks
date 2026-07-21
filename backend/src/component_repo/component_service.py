@@ -9,12 +9,31 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import Engine, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import selectinload, sessionmaker
 
+from src.i18n.domain_content import normalize_content_locale, validate_content_kind
+from src.config.fitting_candidate_profile_config import (
+    FITTING_CANDIDATE_PROFILE_CONFIG,
+)
+from src.services.domain_content_service import (
+    component_source_content,
+    localized_component_content,
+)
+from src.services.fitting_candidate_profile_service import (
+    remove_component_fitting_candidate_profile,
+    upsert_component_fitting_candidate_profile,
+)
 from src.component_repo.relation_service import (
     expanded_world_parts,
     part_library_version_id_for_candidate,
     world_connectors_for_parts,
+)
+from src.component_repo.geometry_service import (
+    clear_component_logical_size,
+    component_geometry,
+    component_preview_meshes,
+    component_preview_parts,
+    persist_component_logical_size,
 )
 from src.model.models import (
     Component,
@@ -139,35 +158,30 @@ def validate_component_candidate(
             issues,
             "source_hash_valid",
             source_artifact is not None and is_sha256(source_artifact.sha256),
-            "source artifact exists and has a SHA-256 digest",
         )
         add_check(
             checks,
             issues,
             "exchange_artifact_present",
             exchange_artifact is not None,
-            "LDraw exchange artifact is attached",
         )
         add_check(
             checks,
             issues,
             "parts_resolved",
             int((candidate.summary_json or {}).get("partInstanceCount", 0)) > 0,
-            "candidate contains at least one leaf part instance",
         )
         add_check(
             checks,
             issues,
             "transforms_valid",
             document_transforms_valid(snapshot.document_json),
-            "all scene references have valid LDraw transform payloads",
         )
         add_check(
             checks,
             issues,
             "relations_valid",
             relations_valid(session, component_candidate_id),
-            "confirmed assembly relations have non-overlapping endpoints",
         )
         interfaces = session.scalars(
             select(ComponentInterface).where(
@@ -180,14 +194,12 @@ def validate_component_candidate(
             issues,
             "interfaces_valid",
             interfaces_valid(session, snapshot, component_candidate_id, interfaces),
-            "at least one confirmed external interface maps to a free connector",
         )
         add_check(
             checks,
             issues,
             "bbox_calculated",
             bounding_box(snapshot.document_json) is not None,
-            "candidate bounding box can be calculated from part transforms",
         )
         passed = not any(check["status"] == config["validation"]["check_status"]["fail"] for check in checks)
         report = ComponentValidationReport(
@@ -212,59 +224,70 @@ def validate_component_candidate(
         return validation_report_response(report)
 
 
-def approve_component_candidate(
+def ensure_component_candidate_draft(
     engine: Engine,
     config: dict[str, Any],
     component_candidate_id: str,
-    name: str,
-    category: str | None = None,
-    component_id: str | None = None,
-    version: str = "0.1.0",
-    revision: int = 1,
-    description: str | None = None,
-    tags: list[str] | None = None,
     created_by: str | None = None,
 ) -> dict[str, Any]:
-    """Validate a candidate and create a draft ComponentVersion."""
-    report = validate_component_candidate(engine, config, component_candidate_id)
-    if not report["passed"]:
-        raise ValueError(f"Component candidate validation failed: {report['id']}")
+    """Idempotently create the editable ComponentVersion produced by one import."""
     Session = sessionmaker(bind=engine)
     with Session() as session:
         candidate, snapshot, import_row = candidate_context(session, component_candidate_id)
+        draft_version_id = (candidate.review_decisions_json or {}).get("draftVersionId")
+        if draft_version_id:
+            existing_version = session.get(ComponentVersion, draft_version_id)
+            if existing_version is not None:
+                existing_component = session.get(Component, existing_version.component_id)
+                if existing_component is not None:
+                    return {
+                        "component": component_response(existing_component),
+                        "version": component_version_response(existing_version),
+                    }
         now = datetime.now(timezone.utc)
-        component = session.get(Component, component_id) if component_id else None
+        component = (
+            session.get(Component, import_row.target_component_id)
+            if import_row.target_component_id
+            else None
+        )
+        if import_row.target_component_id and component is None:
+            raise ValueError(f"Component not found: {import_row.target_component_id}")
+        source_artifact = session.get(ComponentArtifact, import_row.source_artifact_id)
+        if source_artifact is None:
+            raise ValueError(f"Component artifact not found: {import_row.source_artifact_id}")
+        content_locale = normalize_content_locale(
+            str((import_row.metadata_json or {}).get("contentLocale") or "zh-CN")
+        )
         if component is None:
             component = Component(
-                id=component_id or str(uuid4()),
-                name=name,
-                category=category,
+                id=str(uuid4()),
+                name=source_artifact.original_filename.rsplit(".", 1)[0],
+                content_kind=validate_content_kind("user"),
+                content_locale=content_locale,
+                category=None,
                 status=config["components"]["status"]["draft"],
                 current_version_id=None,
-                description=description,
-                tags_json=tags or [],
+                description=None,
+                tags_json=[],
                 metadata_json={},
                 created_by=created_by or config["audit"]["system_user"],
                 created_at=now,
             )
             session.add(component)
             session.flush()
-        else:
-            component.name = name or component.name
-            component.category = category or component.category
-            component.description = description if description is not None else component.description
-            component.tags_json = tags if tags is not None else component.tags_json
-        duplicate = session.scalar(
-            select(ComponentVersion).where(
+            import_row.target_component_id = component.id
+        base_version_id = import_row.base_version_id or component.current_version_id
+        base_version = session.get(ComponentVersion, base_version_id) if base_version_id else None
+        if base_version is not None and base_version.component_id != component.id:
+            raise ValueError(f"Component version does not belong to component: {base_version_id}")
+        version_name = base_version.version if base_version is not None else "0.1.0"
+        existing_revisions = session.scalars(
+            select(ComponentVersion.revision).where(
                 ComponentVersion.component_id == component.id,
-                ComponentVersion.version == version,
-                ComponentVersion.revision == revision,
+                ComponentVersion.version == version_name,
             )
-        )
-        if duplicate is not None:
-            raise ValueError(
-                f"Component version already exists: component={component.id}, version={version}, revision={revision}"
-            )
+        ).all()
+        revision = max(existing_revisions, default=0) + 1
         interfaces = session.scalars(
             select(ComponentInterface)
             .where(ComponentInterface.component_candidate_id == component_candidate_id)
@@ -275,7 +298,7 @@ def approve_component_candidate(
             id=str(uuid4()),
             component_id=component.id,
             component_candidate_id=candidate.id,
-            version=version,
+            version=version_name,
             revision=revision,
             status=config["versions"]["status"]["draft"],
             source_artifact_id=import_row.source_artifact_id,
@@ -283,24 +306,21 @@ def approve_component_candidate(
             scene_snapshot_id=snapshot.id,
             parser_version=snapshot.parser_version,
             part_library_version_id=part_library_version_id,
-            validation_report_id=report["id"],
+            validation_report_id=None,
             interface_signature=interface_signature(interfaces),
             structure_hash=stable_hash(snapshot.document_json),
             geometry_hash=stable_hash(bounding_box(snapshot.document_json) or {}),
             metadata_json={
-                "validationReportId": report["id"],
                 "summary": candidate.summary_json or {},
+                "baseVersionId": base_version_id,
             },
             created_by=created_by or config["audit"]["system_user"],
             created_at=now,
         )
-        validation_report = session.get(ComponentValidationReport, report["id"])
-        if validation_report is not None:
-            validation_report.component_version_id = version_row.id
-        candidate.status = config["candidates"]["status"]["approved"]
+        candidate.status = config["candidates"]["status"]["in_review"]
         candidate.review_decisions_json = {
             **(candidate.review_decisions_json or {}),
-            "approvedComponentId": component.id,
+            "componentId": component.id,
             "draftVersionId": version_row.id,
         }
         session.add(version_row)
@@ -310,7 +330,6 @@ def approve_component_candidate(
         return {
             "component": component_response(component),
             "version": component_version_response(version_row),
-            "validationReport": report,
         }
 
 
@@ -319,30 +338,55 @@ def publish_component_version(
     config: dict[str, Any],
     component_version_id: str,
     release_note: str | None = None,
+    name: str | None = None,
+    category: str | None = None,
+    version_name: str | None = None,
+    content_locale: str | None = None,
     published_by: str | None = None,
 ) -> dict[str, Any]:
-    """Publish a draft ComponentVersion and mark it queryable downstream."""
+    """Validate and directly publish one editable version as the Component singleton."""
     Session = sessionmaker(bind=engine)
     with Session() as session:
         version = session.get(ComponentVersion, component_version_id)
         if version is None:
             raise ValueError(f"Component version not found: {component_version_id}")
         if version.status == config["versions"]["status"]["published"]:
+            component = session.get(Component, version.component_id)
+            snapshot = session.get(ComponentSceneSnapshot, version.scene_snapshot_id)
+            if component is not None and snapshot is not None:
+                geometry = component_geometry(session, snapshot.document_json)
+                if geometry is not None:
+                    upsert_component_fitting_candidate_profile(
+                        session,
+                        FITTING_CANDIDATE_PROFILE_CONFIG,
+                        component,
+                        version,
+                        snapshot,
+                        geometry,
+                    )
+                    session.commit()
             return component_version_response(version)
+        candidate_id = version.component_candidate_id
+    report = validate_component_candidate(
+        engine,
+        config,
+        candidate_id,
+        validation_level=config["validation"]["level"]["publish"],
+    )
+    if not report["passed"]:
+        raise ValueError("component_repo.publish_validation_failed")
+
+    with Session() as session:
+        version = session.get(ComponentVersion, component_version_id)
+        if version is None:
+            raise ValueError(f"Component version not found: {component_version_id}")
         if version.status != config["versions"]["status"]["draft"]:
             raise ValueError(f"Only draft component versions can be published: {component_version_id}")
         source_artifact = session.get(ComponentArtifact, version.source_artifact_id)
         if source_artifact is None or not source_artifact.immutable or not is_sha256(source_artifact.sha256):
             raise ValueError(f"Published component version requires immutable source artifact: {component_version_id}")
-        if source_artifact.artifact_type != config["artifacts"]["studio_io"]:
-            raise ValueError(f"Published component version source must be a Studio .io artifact: {component_version_id}")
-        report = (
-            session.get(ComponentValidationReport, version.validation_report_id)
-            if version.validation_report_id is not None
-            else None
-        )
-        if report is None or not report.passed:
-            raise ValueError(f"Component version must have a passing validation report: {component_version_id}")
+        if source_artifact.artifact_type not in config["artifacts"]["allowed_types"]:
+            raise ValueError(f"Unsupported component version source artifact: {component_version_id}")
         candidate, snapshot, _import_row = candidate_context(session, version.component_candidate_id)
         interfaces = session.scalars(
             select(ComponentInterface)
@@ -352,29 +396,77 @@ def publish_component_version(
         current_structure_hash = stable_hash(snapshot.document_json)
         current_geometry_hash = stable_hash(bounding_box(snapshot.document_json) or {})
         current_interface_signature = interface_signature(interfaces)
-        if version.structure_hash != current_structure_hash:
-            raise ValueError(f"Component version structure hash changed before publish: {component_version_id}")
-        if version.geometry_hash != current_geometry_hash:
-            raise ValueError(f"Component version geometry hash changed before publish: {component_version_id}")
-        if version.interface_signature != current_interface_signature:
-            raise ValueError(f"Component version interface signature changed before publish: {component_version_id}")
         now = datetime.now(timezone.utc)
+        component = session.scalar(
+            select(Component)
+            .where(Component.id == version.component_id)
+            .with_for_update()
+        )
+        if component is None:
+            raise ValueError(f"Component not found: {version.component_id}")
+        if name is not None and name.strip():
+            component.name = name.strip()
+        if category is not None:
+            component.category = category.strip() or None
+        if content_locale is not None:
+            component.content_locale = normalize_content_locale(content_locale)
+        if version_name is not None and version_name.strip() and version_name.strip() != version.version:
+            duplicate = session.scalar(
+                select(ComponentVersion).where(
+                    ComponentVersion.component_id == component.id,
+                    ComponentVersion.version == version_name.strip(),
+                    ComponentVersion.revision == version.revision,
+                    ComponentVersion.id != version.id,
+                )
+            )
+            if duplicate is not None:
+                raise ValueError("component_repo.version_conflict")
+            version.version = version_name.strip()
+        previous_published = session.scalars(
+            select(ComponentVersion).where(
+                ComponentVersion.component_id == component.id,
+                ComponentVersion.status == config["versions"]["status"]["published"],
+                ComponentVersion.id != version.id,
+            )
+        ).all()
+        for previous in previous_published:
+            previous.status = config["versions"]["status"]["draft"]
         version.status = config["versions"]["status"]["published"]
         version.published_at = now
+        version.validation_report_id = report["id"]
+        version.interface_signature = current_interface_signature
+        version.structure_hash = current_structure_hash
+        version.geometry_hash = current_geometry_hash
         version.metadata_json = {
             **(version.metadata_json or {}),
             "releaseNote": release_note,
+            "validationReportId": report["id"],
             "publishedBy": published_by or config["audit"]["system_user"],
         }
-        component = session.get(Component, version.component_id)
-        if component is None:
-            raise ValueError(f"Component not found: {version.component_id}")
         component.status = config["components"]["status"]["active"]
         component.current_version_id = version.id
+        geometry = component_geometry(session, snapshot.document_json)
+        if geometry is None:
+            raise ValueError(
+                f"Component version logical size cannot be calculated: {component_version_id}"
+            )
+        persist_component_logical_size(component, geometry)
+        validation_report = session.get(ComponentValidationReport, report["id"])
+        if validation_report is not None:
+            validation_report.component_version_id = version.id
+        candidate.status = config["candidates"]["status"]["published"]
         candidate.review_decisions_json = {
             **(candidate.review_decisions_json or {}),
             "publishedVersionId": version.id,
         }
+        upsert_component_fitting_candidate_profile(
+            session,
+            FITTING_CANDIDATE_PROFILE_CONFIG,
+            component,
+            version,
+            snapshot,
+            geometry,
+        )
         session.commit()
         session.refresh(version)
         return component_version_response(version)
@@ -383,36 +475,296 @@ def publish_component_version(
 def list_components(
     engine: Engine,
     config: dict[str, Any],
+    content_locale: str,
     status: str | None = None,
 ) -> list[dict[str, Any]]:
-    """List components. Defaults to published/active components only."""
+    """List each logical Component once, optionally filtered by lifecycle status."""
     Session = sessionmaker(bind=engine)
     with Session() as session:
-        target_status = status or config["components"]["status"]["active"]
-        rows = session.scalars(
+        statement = select(Component).options(selectinload(Component.translations))
+        if status is not None:
+            statement = statement.where(Component.status == status)
+        rows = session.scalars(statement.order_by(Component.created_at.desc())).all()
+        return [
+            component_response(row, localized_component_content(session, row, content_locale))
+            for row in rows
+        ]
+
+
+def first_component_preview(
+    engine: Engine,
+    config: dict[str, Any],
+    content_locale: str,
+) -> dict[str, Any] | None:
+    """Return the newest previewable assembly with dynamically resolved Part meshes.
+
+    Parsed import/candidate data is preferred so the viewer can inspect work before it
+    becomes a published Component. Otherwise the newest Component version is used. The
+    locale selects domain content only; transforms and Part geometry are locale-neutral.
+    """
+    normalized_locale = normalize_content_locale(content_locale)
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        import_candidate = session.execute(
+            select(ComponentImport, ComponentCandidate)
+            .join(ComponentCandidate, ComponentCandidate.import_id == ComponentImport.id)
+            .options(selectinload(ComponentImport.source_artifact))
+            .order_by(ComponentImport.created_at.desc(), ComponentImport.id.desc())
+        ).first()
+        if import_candidate is not None:
+            import_row, candidate = import_candidate
+            snapshot = session.get(ComponentSceneSnapshot, candidate.scene_snapshot_id)
+            if snapshot is None:
+                raise ValueError("component_repo.preview_unavailable")
+            version = session.scalar(
+                select(ComponentVersion)
+                .where(ComponentVersion.component_candidate_id == candidate.id)
+                .order_by(ComponentVersion.created_at.desc(), ComponentVersion.id.desc())
+            )
+            component = session.get(Component, version.component_id) if version is not None else None
+            if component is not None:
+                return component_preview_payload(
+                    session,
+                    snapshot,
+                    config,
+                    source={
+                        "kind": "component",
+                        "id": component.id,
+                        "name": localized_component_content(
+                            session,
+                            component,
+                            normalized_locale,
+                        )["name"],
+                        "status": component.status,
+                    },
+                    component=component_response(
+                        component,
+                        localized_component_content(session, component, normalized_locale),
+                    ),
+                    version_id=version.id,
+                )
+            source_artifact = import_row.source_artifact
+            return component_preview_payload(
+                session,
+                snapshot,
+                config,
+                source={
+                    "kind": "import",
+                    "id": import_row.id,
+                    "name": (
+                        source_artifact.original_filename
+                        if source_artifact is not None
+                        else import_row.id
+                    ),
+                    "status": candidate.status,
+                },
+                component=None,
+                version_id=None,
+            )
+
+        component = session.scalar(
             select(Component)
-            .where(Component.status == target_status)
-            .order_by(Component.created_at.desc())
-        ).all()
-        return [component_response(row) for row in rows]
+            .options(selectinload(Component.translations))
+            .order_by(Component.created_at.desc(), Component.id.desc())
+        )
+        if component is None:
+            return None
+        version = (
+            session.get(ComponentVersion, component.current_version_id)
+            if component.current_version_id is not None
+            else None
+        )
+        if version is None:
+            version = session.scalar(
+                select(ComponentVersion)
+                .where(ComponentVersion.component_id == component.id)
+                .order_by(ComponentVersion.created_at.desc(), ComponentVersion.id.desc())
+            )
+        if version is None:
+            raise ValueError("component_repo.preview_unavailable")
+        snapshot = session.get(ComponentSceneSnapshot, version.scene_snapshot_id)
+        if snapshot is None:
+            raise ValueError("component_repo.preview_unavailable")
+        localized_content = localized_component_content(session, component, normalized_locale)
+        return component_preview_payload(
+            session,
+            snapshot,
+            config,
+            source={
+                "kind": "component",
+                "id": component.id,
+                "name": localized_content["name"],
+                "status": component.status,
+            },
+            component=component_response(component, localized_content),
+            version_id=version.id,
+        )
+
+
+def component_version_preview(
+    engine: Engine,
+    config: dict[str, Any],
+    component_version_id: str,
+    content_locale: str,
+) -> dict[str, Any] | None:
+    """Return the render-ready assembly for one explicit ComponentVersion."""
+    normalized_locale = normalize_content_locale(content_locale)
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        version = session.get(ComponentVersion, component_version_id)
+        if version is None:
+            return None
+        component = session.get(Component, version.component_id)
+        snapshot = session.get(ComponentSceneSnapshot, version.scene_snapshot_id)
+        if component is None or snapshot is None:
+            raise ValueError("component_repo.preview_unavailable")
+        localized_content = localized_component_content(session, component, normalized_locale)
+        return component_preview_payload(
+            session,
+            snapshot,
+            config,
+            source={
+                "kind": "component",
+                "id": component.id,
+                "name": localized_content["name"],
+                "status": version.status,
+            },
+            component=component_response(component, localized_content),
+            version_id=version.id,
+        )
+
+
+def component_candidate_preview(
+    engine: Engine,
+    config: dict[str, Any],
+    component_candidate_id: str,
+    content_locale: str,
+) -> dict[str, Any] | None:
+    """Return a candidate snapshot even before a ComponentVersion has been created.
+
+    Older parsed imports may not yet have ``draftVersionId`` review metadata. Their scene
+    snapshots are nevertheless complete and can be rendered directly from Part geometry.
+    """
+    normalized_locale = normalize_content_locale(content_locale)
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        candidate = session.get(ComponentCandidate, component_candidate_id)
+        if candidate is None:
+            return None
+        import_row = session.scalar(
+            select(ComponentImport)
+            .options(selectinload(ComponentImport.source_artifact))
+            .where(ComponentImport.id == candidate.import_id)
+        )
+        snapshot = session.get(ComponentSceneSnapshot, candidate.scene_snapshot_id)
+        if import_row is None or snapshot is None:
+            raise ValueError("component_repo.preview_unavailable")
+
+        version = session.scalar(
+            select(ComponentVersion)
+            .where(ComponentVersion.component_candidate_id == candidate.id)
+            .order_by(ComponentVersion.created_at.desc(), ComponentVersion.id.desc())
+        )
+        component = session.get(Component, version.component_id) if version is not None else None
+        if component is not None:
+            localized_content = localized_component_content(
+                session,
+                component,
+                normalized_locale,
+            )
+            return component_preview_payload(
+                session,
+                snapshot,
+                config,
+                source={
+                    "kind": "component",
+                    "id": component.id,
+                    "name": localized_content["name"],
+                    "status": version.status,
+                },
+                component=component_response(component, localized_content),
+                version_id=version.id,
+            )
+
+        source_artifact = import_row.source_artifact
+        return component_preview_payload(
+            session,
+            snapshot,
+            config,
+            source={
+                "kind": "import",
+                "id": import_row.id,
+                "name": (
+                    source_artifact.original_filename
+                    if source_artifact is not None
+                    else import_row.id
+                ),
+                "status": candidate.status,
+            },
+            component=None,
+            version_id=None,
+        )
+
+
+def component_preview_payload(
+    session: object,
+    snapshot: ComponentSceneSnapshot,
+    config: dict[str, Any],
+    *,
+    source: dict[str, str],
+    component: dict[str, Any] | None,
+    version_id: str | None,
+) -> dict[str, Any]:
+    """Combine Component assembly placement with Part-owned surface geometry.
+
+    Component records do not persist a second geometry collection. Their scene snapshot
+    supplies instance references and transforms, while the configured LDraw library is
+    parsed for each unique Part mesh. Missing bounds or meshes fail the whole payload to
+    prevent a dimensionally incorrect partial preview.
+    """
+    geometry = component_geometry(session, snapshot.document_json)
+    parts = component_preview_parts(session, snapshot.document_json)
+    meshes = component_preview_meshes(session, snapshot.document_json, config)
+    if geometry is None or parts is None or meshes is None:
+        raise ValueError("component_repo.preview_unavailable")
+    return {
+        "source": source,
+        "component": component,
+        "versionId": version_id,
+        "partCount": geometry["partCount"],
+        "logicalSize": {
+            "widthStud": geometry["widthStud"],
+            "depthStud": geometry["depthStud"],
+            "heightPlate": geometry["heightPlate"],
+        },
+        "parts": parts,
+        "meshes": meshes,
+    }
 
 
 def get_component(
     engine: Engine,
     config: dict[str, Any],
     component_id: str,
+    content_locale: str,
     status: str | None = None,
 ) -> dict[str, Any] | None:
-    """Get a component. Defaults to published/active components only."""
+    """Get a component, including one that only has editable versions."""
     Session = sessionmaker(bind=engine)
     with Session() as session:
-        component = session.get(Component, component_id)
+        component = session.scalar(
+            select(Component)
+            .options(selectinload(Component.translations))
+            .where(Component.id == component_id)
+        )
         if component is None:
             return None
-        target_status = status or config["components"]["status"]["active"]
-        if component.status != target_status:
+        if status is not None and component.status != status:
             return None
-        return component_response(component)
+        return component_response(
+            component,
+            localized_component_content(session, component, content_locale),
+        )
 
 
 def list_component_versions(
@@ -421,18 +773,13 @@ def list_component_versions(
     component_id: str,
     status: str | None = None,
 ) -> list[dict[str, Any]]:
-    """List component versions. Defaults to published versions only."""
+    """List the complete editable and published version history."""
     Session = sessionmaker(bind=engine)
     with Session() as session:
-        target_status = status or config["versions"]["status"]["published"]
-        rows = session.scalars(
-            select(ComponentVersion)
-            .where(
-                ComponentVersion.component_id == component_id,
-                ComponentVersion.status == target_status,
-            )
-            .order_by(ComponentVersion.created_at.desc())
-        ).all()
+        statement = select(ComponentVersion).where(ComponentVersion.component_id == component_id)
+        if status is not None:
+            statement = statement.where(ComponentVersion.status == status)
+        rows = session.scalars(statement.order_by(ComponentVersion.created_at.desc())).all()
         return [component_version_response(row) for row in rows]
 
 
@@ -442,14 +789,13 @@ def get_component_version(
     component_version_id: str,
     status: str | None = None,
 ) -> dict[str, Any] | None:
-    """Get one version. Defaults to published versions only."""
+    """Get one editable or published version."""
     Session = sessionmaker(bind=engine)
     with Session() as session:
         version = session.get(ComponentVersion, component_version_id)
         if version is None:
             return None
-        target_status = status or config["versions"]["status"]["published"]
-        if version.status != target_status:
+        if status is not None and version.status != status:
             return None
         return component_version_response(version)
 
@@ -478,6 +824,12 @@ def set_component_version_lifecycle_status(
         component = session.get(Component, version.component_id)
         if component is not None and component.current_version_id == version.id:
             component.current_version_id = None
+            clear_component_logical_size(component)
+            remove_component_fitting_candidate_profile(
+                session,
+                FITTING_CANDIDATE_PROFILE_CONFIG,
+                component.id,
+            )
             if status == config["versions"]["status"]["archived"]:
                 component.status = config["components"]["status"]["archived"]
         session.commit()
@@ -490,14 +842,12 @@ def component_version_source_artifact_id(
     config: dict[str, Any],
     component_version_id: str,
 ) -> str:
-    """Return source artifact id for a published component version."""
+    """Return the immutable source artifact for any stored version."""
     Session = sessionmaker(bind=engine)
     with Session() as session:
         version = session.get(ComponentVersion, component_version_id)
         if version is None:
             raise ValueError(f"Component version not found: {component_version_id}")
-        if version.status != config["versions"]["status"]["published"]:
-            raise ValueError(f"Component version source is only available after publish: {component_version_id}")
         return version.source_artifact_id
 
 
@@ -506,6 +856,9 @@ def ensure_candidate_not_published(
     config: dict[str, Any],
     component_candidate_id: str,
 ) -> None:
+    candidate = session.get(ComponentCandidate, component_candidate_id)
+    if candidate is not None and candidate.status == config["candidates"]["status"]["published"]:
+        raise ValueError(f"Published component candidate is immutable: {component_candidate_id}")
     published = session.scalar(
         select(ComponentVersion).where(
             ComponentVersion.component_candidate_id == component_candidate_id,
@@ -615,12 +968,13 @@ def add_check(
     issues: list[dict[str, Any]],
     code: str,
     passed: bool,
-    message: str,
 ) -> None:
     status = "pass" if passed else "fail"
-    checks.append({"code": code, "status": status, "message": message})
+    issue_code = f"component_repo.validation.{code}"
+    check = {"code": issue_code, "status": status, "params": {}, "path": []}
+    checks.append(check)
     if not passed:
-        issues.append({"code": code, "severity": "error", "message": message})
+        issues.append({"code": issue_code, "severity": "error", "params": {}, "path": []})
 
 
 def is_sha256(value: str | None) -> bool:
@@ -687,15 +1041,22 @@ def validation_report_response(report: ComponentValidationReport) -> dict[str, A
     }
 
 
-def component_response(component: Component) -> dict[str, Any]:
+def component_response(
+    component: Component,
+    content: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    content = content or component_source_content(component)
     return {
         "id": component.id,
-        "name": component.name,
+        "name": content["name"],
+        "contentKind": component.content_kind,
+        "contentLocale": content["contentLocale"],
+        "translationStatus": content["translationStatus"],
         "category": component.category,
         "status": component.status,
         "currentVersionId": component.current_version_id,
-        "description": component.description,
-        "tags": component.tags_json or [],
+        "description": content["description"],
+        "tags": content["tags"],
         "metadata": component.metadata_json or {},
         "createdBy": component.created_by,
         "createdAt": component.created_at.isoformat(),

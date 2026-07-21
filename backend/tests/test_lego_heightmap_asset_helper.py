@@ -82,7 +82,14 @@ class LegoHeightmapAssetHelperTest(unittest.TestCase):
             }
             model = save_heightmap_asset(terrain_config, asset, "lego model")
 
-            save_lego_heightmap_model_asset(engine, asset_config, terrain_config, asset, model)
+            save_lego_heightmap_model_asset(
+                engine,
+                asset_config,
+                terrain_config,
+                asset,
+                model,
+                "zh-CN",
+            )
             page = paginated_model_assets(engine, 1, 10)
 
             self.assertEqual(page["total"], 1)
@@ -91,6 +98,7 @@ class LegoHeightmapAssetHelperTest(unittest.TestCase):
             self.assertEqual(page["items"][0]["columns"], 2)
             self.assertEqual(page["items"][0]["rows"], 3)
             self.assertEqual(page["items"][0]["validSampleCount"], 5)
+            self.assertEqual(page["items"][0]["contentLocale"], "zh-CN")
 
 
 if __name__ == "__main__":

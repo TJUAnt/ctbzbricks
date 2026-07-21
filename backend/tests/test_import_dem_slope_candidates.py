@@ -62,7 +62,7 @@ class ImportDemSlopeCandidatesTest(unittest.TestCase):
             "databaseGeometry": {},
         }
 
-        with self.assertRaisesRegex(ValueError, "missing.dat"):
+        with self.assertRaisesRegex(ValueError, "dem_slope_catalog.missing_ldraw_parts"):
             catalog_candidate_rows(
                 {"parts": [part], "groups": []},
                 {},

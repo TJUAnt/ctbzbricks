@@ -5,15 +5,70 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from sqlalchemy import Engine, select
+from sqlalchemy import JSON, Engine, String, column, inspect, select, table, text
 from sqlalchemy.orm import sessionmaker
 
 from src.ldraw.surface_profile import PartSurfaceProfile
+from src.i18n.messages import message
 from src.model.models import LDrawPart, LDrawPartGeometry, LDrawPartShapeProfile
 
 
 def ensure_part_shape_profile_table(engine: Engine) -> None:
     LDrawPartShapeProfile.__table__.create(bind=engine, checkfirst=True)
+    ensure_part_shape_profile_error_columns(engine)
+
+
+def ensure_part_shape_profile_error_columns(engine: Engine) -> None:
+    table_name = LDrawPartShapeProfile.__tablename__
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns(table_name)}
+    preparer = engine.dialect.identifier_preparer
+    quoted_table = preparer.quote(table_name)
+    definitions = {
+        "profile_error_type": "VARCHAR(64) NULL",
+        "profile_error_code": "VARCHAR(160) NULL",
+        "profile_error_params_json": "JSON NULL",
+    }
+    for column_name, definition in definitions.items():
+        if column_name in columns:
+            continue
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {quoted_table} ADD COLUMN "
+                    f"{preparer.quote(column_name)} {definition}"
+                )
+            )
+    if "profile_error" not in columns:
+        return
+    legacy_profiles = table(
+        table_name,
+        column("id"),
+        column("profile_error_type", String(length=64)),
+        column("profile_error_code", String(length=160)),
+        column("profile_error_params_json", JSON()),
+    )
+    with engine.begin() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT id, ldraw_part_id, profile_error "
+                "FROM ldraw_part_shape_profiles "
+                "WHERE profile_error IS NOT NULL AND profile_error_code IS NULL"
+            )
+        ).all()
+        for profile_id, part_id, profile_error in rows:
+            connection.execute(
+                legacy_profiles.update()
+                .where(legacy_profiles.c.id == profile_id)
+                .values(
+                    profile_error_type="unknown",
+                    profile_error_code="part_shape_profile.unknown",
+                    profile_error_params_json={
+                        "ldrawPartId": part_id,
+                        "legacyMessage": str(profile_error),
+                    },
+                )
+            )
 
 
 def save_part_surface_profile(
@@ -65,7 +120,8 @@ def save_failed_part_shape_profile(
             "surface_profile_json": None,
             "collision_profile_json": None,
             "connection_mask_json": None,
-            "profile_error": profile_error,
+            "profile_error_code": f"part_shape_profile.{classify_profile_error(config, profile_error)}",
+            "profile_error_params_json": {"partId": part_id},
         }
         upsert_part_shape_profile(session, record)
         session.commit()
@@ -91,7 +147,8 @@ def part_surface_profile_record(
         "surface_profile_json": surface_profile_payload(config, profile),
         "collision_profile_json": collision_profile_payload(config, profile),
         "connection_mask_json": connection_mask_payload(config, profile),
-        "profile_error": None,
+        "profile_error_code": None,
+        "profile_error_params_json": None,
     }
 
 
@@ -123,13 +180,10 @@ def backfill_profile_error_types(
     with Session() as session:
         profiles = session.scalars(
             select(LDrawPartShapeProfile)
-            .where(LDrawPartShapeProfile.profile_error.is_not(None))
+            .where(LDrawPartShapeProfile.profile_error_code.is_not(None))
         ).all()
         for profile in profiles:
-            profile.profile_error_type = classify_profile_error(
-                config,
-                profile.profile_error,
-            )
+            profile.profile_error_type = profile.profile_error_code.rsplit(".", 1)[-1]
         session.commit()
         return {"updated": len(profiles)}
 
@@ -239,5 +293,9 @@ def shape_profile_response(
         "surfaceProfile": profile.surface_profile_json,
         "collisionProfile": profile.collision_profile_json,
         "connectionMask": profile.connection_mask_json,
-        "profileError": profile.profile_error,
+        "profileError": (
+            message(profile.profile_error_code, profile.profile_error_params_json)
+            if profile.profile_error_code
+            else None
+        ),
     }

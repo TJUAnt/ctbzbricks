@@ -22,6 +22,7 @@ def save_uploaded_mesh_model(
     source_name: str,
     content_type: str,
     file_bytes: bytes,
+    content_locale: str,
 ) -> dict[str, Any]:
     validate_upload(config, source_name, content_type, file_bytes)
     model_id = uuid4().hex[: int(config["storage"]["model_id_hex_length"])]
@@ -32,6 +33,7 @@ def save_uploaded_mesh_model(
     model_asset = ModelAsset(
         id=model_id,
         name=name,
+        content_locale=content_locale,
         model_type=config["model_asset"]["model_type"],
         source_type=config["model_asset"]["source_type"],
         source_name=source_name,

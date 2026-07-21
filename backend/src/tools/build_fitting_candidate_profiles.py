@@ -19,7 +19,7 @@ from src.config.fitting_candidate_profile_config import (
 from src.model.models import (
     FittingCandidateProfile,
     LDrawPart,
-    LDrawPartShapeProfile,
+    LDrawPartGeometry,
     LDrawSubmodel,
 )
 from src.services.fitting_candidate_profile_service import (
@@ -148,13 +148,12 @@ def load_candidate_parts(
     stmt = (
         select(LDrawPart.ldraw_part_num)
         .join(
-            LDrawPartShapeProfile,
-            LDrawPartShapeProfile.ldraw_part_id == LDrawPart.id,
+            LDrawPartGeometry,
+            LDrawPartGeometry.ldraw_part_id == LDrawPart.id,
         )
-        .where(
-            LDrawPartShapeProfile.profile_status
-            == config["profile"]["ready_status"]
-        )
+        .where(LDrawPartGeometry.logical_width_stud.is_not(None))
+        .where(LDrawPartGeometry.logical_depth_stud.is_not(None))
+        .where(LDrawPartGeometry.logical_height_plate.is_not(None))
         .order_by(LDrawPart.id)
     )
     if part_ids is not None:

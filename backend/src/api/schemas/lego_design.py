@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel
 
+from src.api.schemas.task import StructuredMessageResponse, TaskContextRequest, TaskProgressResponse
+
 
 class LegoDesignColorResponse(BaseModel):
     id: int
@@ -32,7 +34,7 @@ class LegoDesignCandidatePartsResponse(BaseModel):
     parts: list[LegoDesignPartResponse]
 
 
-class LegoDesignJobRequest(BaseModel):
+class LegoDesignJobRequest(TaskContextRequest):
     projectId: str
 
 
@@ -111,7 +113,10 @@ class LegoDesignResultResponse(BaseModel):
 class LegoDesignJobResponse(BaseModel):
     jobId: str
     status: str
-    progress: int
+    progress: TaskProgressResponse
     projectId: str
     result: LegoDesignResultResponse | None
-    error: str | None
+    error: StructuredMessageResponse | None
+    locale: str
+    timezone: str
+    catalogVersion: str

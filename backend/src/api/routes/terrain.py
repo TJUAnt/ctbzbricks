@@ -3,9 +3,11 @@
 from threading import Thread
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 
-from src.api.schemas.terrain import TerrainJobRequest, TerrainSaveRequest
+from src.api.errors import DomainError, domain_error_from_exception
+from src.api.schemas.terrain import TerrainJobRequest, TerrainJobResponse, TerrainSaveRequest
+from src.i18n.messages import error_from_exception, progress
 from src.terrain.dem_asset_helper import (
     build_asset_from_geojson,
     dem_dataset_config,
@@ -19,18 +21,23 @@ from src.services.model_asset_service import save_dem_model_asset
 def create_terrain_router(api_config: dict, terrain_config: dict) -> APIRouter:
     router = APIRouter()
 
-    @router.post(api_config["routes"]["terrain_jobs"])
+    @router.post(api_config["routes"]["terrain_jobs"], response_model=TerrainJobResponse)
     def create_terrain_job(request_body: TerrainJobRequest, request: Request) -> dict:
         validate_dem_dataset_key(request_body.dem_dataset_key, terrain_config)
         job_id = uuid4().hex[: int(terrain_config["model_id_hex_length"])]
         job = {
             "jobId": job_id,
             "status": terrain_config["job_status"]["queued"],
-            "progress": terrain_config["progress"]["queued"],
+            "progress": progress(
+                terrain_config["progress"]["queued"],
+                "terrain.progress.queued",
+            ),
             "sourceName": request_body.source_name,
             "asset": None,
             "model": None,
             "error": None,
+            "locale": request_body.locale,
+            "timezone": request_body.timezone,
         }
         with request.app.state.terrain_jobs_lock:
             request.app.state.terrain_jobs[job_id] = job
@@ -42,14 +49,15 @@ def create_terrain_router(api_config: dict, terrain_config: dict) -> APIRouter:
         thread.start()
         return public_job(job)
 
-    @router.get(api_config["routes"]["terrain_job"])
+    @router.get(api_config["routes"]["terrain_job"], response_model=TerrainJobResponse)
     def terrain_job(job_id: str, request: Request) -> dict:
         with request.app.state.terrain_jobs_lock:
             job = request.app.state.terrain_jobs.get(job_id)
         if not job:
-            raise HTTPException(
-                status_code=terrain_config["http_status"]["not_found"],
-                detail="DEM job not found",
+            raise DomainError(
+                "terrain.job_not_found",
+                params={"jobId": job_id},
+                http_status=terrain_config["http_status"]["not_found"],
             )
         return public_job(job)
 
@@ -66,6 +74,7 @@ def create_terrain_router(api_config: dict, terrain_config: dict) -> APIRouter:
             terrain_config,
             request_body.asset,
             model,
+            request_body.contentLocale,
         )
         return model
 
@@ -74,9 +83,11 @@ def create_terrain_router(api_config: dict, terrain_config: dict) -> APIRouter:
         try:
             return load_model_asset(terrain_config, model_id)
         except ValueError as error:
-            raise HTTPException(
-                status_code=terrain_config["http_status"]["not_found"],
-                detail=str(error),
+            raise domain_error_from_exception(
+                error,
+                "terrain.model_not_found",
+                params={"modelId": model_id},
+                http_status=terrain_config["http_status"]["not_found"],
             ) from error
 
     return router
@@ -85,32 +96,50 @@ def create_terrain_router(api_config: dict, terrain_config: dict) -> APIRouter:
 def run_terrain_job(
     app: object, terrain_config: dict, job_id: str, request_body: TerrainJobRequest
 ) -> None:
-    update_job(app, job_id, {"status": terrain_config["job_status"]["running"]})
+    update_job(
+        app,
+        job_id,
+        {
+            "status": terrain_config["job_status"]["running"],
+            "progress": progress(
+                terrain_config["progress"]["polygons"],
+                "terrain.progress.processing",
+            ),
+        },
+    )
     try:
         asset = build_asset_from_geojson(
             terrain_config,
             request_body.geojson,
             request_body.dem_dataset_key,
             request_body.source_name,
-            lambda progress: update_job(app, job_id, {"progress": progress}),
+            lambda percent: update_job(
+                app,
+                job_id,
+                {"progress": progress(percent, "terrain.progress.processing")},
+            ),
         )
         update_job(
             app,
             job_id,
             {
                 "status": terrain_config["job_status"]["complete"],
-                "progress": terrain_config["progress"]["saved"],
+                "progress": progress(
+                    terrain_config["progress"]["saved"],
+                    "terrain.progress.completed",
+                ),
                 "asset": asset,
                 "model": None,
             },
         )
-    except ValueError as error:
+    except Exception as error:
         update_job(
             app,
             job_id,
             {
                 "status": terrain_config["job_status"]["failed"],
-                "error": str(error),
+                "progress": progress(100, "terrain.progress.failed"),
+                "error": error_from_exception(error, "terrain.generation_failed"),
             },
         )
 
@@ -127,9 +156,11 @@ def validate_dem_dataset_key(dem_dataset_key: str, terrain_config: dict) -> None
     try:
         dem_dataset_config(terrain_config, dem_dataset_key)
     except ValueError as error:
-        raise HTTPException(
-            status_code=terrain_config["http_status"]["bad_request"],
-            detail=str(error),
+        raise domain_error_from_exception(
+            error,
+            "terrain.invalid_dem_dataset",
+            params={"datasetKey": dem_dataset_key},
+            http_status=terrain_config["http_status"]["bad_request"],
         ) from error
 
 
@@ -142,4 +173,6 @@ def public_job(job: dict) -> dict:
         "asset": job["asset"],
         "model": job["model"],
         "error": job["error"],
+        "locale": job["locale"],
+        "timezone": job["timezone"],
     }

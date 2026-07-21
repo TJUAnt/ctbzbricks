@@ -1,4 +1,5 @@
 import React from 'react';
+import { useDynamicTranslation, type TranslationKey } from '../i18n';
 
 import {
   isSupabaseAuthConfigured,
@@ -21,9 +22,11 @@ type AuthContextValue = {
 const AuthContext = React.createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const tr = useDynamicTranslation();
   const [session, setSession] = React.useState<AuthSession | null>(null);
   const [isLoading, setIsLoading] = React.useState(isSupabaseAuthConfigured);
-  const [error, setError] = React.useState<string | null>(null);
+  const [errorKey, setErrorKey] = React.useState<TranslationKey | null>(null);
+  const error = errorKey ? tr(errorKey) : null;
 
   React.useEffect(() => {
     let isMounted = true;
@@ -41,7 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
         if (sessionError) {
-          setError(sessionError.message);
+          setErrorKey('errors:auth.session_load_failed');
         }
         setSession(data.session ?? null);
       })
@@ -53,7 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
-      setError(null);
+      setErrorKey(null);
     });
 
     return () => {
@@ -64,10 +67,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signInWithGoogle = React.useCallback(async () => {
     if (!supabase) {
-      setError('Supabase 登录尚未配置');
+      setErrorKey('common:supabaseSignInIsNotConfigured');
       return;
     }
-    setError(null);
+    setErrorKey(null);
     const { error: signInError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
@@ -75,18 +78,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
     });
     if (signInError) {
-      setError(signInError.message);
+      setErrorKey('errors:auth.sign_in_failed');
     }
-  }, []);
+  }, [tr]);
 
   const signOut = React.useCallback(async () => {
     if (!supabase) {
       return;
     }
-    setError(null);
+    setErrorKey(null);
     const { error: signOutError } = await supabase.auth.signOut();
     if (signOutError) {
-      setError(signOutError.message);
+      setErrorKey('errors:auth.sign_out_failed');
     }
   }, []);
 

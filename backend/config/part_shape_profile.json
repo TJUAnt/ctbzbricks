@@ -67,9 +67,9 @@
     "pilot_categories": ["Plate", "Brick", "Slope"]
   },
   "errors": {
-    "part_not_found": "LDraw part not found for shape profile: {part_id}",
-    "profile_not_found": "LDraw part shape profile not found: {part_id}",
-    "missing_ldraw_file": "LDraw file is missing for shape profile: {part_id}",
+    "part_not_found": "part_shape_profile.part_not_found",
+    "profile_not_found": "part_shape_profile.profile_not_found",
+    "missing_ldraw_file": "part_shape_profile.missing_ldraw_file",
     "mesh_error_separator": "; "
   }
 }

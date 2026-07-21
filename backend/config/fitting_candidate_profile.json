@@ -17,7 +17,10 @@
       "type": "idx_fitting_candidate_type",
       "status": "idx_fitting_candidate_status",
       "profile_key": "idx_fitting_candidate_profile_key",
-      "signature": "idx_fitting_candidate_signature"
+      "signature": "idx_fitting_candidate_signature",
+      "dimensions": "idx_fitting_candidate_dimensions",
+      "sticker": "idx_fitting_candidate_sticker",
+      "normalized_type": "idx_fitting_candidate_normalized_type"
     }
   },
   "profile": {
@@ -26,13 +29,16 @@
     "failed_status": "failed",
     "candidate_types": {
       "part": "part",
+      "component": "component",
       "submodel": "submodel"
     },
     "unknown_connector_type": "unknown_connector_type",
     "unknown_connector_gender": "unknown_connector_gender"
   },
   "signature": {
+    "part_basic_template": "part:{candidate_id}:basic:bbox:{width_ldu}x{height_ldu}x{depth_ldu}:logical:{width_stud}x{depth_stud}x{height_plate}",
     "part_template": "part:{candidate_id}:bbox:{width_ldu}x{height_ldu}x{depth_ldu}:logical:{width_stud}x{depth_stud}x{height_plate}:samples:{samples_per_stud_axis}",
+    "component_basic_template": "component:{candidate_id}:version:{version_id}:bbox:{width_ldu}x{height_ldu}x{depth_ldu}:logical:{width_stud}x{depth_stud}x{height_plate}",
     "submodel_template": "submodel:{candidate_id}:bbox:{width_ldu}x{height_ldu}x{depth_ldu}:parts:{part_count}:connectors:{connector_count}",
     "failed_submodel_template": "submodel:{candidate_id}:failed:{source_hash}"
   },
@@ -146,10 +152,10 @@
     "default_missing_only": true
   },
   "errors": {
-    "candidate_not_found": "Fitting candidate profile not found: {candidate_type}:{candidate_id}",
-    "unsupported_candidate_type": "Unsupported fitting candidate type: {candidate_type}",
-    "submodel_not_found": "Submodel not found for fitting candidate profile: {submodel_id}",
-    "submodel_has_no_parts": "Submodel has no parts for fitting candidate profile: {submodel_id}",
-    "submodel_part_geometry_not_found": "Submodel part geometry not found: {ldraw_part_num}"
+    "candidate_not_found": "fitting_candidate_profile.candidate_not_found",
+    "unsupported_candidate_type": "fitting_candidate_profile.unsupported_candidate_type",
+    "submodel_not_found": "fitting_candidate_profile.submodel_not_found",
+    "submodel_has_no_parts": "fitting_candidate_profile.submodel_has_no_parts",
+    "submodel_part_geometry_not_found": "fitting_candidate_profile.submodel_part_geometry_not_found"
   }
 }

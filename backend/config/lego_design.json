@@ -214,9 +214,7 @@
   "ldraw": {
     "include_base_query_param": "include_base",
     "content_type": "text/plain; charset=utf-8",
-    "filename_template": "lego-design-{job_id}.ldr",
     "content_disposition_header": "Content-Disposition",
-    "content_disposition_template": "attachment; filename=\"{filename}\"",
     "line_separator": "\n",
     "metadata_line_type": 0,
     "part_line_type": 1,
@@ -258,7 +256,6 @@
       }
     },
     "submodels": {
-      "main_assembly_name": "Terrain assembly",
       "file_name_template": "{module_id}.ldr",
       "reference_color_code": "16",
       "reference_x_ldu": 0,
@@ -295,9 +292,7 @@
   "plan_export": {
     "format": "lego-design-plan",
     "content_type": "application/json; charset=utf-8",
-    "filename_template": "lego-design-{job_id}-plan.json",
     "content_disposition_header": "Content-Disposition",
-    "content_disposition_template": "attachment; filename=\"{filename}\"",
     "json_indent": 2,
     "layer_order": {
       "black_support": 0,
@@ -316,16 +311,16 @@
     }
   },
   "errors": {
-    "project_not_found": "Pixel art project not found",
-    "job_not_found": "LEGO design job not found",
-    "candidate_feature_not_found": "LEGO design candidate feature not found",
-    "design_not_ready": "LEGO design job is not complete",
-    "design_coverage_failed": "LEGO design candidates cannot cover every pixel",
-    "design_part_not_available": "LEGO design contains parts outside the current candidate set",
-    "support_base_failed": "LEGO support base could not be generated",
-    "heightmap_column_part_not_found": "LEGO heightmap design requires a 1 x 1 terrain column part",
-    "heightmap_cover_part_not_found": "LEGO heightmap design requires terrain cover plate candidates",
-    "heightmap_slope_part_not_found": "LEGO heightmap design requires a configured terrain slope part"
+    "project_not_found": "lego_design.project_not_found",
+    "job_not_found": "lego_design.job_not_found",
+    "candidate_feature_not_found": "lego_design.candidate_feature_not_found",
+    "design_not_ready": "lego_design.design_not_ready",
+    "design_coverage_failed": "lego_design.design_coverage_failed",
+    "design_part_not_available": "lego_design.design_part_not_available",
+    "support_base_failed": "lego_design.support_base_failed",
+    "heightmap_column_part_not_found": "lego_design.heightmap_column_part_not_found",
+    "heightmap_cover_part_not_found": "lego_design.heightmap_cover_part_not_found",
+    "heightmap_slope_part_not_found": "lego_design.heightmap_slope_part_not_found"
   },
   "http_status": {
     "not_found": 404,

@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.dialects.mysql import LONGBLOB
@@ -253,7 +254,8 @@ class LDrawFile(Base):
     line_count = Column(Integer, nullable=True)
     source = Column(String(64), default='ldraw_official')
     import_status = Column(String(32), default='pending')
-    parse_error = Column(Text, nullable=True)
+    parse_error_code = Column(String(160), nullable=True)
+    parse_error_params_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -289,7 +291,8 @@ class LDrawFileReference(Base):
     ref_name = Column(String(256), nullable=False)
     resolved_relative_path = Column(String(512), nullable=True)
     resolve_status = Column(String(32), default='pending')
-    resolve_error = Column(Text, nullable=True)
+    resolve_error_code = Column(String(160), nullable=True)
+    resolve_error_params_json = Column(JSON, nullable=True)
 
     pos_x = Column(Float, nullable=False)
     pos_y = Column(Float, nullable=False)
@@ -334,12 +337,19 @@ class LDrawPart(Base):
     ldraw_part_num = Column(String(128), nullable=False, unique=True)
     file_id = Column(BigInteger, ForeignKey('ldraw_files.id'), nullable=False, unique=True)
     name = Column(String(512), nullable=True)
+    content_locale = Column(
+        String(16),
+        nullable=False,
+        default='en-US',
+        server_default='en-US',
+    )
     category = Column(String(128), nullable=True)
     relative_path = Column(String(512), nullable=False)
     file_hash = Column(String(64), nullable=True)
     source = Column(String(64), default='ldraw_official')
     import_status = Column(String(32), default='pending')
-    parse_error = Column(Text, nullable=True)
+    parse_error_code = Column(String(160), nullable=True)
+    parse_error_params_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -350,11 +360,41 @@ class LDrawPart(Base):
         back_populates='part',
         cascade='all, delete-orphan',
     )
+    translations = relationship(
+        'PartTranslation',
+        back_populates='part',
+        cascade='all, delete-orphan',
+    )
 
     __table_args__ = (
         Index('idx_ldraw_part_num', 'ldraw_part_num'),
         Index('idx_ldraw_category', 'category'),
         Index('idx_ldraw_status', 'import_status'),
+    )
+
+
+class PartTranslation(Base):
+    """Reviewed localized content for one official LDraw part."""
+
+    __tablename__ = 'part_translations'
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    ldraw_part_id = Column(BigInteger, ForeignKey('ldraw_parts.id'), nullable=False)
+    locale = Column(String(16), nullable=False)
+    name = Column(String(512), nullable=False)
+    description = Column(Text, nullable=True)
+    translation_status = Column(String(32), nullable=False)
+    reviewed_by = Column(String(128), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    part = relationship('LDrawPart', back_populates='translations')
+
+    __table_args__ = (
+        UniqueConstraint('ldraw_part_id', 'locale', name='uq_part_translation_locale'),
+        Index('idx_part_translations_locale', 'locale'),
+        Index('idx_part_translations_status', 'translation_status'),
     )
 
 
@@ -386,7 +426,8 @@ class LDrawPartGeometry(Base):
     vertex_count = Column(Integer, nullable=True)
     face_count = Column(Integer, nullable=True)
     geometry_status = Column(String(32), default='parsed')
-    geometry_error = Column(Text, nullable=True)
+    geometry_error_code = Column(String(160), nullable=True)
+    geometry_error_params_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -437,7 +478,8 @@ class LDrawPartShapeProfile(Base):
     surface_profile_json = Column(JSON, nullable=True)
     collision_profile_json = Column(JSON, nullable=True)
     connection_mask_json = Column(JSON, nullable=True)
-    profile_error = Column(Text, nullable=True)
+    profile_error_code = Column(String(160), nullable=True)
+    profile_error_params_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -623,7 +665,8 @@ class LDrawShadowFile(Base):
     has_snap_meta = Column(Boolean, default=False)
     has_mirror_meta = Column(Boolean, default=False)
     import_status = Column(String(32), default='pending')
-    parse_error = Column(Text, nullable=True)
+    parse_error_code = Column(String(160), nullable=True)
+    parse_error_params_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -655,7 +698,8 @@ class LDrawShadowMetaRaw(Base):
     raw_line = Column(Text, nullable=False)
     parsed_json = Column(JSON, nullable=True)
     parse_status = Column(String(32), default='pending')
-    parse_error = Column(Text, nullable=True)
+    parse_error_code = Column(String(160), nullable=True)
+    parse_error_params_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     shadow_file = relationship('LDrawShadowFile', back_populates='meta_rows')
@@ -692,7 +736,8 @@ class LDrawShadowInclude(Base):
     grid_json = Column(JSON, nullable=True)
     raw_params = Column(JSON, nullable=True)
     expand_status = Column(String(32), default='pending')
-    expand_error = Column(Text, nullable=True)
+    expand_error_code = Column(String(160), nullable=True)
+    expand_error_params_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     source_meta = relationship('LDrawShadowMetaRaw', back_populates='includes')
@@ -968,12 +1013,18 @@ class FittingCandidateProfile(Base):
     )
     bbox_json = Column(JSON, nullable=False)
     logical_size_json = Column(JSON, nullable=False)
+    width_stud = Column(Float, nullable=True)
+    depth_stud = Column(Float, nullable=True)
+    height_plate = Column(Float, nullable=True)
+    is_sticker = Column(Boolean, nullable=False, default=False, server_default=false())
+    normalized_type = Column(String(64), nullable=True)
     shape_profile_json = Column(JSON, nullable=False)
     appearance_tags_json = Column(JSON, nullable=False)
     color_summary_json = Column(JSON, nullable=True)
     connector_summary_json = Column(JSON, nullable=False)
     source_metadata_json = Column(JSON, nullable=False)
-    profile_error = Column(Text, nullable=True)
+    profile_error_code = Column(String(160), nullable=True)
+    profile_error_params_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -1002,6 +1053,25 @@ class FittingCandidateProfile(Base):
             FITTING_CANDIDATE_PROFILE_DATABASE_CONFIG["indexes"]["signature"],
             'shape_signature',
         ),
+        Index(
+            FITTING_CANDIDATE_PROFILE_DATABASE_CONFIG["indexes"]["dimensions"],
+            'candidate_type',
+            'profile_status',
+            'height_plate',
+            'width_stud',
+            'depth_stud',
+        ),
+        Index(
+            FITTING_CANDIDATE_PROFILE_DATABASE_CONFIG["indexes"]["sticker"],
+            'candidate_type',
+            'is_sticker',
+        ),
+        Index(
+            FITTING_CANDIDATE_PROFILE_DATABASE_CONFIG["indexes"]["normalized_type"],
+            'candidate_type',
+            'profile_status',
+            'normalized_type',
+        ),
     )
 
 
@@ -1011,6 +1081,7 @@ class ModelAsset(Base):
 
     id = Column(String(64), primary_key=True)
     name = Column(String(255), nullable=False)
+    content_locale = Column(String(16), nullable=False)
     model_type = Column(String(64), nullable=False)
     source_type = Column(String(64), nullable=False)
     source_name = Column(Text, nullable=False)
@@ -1096,6 +1167,50 @@ class ComponentArtifact(Base):
     )
 
 
+class ComponentUploadSession(Base):
+    """Pending direct-to-storage upload session for Component Repo artifacts."""
+
+    __tablename__ = COMPONENT_REPO_DATABASE_CONFIG["upload_session_table"]
+
+    id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        primary_key=True,
+    )
+    owner_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]),
+        nullable=False,
+    )
+    status = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["status"]),
+        nullable=False,
+    )
+    expected_uploads_json = Column(JSON, nullable=False)
+    created_by = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]),
+        nullable=False,
+    )
+    created_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    failure_code = Column(String(160), nullable=True)
+    failure_params_json = Column(JSON, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["upload_session_owner"],
+            "owner_id",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["upload_session_status"],
+            "status",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["upload_session_created"],
+            "created_at",
+        ),
+    )
+
+
 class ComponentImport(Base):
     """One Component Repo upload and parse task."""
 
@@ -1135,7 +1250,8 @@ class ComponentImport(Base):
     )
     created_at = Column(DateTime, nullable=False)
     completed_at = Column(DateTime, nullable=True)
-    failure_reason = Column(Text, nullable=True)
+    failure_code = Column(String(160), nullable=True)
+    failure_params_json = Column(JSON, nullable=True)
     metadata_json = Column(JSON, nullable=True)
 
     source_artifact = relationship("ComponentArtifact", foreign_keys=[source_artifact_id])
@@ -1252,18 +1368,29 @@ class Component(Base):
 
     id = Column(String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]), primary_key=True)
     name = Column(String(255), nullable=False)
+    content_kind = Column(String(16), nullable=False)
+    content_locale = Column(String(16), nullable=False)
     category = Column(String(128), nullable=True)
     status = Column(String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["status"]), nullable=False)
     current_version_id = Column(
         String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
         nullable=True,
     )
+    logical_width_stud = Column(Float, nullable=True)
+    logical_depth_stud = Column(Float, nullable=True)
+    logical_height_plate = Column(Float, nullable=True)
     description = Column(Text, nullable=True)
     tags_json = Column(JSON, nullable=False)
     metadata_json = Column(JSON, nullable=False)
     created_by = Column(String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]), nullable=False)
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    translations = relationship(
+        "ComponentTranslation",
+        back_populates="component",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index(
@@ -1273,6 +1400,46 @@ class Component(Base):
         Index(
             COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_category"],
             "category",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_logical_size"],
+            "status",
+            "logical_height_plate",
+            "logical_width_stud",
+            "logical_depth_stud",
+        ),
+    )
+
+
+class ComponentTranslation(Base):
+    """Reviewed localized content for an official Component Repo item."""
+
+    __tablename__ = COMPONENT_REPO_DATABASE_CONFIG["component_translation_table"]
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    component_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        ForeignKey(f"{COMPONENT_REPO_DATABASE_CONFIG['component_table']}.id"),
+        nullable=False,
+    )
+    locale = Column(String(16), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    tags_json = Column(JSON, nullable=False)
+    translation_status = Column(String(32), nullable=False)
+    reviewed_by = Column(String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    component = relationship("Component", back_populates="translations")
+
+    __table_args__ = (
+        UniqueConstraint("component_id", "locale", name="uq_component_translation_locale"),
+        Index(COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_translation_locale"], "locale"),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_translation_status"],
+            "translation_status",
         ),
     )
 
@@ -1661,9 +1828,12 @@ class ModelFittingJob(Base):
     )
     settings_json = Column(JSON, nullable=False)
     target_analysis_json = Column(JSON, nullable=False)
+    locale = Column(String(16), nullable=False)
+    timezone = Column(String(64), nullable=False)
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    error_message = Column(Text, nullable=True)
+    error_code = Column(String(160), nullable=True)
+    error_params_json = Column(JSON, nullable=True)
 
     source_model = relationship("ModelAsset")
     target_blocks = relationship(
@@ -1894,6 +2064,7 @@ class PixelArtProject(Base):
 
     id = Column(String(64), primary_key=True)
     name = Column(String(255), nullable=False)
+    content_locale = Column(String(16), nullable=False)
     schema = Column(String(64), nullable=False)
     source_type = Column(String(64), nullable=False)
     source_name = Column(String(255), nullable=False)

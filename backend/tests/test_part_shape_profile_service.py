@@ -1,8 +1,9 @@
 """Unit tests for persisted LDraw part shape profiles."""
 
 import unittest
+import json
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from src.config.app_settings import load_json_config
@@ -29,6 +30,48 @@ from src.tools.summarize_part_shape_profiles import (
 
 
 class PartShapeProfileServiceTest(unittest.TestCase):
+    def test_legacy_profile_error_is_upgraded_to_structured_fields(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE ldraw_part_shape_profiles ("
+                    "id INTEGER PRIMARY KEY, ldraw_part_id INTEGER NOT NULL, "
+                    "profile_error TEXT NULL)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO ldraw_part_shape_profiles "
+                    "(id, ldraw_part_id, profile_error) "
+                    "VALUES (1, 3024, 'legacy mesh failure')"
+                )
+            )
+
+        ensure_part_shape_profile_table(engine)
+
+        columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("ldraw_part_shape_profiles")
+        }
+        with engine.connect() as connection:
+            error_type, error_code, error_params = connection.execute(
+                text(
+                    "SELECT profile_error_type, profile_error_code, "
+                    "profile_error_params_json FROM ldraw_part_shape_profiles "
+                    "WHERE id = 1"
+                )
+            ).one()
+        self.assertIn("profile_error_type", columns)
+        self.assertIn("profile_error_code", columns)
+        self.assertIn("profile_error_params_json", columns)
+        self.assertEqual(error_type, "unknown")
+        self.assertEqual(error_code, "part_shape_profile.unknown")
+        self.assertEqual(
+            json.loads(error_params),
+            {"ldrawPartId": 3024, "legacyMessage": "legacy mesh failure"},
+        )
+
     def test_surface_profile_is_saved_for_part_recall(self) -> None:
         config = load_json_config(
             "part_shape_profile.json",
@@ -69,7 +112,10 @@ class PartShapeProfileServiceTest(unittest.TestCase):
 
         self.assertEqual(profile["profileStatus"], config["profile"]["failed_status"])
         self.assertEqual(profile["profileErrorType"], "unknown")
-        self.assertEqual(profile["profileError"], "mesh failed")
+        self.assertEqual(
+            profile["profileError"],
+            {"code": "part_shape_profile.unknown", "params": {"partId": "3024.dat"}},
+        )
         self.assertIsNone(profile["surfaceProfile"])
 
     def test_profile_error_type_classifies_non_grid_dimensions(self) -> None:

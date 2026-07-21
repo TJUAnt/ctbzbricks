@@ -259,6 +259,7 @@ class PixelArtServiceTest(unittest.TestCase):
             "pixel model",
             image_bytes,
             asset,
+            "en-US",
         )
         loaded = load_pixel_art_project(engine, PIXEL_ART_CONFIG, saved["modelId"])
 
@@ -287,6 +288,7 @@ class PixelArtServiceTest(unittest.TestCase):
             "pixel model",
             image_bytes,
             asset,
+            "zh-CN",
         )
         updated_pixels = [
             {**pixel, "rgb": "#00FF00", "colorIndex": 0}
@@ -318,12 +320,20 @@ class PixelArtServiceTest(unittest.TestCase):
             "image/png",
             settings,
         )
-        save_pixel_art_project(engine, PIXEL_ART_CONFIG, "pixel model", image_bytes, asset)
+        save_pixel_art_project(
+            engine,
+            PIXEL_ART_CONFIG,
+            "pixel model",
+            image_bytes,
+            asset,
+            "zh-CN",
+        )
 
         page = paginated_pixel_art_projects(engine, PIXEL_ART_CONFIG, 1, 12)
 
         self.assertEqual(page["total"], 1)
         self.assertEqual(page["items"][0]["name"], "pixel model")
+        self.assertEqual(page["items"][0]["contentLocale"], "zh-CN")
         self.assertEqual(page["items"][0]["gridWidth"], 2)
         self.assertTrue(page["items"][0]["previewImage"].startswith("data:image/png;base64,"))
 

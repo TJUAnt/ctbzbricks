@@ -55,7 +55,8 @@ GEOMETRY_RECORD_FIELDS = [
     "vertex_count",
     "face_count",
     "geometry_status",
-    "geometry_error",
+    "geometry_error_code",
+    "geometry_error_params_json",
 ]
 
 
@@ -100,7 +101,14 @@ def _problem_records(records: list[dict]) -> list[dict]:
             "ldraw_part_num": record["ldraw_part_num"],
             "ldraw_part_id": record["ldraw_part_id"],
             "geometry_status": record["geometry_status"],
-            "geometry_error": record["geometry_error"],
+            "geometry_issue": (
+                {
+                    "code": record["geometry_error_code"],
+                    "params": record["geometry_error_params_json"] or {},
+                }
+                if record["geometry_error_code"]
+                else None
+            ),
         }
         for record in records
         if record["geometry_status"] != "parsed"
@@ -196,16 +204,18 @@ def _build_geometry_record(
 
     if not result.triangles:
         geometry_status = "skipped" if _is_skippable_empty_geometry(part, result) else "failed"
-        geometry_error = (
-            "; ".join(result.errors[:20])
-            if result.errors
-            else "no supported geometry vertices found"
+        geometry_error_code = (
+            "ldraw.geometry.build_failed" if result.errors else "ldraw.geometry.empty"
         )
         record = {field: None for field in GEOMETRY_RECORD_FIELDS}
         record.update({
             "ldraw_part_id": part["id"],
             "geometry_status": geometry_status,
-            "geometry_error": geometry_error,
+            "geometry_error_code": geometry_error_code,
+            "geometry_error_params_json": {
+                "partId": part["ldraw_part_num"],
+                "errorCount": len(result.errors),
+            },
         })
         record["ldraw_part_num"] = part["ldraw_part_num"]
         return record
@@ -237,7 +247,7 @@ def _build_geometry_record(
         )
 
     geometry_status = "partial" if result.errors else "parsed"
-    geometry_error = "; ".join(result.errors[:20]) if result.errors else None
+    geometry_error_code = "ldraw.geometry.build_partial" if result.errors else None
 
     record = {
         "ldraw_part_id": part["id"],
@@ -259,7 +269,12 @@ def _build_geometry_record(
         "vertex_count": result.source_vertex_count,
         "face_count": result.source_face_count,
         "geometry_status": geometry_status,
-        "geometry_error": geometry_error,
+        "geometry_error_code": geometry_error_code,
+        "geometry_error_params_json": (
+            {"partId": part["ldraw_part_num"], "errorCount": len(result.errors)}
+            if result.errors
+            else None
+        ),
     }
     normalized_record = {field: record.get(field) for field in GEOMETRY_RECORD_FIELDS}
     normalized_record["ldraw_part_num"] = part["ldraw_part_num"]
@@ -297,7 +312,8 @@ def _upsert_geometry(session, geometry_records: list[dict]) -> None:
                     "vertex_count",
                     "face_count",
                     "geometry_status",
-                    "geometry_error",
+                    "geometry_error_code",
+                    "geometry_error_params_json",
                 ),
             )
         )

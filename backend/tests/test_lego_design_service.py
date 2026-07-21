@@ -6,6 +6,7 @@ import unittest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from src.i18n.export_catalog import create_export_context
 from src.model.models import (
     Base,
     Color,
@@ -26,6 +27,9 @@ from src.services.lego_design_service import (
     terrain_placement_sort_key,
 )
 from src.services.lego_pixmap_strategy import create_lego_pixmap_steps
+
+
+EXPORT_CONTEXT = create_export_context("en-US", "UTC")
 
 
 def lego_test_placement(
@@ -1455,6 +1459,7 @@ class LegoDesignServiceTest(unittest.TestCase):
             metadata,
             False,
             LEGO_DESIGN_CONFIG,
+            EXPORT_CONTEXT,
         )
 
         self.assertIn("1 15 10 8 10 0 0 1 0 1 0 -1 0 0 3024.dat", ldraw)
@@ -1468,15 +1473,16 @@ class LegoDesignServiceTest(unittest.TestCase):
             metadata,
             False,
             LEGO_DESIGN_CONFIG,
+            EXPORT_CONTEXT,
         )
 
         self.assertIn("0 // Terrain assembly", ldraw)
         self.assertIn("1 16 0 0 0 1 0 0 0 1 0 0 0 1 terrain-module-1.ldr", ldraw)
         self.assertIn("0 FILE terrain-module-1.ldr", ldraw)
-        self.assertIn("0 // terrain-module-1 Walls", ldraw)
-        self.assertIn("0 // terrain-module-1 Supports", ldraw)
-        self.assertIn("0 // terrain-module-1 Top cover", ldraw)
-        self.assertIn("0 // terrain-surface Colored surface", ldraw)
+        self.assertIn("0 // Module terrain-module-1: walls", ldraw)
+        self.assertIn("0 // Module terrain-module-1: supports", ldraw)
+        self.assertIn("0 // Module terrain-module-1: cover", ldraw)
+        self.assertIn("0 // Module terrain-surface: colored surface", ldraw)
 
     def test_plan_export_writes_heightmap_module_steps(self) -> None:
         design = heightmap_cavity_test_design()
@@ -1487,6 +1493,7 @@ class LegoDesignServiceTest(unittest.TestCase):
             metadata,
             False,
             LEGO_DESIGN_CONFIG,
+            EXPORT_CONTEXT,
         )
 
         self.assertEqual(plan["submodels"][0]["id"], "terrain-module-1")
@@ -1524,12 +1531,14 @@ class LegoDesignServiceTest(unittest.TestCase):
             metadata,
             True,
             config,
+            EXPORT_CONTEXT,
         )
         plan = export_lego_design_plan(
             design,
             metadata,
             True,
             config,
+            EXPORT_CONTEXT,
         )
 
         self.assertIn("0 // Base 1", ldraw)
@@ -1644,6 +1653,7 @@ class LegoDesignServiceTest(unittest.TestCase):
             metadata,
             True,
             LEGO_DESIGN_CONFIG,
+            EXPORT_CONTEXT,
         )
 
         self.assertIn("0 // Base 1", ldraw)
@@ -1727,6 +1737,7 @@ class LegoDesignServiceTest(unittest.TestCase):
             metadata,
             True,
             LEGO_DESIGN_CONFIG,
+            EXPORT_CONTEXT,
         )
 
         self.assertEqual(plan["format"], LEGO_DESIGN_CONFIG["plan_export"]["format"])
@@ -1820,6 +1831,7 @@ class LegoDesignServiceTest(unittest.TestCase):
             metadata,
             False,
             LEGO_DESIGN_CONFIG,
+            EXPORT_CONTEXT,
         )
 
         placements = plan["layers"][0]["placements"]
@@ -1905,6 +1917,7 @@ class LegoDesignServiceTest(unittest.TestCase):
             metadata,
             False,
             LEGO_DESIGN_CONFIG,
+            EXPORT_CONTEXT,
         )
 
         placements = plan["layers"][0]["placements"]
@@ -1956,6 +1969,7 @@ class LegoDesignServiceTest(unittest.TestCase):
             },
             False,
             LEGO_DESIGN_CONFIG,
+            EXPORT_CONTEXT,
         )
 
         self.assertNotIn("0 // Base 1", ldraw)
@@ -2008,6 +2022,7 @@ class LegoDesignServiceTest(unittest.TestCase):
                 metadata,
                 False,
                 LEGO_DESIGN_CONFIG,
+                EXPORT_CONTEXT,
             )
 
 

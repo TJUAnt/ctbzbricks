@@ -113,12 +113,12 @@
     "source_type": "uploaded_image"
   },
   "errors": {
-    "unsupported_image_type": "Unsupported image type",
-    "invalid_settings": "Invalid pixel art settings",
-    "invalid_crop": "Invalid crop area",
-    "invalid_grid": "Invalid output grid",
-    "invalid_color_count": "Invalid color count",
-    "project_not_found": "Pixel art project not found"
+    "unsupported_image_type": "pixel_art.unsupported_image_type",
+    "invalid_settings": "pixel_art.invalid_settings",
+    "invalid_crop": "pixel_art.invalid_crop",
+    "invalid_grid": "pixel_art.invalid_grid",
+    "invalid_color_count": "pixel_art.invalid_color_count",
+    "project_not_found": "pixel_art.project_not_found"
   },
   "http_status": {
     "bad_request": 400,

@@ -9,6 +9,7 @@
     "bbox_tolerance_ldu": 0,
     "logical_size_tolerance": 0,
     "candidate_types": ["part", "submodel"],
+    "supported_candidate_types": ["part", "submodel", "component"],
     "profile_statuses": ["ready"]
   },
   "limits": {
@@ -18,10 +19,18 @@
     "base_score": 1000.0,
     "bbox_weight": 1.0,
     "logical_size_weight": 10.0,
+    "type_match_weight": 100.0,
     "connector_bonus": 25.0,
     "category_bonus": 20.0,
     "color_bonus": 10.0,
     "irregular_penalty": 200.0
+  },
+  "fuzzy_type": {
+    "minimum_score": 0.72
+  },
+  "part_filters": {
+    "exclude_stickers": true,
+    "sticker_term_roots": ["sticker", "decal"]
   },
   "irregular": {
     "candidate_type": "part",
@@ -52,12 +61,14 @@
   },
   "response": {
     "ready_source": "fitting_candidate_profiles",
+    "component_source": "component_repo",
     "irregular_reason": "irregular_failed_shape_profile",
     "bbox_filter_reason": "bbox",
     "logical_size_filter_reason": "logical_size",
     "connector_filter_reason": "connector",
     "category_filter_reason": "category",
     "color_filter_reason": "color",
+    "type_filter_reason": "fuzzy_type",
     "status_filter_reason": "status",
     "candidate_type_filter_reason": "candidate_type"
   },
@@ -65,8 +76,8 @@
     "bad_request": 400
   },
   "errors": {
-    "invalid_limit": "Recall limit must be greater than zero",
-    "unsupported_candidate_type": "Unsupported recall candidate type: {candidate_type}",
-    "unsupported_profile_status": "Unsupported recall profile status: {profile_status}"
+    "invalid_limit": "fitting_candidate_recall.invalid_limit",
+    "unsupported_candidate_type": "fitting_candidate_recall.unsupported_candidate_type",
+    "unsupported_profile_status": "fitting_candidate_recall.unsupported_profile_status"
   }
 }

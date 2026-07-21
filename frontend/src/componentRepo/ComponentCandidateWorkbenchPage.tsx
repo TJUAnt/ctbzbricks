@@ -1,4 +1,5 @@
 import React from 'react';
+import { localizeStructuredMessage } from '../api/client';
 import {
   Boxes,
   CheckCircle2,
@@ -7,36 +8,51 @@ import {
   RefreshCw,
   Rocket,
   ShieldCheck,
+  Upload,
   XCircle,
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
-import appConfig from '../app/appConfig.json';
+import appConfig from '../app/appConfig';
+import { useAppTranslation } from '../i18n';
 import {
-  approveCandidate,
   confirmRelation,
   createInterface,
   detectRelations,
+  getCandidate,
+  getComponent,
+  getComponentVersion,
+  listComponentVersions,
   listFreeConnectors,
   listInterfaces,
   listRelations,
+  loadCandidatePreview,
+  loadComponentVersionPreview,
+  parseComponentImport,
   publishVersion,
   rejectRelation,
   validateCandidate,
-  type ComponentApproveResponse,
+  type ComponentCandidateResponse,
+  type ComponentPreviewResponse,
+  type ComponentResponse,
   type ComponentFreeConnectorResponse,
   type ComponentInterfaceResponse,
   type ComponentRelationCandidateResponse,
   type ComponentValidationReportResponse,
   type ComponentVersionResponse,
 } from './componentRepoApi';
-import { routeFor, StatusPill } from './ComponentRepoPage';
+import { ComponentUploadDialog, routeFor, StatusPill } from './ComponentRepoPage';
+import { ComponentScene } from '../parts/PartViewerPage';
 
 type CandidateWorkbenchState = {
   relations: ComponentRelationCandidateResponse[];
   freeConnectors: ComponentFreeConnectorResponse[];
   interfaces: ComponentInterfaceResponse[];
+  candidate: ComponentCandidateResponse | null;
+  component: ComponentResponse | null;
+  currentVersion: ComponentVersionResponse | null;
+  preview: ComponentPreviewResponse | null;
+  previewStatus: 'idle' | 'loading' | 'error';
   validationReport: ComponentValidationReportResponse | null;
-  approval: ComponentApproveResponse | null;
   publishedVersion: ComponentVersionResponse | null;
   loading: boolean;
   error: string | null;
@@ -44,26 +60,38 @@ type CandidateWorkbenchState = {
 };
 
 export function ComponentCandidateWorkbenchPage() {
+  const tr = useAppTranslation();
   const params = useParams();
   const navigate = useNavigate();
-  const candidateId = params.candidateId ?? '';
+  const routeCandidateId = params.candidateId ?? '';
+  const componentId = params.componentId ?? '';
+  const [candidateId, setCandidateId] = React.useState(routeCandidateId);
+  const resetViewRef = React.useRef<(() => void) | null>(null);
+  const registerPreviewReset = React.useCallback((reset: (() => void) | null) => {
+    resetViewRef.current = reset;
+  }, []);
+  const [isUploadOpen, setIsUploadOpen] = React.useState(false);
   const [state, setState] = React.useState<CandidateWorkbenchState>({
     relations: [],
     freeConnectors: [],
     interfaces: [],
+    candidate: null,
+    component: null,
+    currentVersion: null,
+    preview: null,
+    previewStatus: 'idle',
     validationReport: null,
-    approval: null,
     publishedVersion: null,
     loading: false,
     error: null,
     message: null,
   });
-  const [interfaceName, setInterfaceName] = React.useState('mount_axle');
+  const [interfaceName, setInterfaceName] = React.useState('');
   const [selectedConnectorId, setSelectedConnectorId] = React.useState('');
-  const [componentName, setComponentName] = React.useState('wheel_shell_component2');
-  const [componentCategory, setComponentCategory] = React.useState('technic');
+  const [componentName, setComponentName] = React.useState('');
+  const [componentCategory, setComponentCategory] = React.useState('');
   const [version, setVersion] = React.useState('0.1.0');
-  const [releaseNote, setReleaseNote] = React.useState('first publish');
+  const [releaseNote, setReleaseNote] = React.useState('');
 
   const runTask = React.useCallback(
     async (task: () => Promise<void>, successMessage?: string) => {
@@ -89,103 +117,169 @@ export function ComponentCandidateWorkbenchPage() {
   );
 
   const refreshReviewData = React.useCallback(async () => {
-    const [relations, interfaces] = await Promise.all([
+    const [candidate, relations, interfaces] = await Promise.all([
+      getCandidate(candidateId),
       listRelations(candidateId),
       listInterfaces(candidateId),
     ]);
-    let freeConnectors: ComponentFreeConnectorResponse[] = [];
-    try {
-      freeConnectors = await listFreeConnectors(candidateId);
-    } catch {
-      freeConnectors = [];
-    }
+    const freeConnectors: ComponentFreeConnectorResponse[] = candidate.reviewDecisions.relationDetectionCompleted
+      ? await listFreeConnectors(candidateId)
+      : [];
     setState((current) => ({
       ...current,
+      candidate,
       relations,
       freeConnectors,
       interfaces,
     }));
-    setSelectedConnectorId((current) => current || freeConnectors[0]?.worldConnectorId || '');
+    setSelectedConnectorId((current) => (
+      freeConnectors.some((connector) => connector.worldConnectorId === current)
+        ? current
+        : freeConnectors[0]?.worldConnectorId || ''
+    ));
   }, [candidateId]);
 
   React.useEffect(() => {
-    if (!candidateId) {
-      return;
-    }
-    void runTask(refreshReviewData);
+    let active = true;
+    const loadContext = async () => {
+      setState((current) => ({ ...current, loading: true, error: null }));
+      try {
+        let component: ComponentResponse | null = null;
+        let currentVersion: ComponentVersionResponse | null = null;
+        let candidate: ComponentCandidateResponse;
+        let preview: ComponentPreviewResponse;
+        if (componentId) {
+          const [loadedComponent, versions] = await Promise.all([
+            getComponent(componentId),
+            listComponentVersions(componentId),
+          ]);
+          const selectedVersion = versions.find((item) => item.id === loadedComponent.currentVersionId) ?? versions[0];
+          if (!selectedVersion) throw new Error(tr('componentRepo:noComponentVersions'));
+          component = loadedComponent;
+          currentVersion = selectedVersion;
+          candidate = await getCandidate(selectedVersion.componentCandidateId);
+          preview = await loadComponentVersionPreview(currentVersion.id);
+        } else {
+          if (!routeCandidateId) throw new Error(tr('componentRepo:candidateIdIsMissing'));
+          candidate = await getCandidate(routeCandidateId);
+          const componentRecordId = String(candidate.reviewDecisions.componentId ?? '');
+          const draftVersionId = String(candidate.reviewDecisions.draftVersionId ?? '');
+          if (componentRecordId && draftVersionId) {
+            [component, currentVersion] = await Promise.all([
+              getComponent(componentRecordId),
+              getComponentVersion(draftVersionId),
+            ]);
+            preview = await loadComponentVersionPreview(currentVersion.id);
+          } else {
+            // Parsed candidates can be previewed directly before a draft version exists.
+            preview = await loadCandidatePreview(candidate.id);
+          }
+        }
+        if (!active) return;
+        setCandidateId(candidate.id);
+        setComponentName(component?.name ?? '');
+        setComponentCategory(component?.category ?? '');
+        if (currentVersion) setVersion(currentVersion.version);
+        setState((current) => ({
+          ...current,
+          candidate,
+          component,
+          currentVersion,
+          preview,
+          previewStatus: 'idle',
+          publishedVersion: (
+            currentVersion && currentVersion.id === component?.currentVersionId
+              ? currentVersion
+              : null
+          ),
+          loading: false,
+        }));
+      } catch (error) {
+        if (active) {
+          setState((current) => ({
+            ...current,
+            loading: false,
+            previewStatus: 'error',
+            error: error instanceof Error ? error.message : appConfig.texts.loadFailed,
+          }));
+        }
+      }
+    };
+    void loadContext();
+    return () => { active = false; };
+  }, [componentId, routeCandidateId, tr]);
+
+  React.useEffect(() => {
+    if (candidateId) void runTask(refreshReviewData);
   }, [candidateId, refreshReviewData, runTask]);
 
   const detect = () =>
     runTask(async () => {
       const relations = await detectRelations(candidateId);
       const freeConnectors = await listFreeConnectors(candidateId);
-      setState((current) => ({ ...current, relations, freeConnectors }));
-      setSelectedConnectorId((current) => current || freeConnectors[0]?.worldConnectorId || '');
-    }, '连接识别完成');
+      const candidate = await getCandidate(candidateId);
+      setState((current) => ({ ...current, candidate, relations, freeConnectors }));
+      setSelectedConnectorId((current) => (
+        freeConnectors.some((connector) => connector.worldConnectorId === current)
+          ? current
+          : freeConnectors[0]?.worldConnectorId || ''
+      ));
+    }, tr('componentRepo:connectionDetectionComplete'));
 
   const confirm = (relationId: string) =>
     runTask(async () => {
       await confirmRelation(candidateId, relationId);
       await refreshReviewData();
-    }, '连接已确认');
+    }, tr('componentRepo:connectionConfirmed'));
 
   const reject = (relationId: string) =>
     runTask(async () => {
       await rejectRelation(candidateId, relationId);
       await refreshReviewData();
-    }, '连接已拒绝');
+    }, tr('componentRepo:connectionRejected'));
 
   const addInterface = () =>
     runTask(async () => {
       if (!selectedConnectorId || !interfaceName.trim()) {
-        throw new Error('请选择 connector 并填写接口名称');
+        throw new Error(tr('componentRepo:selectAConnectorAndEnterAnInterfaceName'));
       }
       const created = await createInterface(candidateId, selectedConnectorId, interfaceName.trim());
-      const interfaces = await listInterfaces(candidateId);
-      setState((current) => ({ ...current, interfaces }));
+      await refreshReviewData();
       setInterfaceName(created.name);
-    }, '外部接口已标记');
+    }, tr('componentRepo:externalInterfaceMarked'));
 
   const validate = () =>
     runTask(async () => {
       const validationReport = await validateCandidate(candidateId);
       setState((current) => ({ ...current, validationReport }));
-    }, '验证完成');
+    }, tr('componentRepo:validationComplete'));
 
-  const approve = () =>
+  const publish = () =>
     runTask(async () => {
-      if (!componentName.trim()) {
-        throw new Error('请填写组件名称');
+      const draftVersionId = state.currentVersion?.id;
+      if (!draftVersionId) {
+        throw new Error(tr('componentRepo:draftVersionUnavailable'));
       }
-      const approval = await approveCandidate(candidateId, {
+      if (!componentName.trim()) throw new Error(tr('componentRepo:enterAComponentName'));
+      const publishedVersion = await publishVersion(draftVersionId, {
+        releaseNote: releaseNote.trim(),
         name: componentName.trim(),
         category: componentCategory.trim() || null,
         version: version.trim() || '0.1.0',
       });
-      setState((current) => ({
-        ...current,
-        approval,
-        validationReport: approval.validationReport,
-      }));
-    }, 'Draft version 已生成');
+      const component = await getComponent(publishedVersion.componentId);
+      setState((current) => ({ ...current, component, currentVersion: publishedVersion, publishedVersion }));
+    }, tr('componentRepo:componentVersionPublished'));
 
-  const publish = () =>
-    runTask(async () => {
-      const draftVersionId = state.approval?.version.id;
-      if (!draftVersionId) {
-        throw new Error('请先生成 Draft version');
-      }
-      const publishedVersion = await publishVersion(draftVersionId, releaseNote.trim());
-      setState((current) => ({ ...current, publishedVersion }));
-    }, '组件版本已发布');
-
-  if (!candidateId) {
+  if (!candidateId && !componentId && !routeCandidateId) {
     return (
       <section className="component-repo-page">
-        <div className="asset-error">Candidate ID 缺失</div>
+        <div className="asset-error">{tr('componentRepo:candidateIdIsMissing')}</div>
       </section>
     );
   }
+
+  const isEditable = state.currentVersion?.status === 'draft';
 
   return (
     <section className="component-repo-page">
@@ -197,6 +291,12 @@ export function ComponentCandidateWorkbenchPage() {
           </p>
         </div>
         <div className="component-repo-actions">
+          {state.component ? (
+            <button onClick={() => setIsUploadOpen(true)} type="button">
+              <Upload aria-hidden="true" />
+              {tr('componentRepo:uploadNewDrawing')}
+            </button>
+          ) : null}
           <button onClick={() => navigate(routeFor('componentRepoImport'))} type="button">
             {appConfig.texts.componentRepoNewImport}
           </button>
@@ -210,25 +310,56 @@ export function ComponentCandidateWorkbenchPage() {
       {state.message ? <div className="component-repo-message">{state.message}</div> : null}
       {state.loading ? <div className="asset-loading">{appConfig.texts.loading}</div> : null}
 
+      <section className="component-detail-preview">
+        <div className="component-detail-preview-stage">
+          {state.preview ? (
+            <ComponentScene
+              preview={state.preview}
+              registerReset={registerPreviewReset}
+            />
+          ) : null}
+          {!state.preview && state.previewStatus !== 'error' ? (
+            <div className="asset-loading">{tr('componentRepo:loadingPreview')}</div>
+          ) : null}
+          {state.previewStatus === 'error' ? (
+            <div className="asset-error">{tr('componentRepo:previewUnavailable')}</div>
+          ) : null}
+          {state.preview ? (
+            <button className="component-detail-preview-reset" onClick={() => resetViewRef.current?.()} type="button">
+              <RefreshCw aria-hidden="true" />{tr('componentRepo:resetPreview')}
+            </button>
+          ) : null}
+        </div>
+        <div className="component-detail-preview-meta">
+          <strong>{state.component?.name ?? tr('componentRepo:component')}</strong>
+          <span>{state.currentVersion ? `v${state.currentVersion.version} · ${state.currentVersion.id}` : '—'}</span>
+          <StatusPill
+            status={state.currentVersion
+              ? (state.currentVersion.id === state.component?.currentVersionId ? 'published' : 'draft')
+              : (state.candidate?.status ?? 'pending_review')}
+          />
+        </div>
+      </section>
+
       <section className="component-repo-workbench">
         <aside className="component-repo-panel">
           <div className="component-repo-panel-title">
             <Boxes aria-hidden="true" />
-            <span>Candidate</span>
+            <span>{tr('componentRepo:candidate')}</span>
           </div>
           <div className="component-repo-card-list">
-            <Metric label="Candidate ID" value={candidateId} />
-            <Metric label="Relations" value={String(state.relations.length)} />
-            <Metric label="Free connectors" value={String(state.freeConnectors.length)} />
-            <Metric label="Interfaces" value={String(state.interfaces.length)} />
+            <Metric label={tr('componentRepo:candidateId')} value={candidateId} />
+            <Metric label={tr('componentRepo:relations')} value={String(state.relations.length)} />
+            <Metric label={tr('componentRepo:freeConnectors')} value={String(state.freeConnectors.length)} />
+            <Metric label={tr('componentRepo:interfaces')} value={String(state.interfaces.length)} />
           </div>
 
           <div className="component-repo-stepper">
-            <Step done={state.relations.length > 0} label="Detect" />
-            <Step done={state.interfaces.length > 0} label="Interface" />
-            <Step done={Boolean(state.validationReport?.passed)} label="Validate" />
-            <Step done={Boolean(state.approval)} label="Draft" />
-            <Step done={Boolean(state.publishedVersion)} label="Publish" />
+            <Step done={state.relations.length > 0} label={tr('componentRepo:detect')} />
+            <Step done={state.interfaces.length > 0} label={tr('componentRepo:interface')} />
+            <Step done={Boolean(state.validationReport?.passed)} label={tr('componentRepo:validate')} />
+            <Step done={Boolean(state.currentVersion)} label={tr('componentRepo:draft')} />
+            <Step done={Boolean(state.publishedVersion)} label={tr('componentRepo:publish')} />
           </div>
 
           {state.validationReport ? <ValidationReport report={state.validationReport} /> : null}
@@ -238,9 +369,9 @@ export function ComponentCandidateWorkbenchPage() {
           <div className="component-repo-toolbar">
             <div className="component-repo-panel-title">
               <GitBranch aria-hidden="true" />
-              <span>Relation Review</span>
+              <span>{tr('componentRepo:relationReview')}</span>
             </div>
-            <button disabled={state.loading} onClick={() => void detect()} type="button">
+            <button disabled={!isEditable || state.loading} onClick={() => void detect()} type="button">
               <RefreshCw aria-hidden="true" />
               {appConfig.texts.componentRepoDetectRelations}
             </button>
@@ -258,18 +389,18 @@ export function ComponentCandidateWorkbenchPage() {
                     {endpointLabel(relation.endpointA)} ↔ {endpointLabel(relation.endpointB)}
                   </span>
                   <div className="component-repo-relation-metrics">
-                    <Metric label="position" value={relation.positionResidual.toFixed(3)} />
-                    <Metric label="rotation" value={`${relation.rotationResidual.toFixed(2)}°`} />
-                    <Metric label="confidence" value={relation.confidence.toFixed(2)} />
+                    <Metric label={tr('componentRepo:position')} value={relation.positionResidual.toFixed(3)} />
+                    <Metric label={tr('componentRepo:rotation')} value={`${relation.rotationResidual.toFixed(2)}°`} />
+                    <Metric label={tr('componentRepo:confidence')} value={relation.confidence.toFixed(2)} />
                   </div>
                   <div className="component-repo-inline-actions">
-                    <button disabled={state.loading || relation.status === 'confirmed'} onClick={() => void confirm(relation.id)} type="button">
+                    <button disabled={!isEditable || state.loading || relation.status === 'confirmed'} onClick={() => void confirm(relation.id)} type="button">
                       <CheckCircle2 aria-hidden="true" />
-                      Confirm
+                      {tr('componentRepo:confirm')}
                     </button>
-                    <button disabled={state.loading || relation.status === 'rejected'} onClick={() => void reject(relation.id)} type="button">
+                    <button disabled={!isEditable || state.loading || relation.status === 'rejected' || relation.status === 'confirmed'} onClick={() => void reject(relation.id)} type="button">
                       <XCircle aria-hidden="true" />
-                      Reject
+                      {tr('componentRepo:reject')}
                     </button>
                   </div>
                 </article>
@@ -283,12 +414,12 @@ export function ComponentCandidateWorkbenchPage() {
         <aside className="component-repo-panel">
           <div className="component-repo-panel-title">
             <Plug aria-hidden="true" />
-            <span>External Interface</span>
+            <span>{tr('componentRepo:externalInterface')}</span>
           </div>
 
           <label className="component-repo-control-field">
-            <span>Free connector</span>
-            <select value={selectedConnectorId} onChange={(event) => setSelectedConnectorId(event.target.value)}>
+            <span>{tr('componentRepo:freeConnector')}</span>
+            <select disabled={!isEditable} value={selectedConnectorId} onChange={(event) => setSelectedConnectorId(event.target.value)}>
               {state.freeConnectors.map((connector) => (
                 <option key={connector.worldConnectorId} value={connector.worldConnectorId}>
                   {connector.partRef} · {connector.connectorType ?? connector.connectorKind}
@@ -299,6 +430,7 @@ export function ComponentCandidateWorkbenchPage() {
           <label className="component-repo-control-field">
             <span>{appConfig.texts.componentRepoInterfaceName}</span>
             <input
+              disabled={!isEditable}
               onChange={(event) => setInterfaceName(event.target.value)}
               placeholder={appConfig.texts.componentRepoInterfaceNamePlaceholder}
               value={interfaceName}
@@ -306,7 +438,7 @@ export function ComponentCandidateWorkbenchPage() {
           </label>
           <button
             className="component-repo-primary-button"
-            disabled={!selectedConnectorId || state.loading}
+            disabled={!isEditable || !selectedConnectorId || state.loading}
             onClick={() => void addInterface()}
             type="button"
           >
@@ -331,11 +463,12 @@ export function ComponentCandidateWorkbenchPage() {
 
           <div className="component-repo-panel-title">
             <Rocket aria-hidden="true" />
-            <span>Draft & Publish</span>
+            <span>{tr('componentRepo:draftPublish')}</span>
           </div>
           <label className="component-repo-control-field">
             <span>{appConfig.texts.componentRepoComponentName}</span>
             <input
+              disabled={!isEditable}
               onChange={(event) => setComponentName(event.target.value)}
               placeholder={appConfig.texts.componentRepoComponentNamePlaceholder}
               value={componentName}
@@ -344,6 +477,7 @@ export function ComponentCandidateWorkbenchPage() {
           <label className="component-repo-control-field">
             <span>{appConfig.texts.componentRepoCategory}</span>
             <input
+              disabled={!isEditable}
               onChange={(event) => setComponentCategory(event.target.value)}
               placeholder={appConfig.texts.componentRepoCategoryPlaceholder}
               value={componentCategory}
@@ -351,39 +485,50 @@ export function ComponentCandidateWorkbenchPage() {
           </label>
           <label className="component-repo-control-field">
             <span>{appConfig.texts.componentRepoVersion}</span>
-            <input onChange={(event) => setVersion(event.target.value)} value={version} />
+            <input disabled={!isEditable} onChange={(event) => setVersion(event.target.value)} value={version} />
           </label>
           <label className="component-repo-control-field">
             <span>{appConfig.texts.componentRepoReleaseNote}</span>
-            <input onChange={(event) => setReleaseNote(event.target.value)} value={releaseNote} />
+            <input disabled={!isEditable} onChange={(event) => setReleaseNote(event.target.value)} value={releaseNote} />
           </label>
           <div className="component-repo-inline-actions component-repo-publish-actions">
-            <button onClick={() => void validate()} type="button">
+            <button disabled={!isEditable || state.loading} onClick={() => void validate()} type="button">
               <ShieldCheck aria-hidden="true" />
               {appConfig.texts.componentRepoValidate}
             </button>
-            <button disabled={!state.validationReport?.passed} onClick={() => void approve()} type="button">
-              {appConfig.texts.componentRepoApprove}
-            </button>
-            <button disabled={!state.approval || Boolean(state.publishedVersion)} onClick={() => void publish()} type="button">
+            <button disabled={!isEditable || state.loading} onClick={() => void publish()} type="button">
               {appConfig.texts.componentRepoPublish}
             </button>
           </div>
-          {state.approval ? (
+          {state.currentVersion ? (
             <div className="component-repo-summary-card">
-              <strong>Draft: {state.approval.version.id}</strong>
+              <strong>{state.currentVersion.id === state.component?.currentVersionId ? tr('componentRepo:publishedVersion') : tr('componentRepo:editingVersion')}: {state.currentVersion.id}</strong>
               <span>
-                {state.approval.component.name} · v{state.approval.version.version}
+                {state.component?.name} · v{state.currentVersion.version}
               </span>
             </div>
           ) : null}
           {state.publishedVersion ? (
             <div className="component-repo-message">
-              Published: {state.publishedVersion.id}
+              {tr('componentRepo:published')}: {state.publishedVersion.id}
             </div>
           ) : null}
         </aside>
       </section>
+      {isUploadOpen && state.component ? (
+        <ComponentUploadDialog
+          baseVersionId={state.component.currentVersionId ?? state.currentVersion?.id}
+          onClose={() => setIsUploadOpen(false)}
+          onUploaded={(result) => {
+            setIsUploadOpen(false);
+            void runTask(async () => {
+              const parsed = await parseComponentImport(result.importJob.id);
+              navigate(routeFor('componentRepoCandidate').replace(':candidateId', encodeURIComponent(parsed.candidate.id)));
+            });
+          }}
+          targetComponentId={state.component.id}
+        />
+      ) : null}
     </section>
   );
 }
@@ -407,15 +552,16 @@ function Step({ done, label }: { done: boolean; label: string }) {
 }
 
 function ValidationReport({ report }: { report: ComponentValidationReportResponse }) {
+  const tr = useAppTranslation();
   return (
     <section className="component-repo-validation">
       <div>
-        <strong>Validation</strong>
+        <strong>{tr('componentRepo:validation')}</strong>
         <StatusPill status={report.passed ? 'passed' : 'blocked'} />
       </div>
       {report.checks.map((check) => (
         <div className="component-repo-check" key={check.code}>
-          <span>{check.code}</span>
+          <span>{localizeStructuredMessage(check)}</span>
           <StatusPill status={check.status} />
         </div>
       ))}

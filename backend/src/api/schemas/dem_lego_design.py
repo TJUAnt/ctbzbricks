@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, StrictInt
 
+from src.api.schemas.task import ExportContextResponse, TaskContextRequest
+
 
 class DemBaseHStructureRequest(BaseModel):
     baseH: list[list[StrictInt]]
@@ -81,7 +83,7 @@ class DemSurfacePlanRequest(DemSurfacePatchCandidatesRequest):
     targetHeightPlate: list[list[StrictInt]]
 
 
-class DemFinalDesignModelRequest(BaseModel):
+class DemFinalDesignModelRequest(TaskContextRequest):
     modelId: str
     strategy: str
     horizontalKmPerStud: float
@@ -253,6 +255,8 @@ class DemVerticalContinuityResponse(BaseModel):
 
 
 class DemFinalDesignResponse(BaseModel):
+    modelId: str
+    exportContext: ExportContextResponse
     strategy: str
     surfacePlan: DemSurfacePlanResponse
     supportBase: dict[str, list[DemSupportBasePlacementResponse]]

@@ -1,9 +1,11 @@
 import React from 'react';
 import { ArrowRight, FileArchive, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import appConfig from '../app/appConfig.json';
+import appConfig from '../app/appConfig';
+import { useAppTranslation } from '../i18n';
 import {
   createComponentImport,
+  createComponentImportWithUploadSession,
   parseComponentImport,
   type ComponentImportCreateResponse,
   type ComponentImportParseResponse,
@@ -11,6 +13,7 @@ import {
 import { routeFor } from './ComponentRepoPage';
 
 export function ComponentImportPage() {
+  const tr = useAppTranslation();
   const navigate = useNavigate();
   const [sourceFile, setSourceFile] = React.useState<File | null>(null);
   const [exchangeFile, setExchangeFile] = React.useState<File | null>(null);
@@ -27,7 +30,7 @@ export function ComponentImportPage() {
     setError(null);
     setParseResult(null);
     try {
-      setCreatedImport(await createComponentImport(sourceFile, exchangeFile));
+      setCreatedImport(await createComponentImportWithFallback(sourceFile, exchangeFile));
     } catch (importError) {
       setError(importError instanceof Error ? importError.message : appConfig.texts.loadFailed);
     } finally {
@@ -81,7 +84,7 @@ export function ComponentImportPage() {
         >
           <div className="component-repo-panel-title">
             <Upload aria-hidden="true" />
-            <span>Upload</span>
+            <span>{tr('componentRepo:upload')}</span>
           </div>
 
           <FileInput
@@ -121,17 +124,17 @@ export function ComponentImportPage() {
         <aside className="component-repo-panel">
           <div className="component-repo-panel-title">
             <FileArchive aria-hidden="true" />
-            <span>Import Result</span>
+            <span>{tr('componentRepo:importResult')}</span>
           </div>
 
           {!createdImport ? <div className="asset-empty">{appConfig.texts.componentRepoNoCandidate}</div> : null}
 
           {createdImport ? (
             <div className="component-repo-card-list">
-              <InfoCard label="Import ID" value={createdImport.importJob.id} />
-              <InfoCard label="Source" value={createdImport.sourceArtifact.originalFilename} />
-              <InfoCard label="Exchange" value={createdImport.exchangeArtifact?.originalFilename ?? '-'} />
-              <InfoCard label="Status" value={createdImport.importJob.status} />
+              <InfoCard label={tr('componentRepo:importId')} value={createdImport.importJob.id} />
+              <InfoCard label={tr('componentRepo:source')} value={createdImport.sourceArtifact.originalFilename} />
+              <InfoCard label={tr('componentRepo:exchange')} value={createdImport.exchangeArtifact?.originalFilename ?? '-'} />
+              <InfoCard label={tr('componentRepo:status')} value={createdImport.importJob.status} />
             </div>
           ) : null}
 
@@ -145,7 +148,7 @@ export function ComponentImportPage() {
                 ))}
               </div>
               <button className="component-repo-primary-button" onClick={openCandidate} type="button">
-                打开工作台
+                {tr('componentRepo:openWorkbench')}
                 <ArrowRight aria-hidden="true" />
               </button>
             </div>
@@ -154,6 +157,18 @@ export function ComponentImportPage() {
       </section>
     </section>
   );
+}
+
+async function createComponentImportWithFallback(
+  sourceFile: File,
+  exchangeFile: File | null,
+): Promise<ComponentImportCreateResponse> {
+  try {
+    return await createComponentImportWithUploadSession(sourceFile, exchangeFile);
+  } catch (directUploadError) {
+    console.warn('Component Repo direct upload failed, falling back to multipart upload.', directUploadError);
+    return createComponentImport(sourceFile, exchangeFile);
+  }
 }
 
 function FileInput({

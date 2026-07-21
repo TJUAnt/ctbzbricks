@@ -4,13 +4,20 @@ import json
 from threading import Thread
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 
+from src.api.errors import DomainError, domain_error_from_exception
 from src.api.schemas.lego_design import (
     LegoDesignCandidatePartsResponse,
     LegoDesignJobRequest,
     LegoDesignJobResponse,
     LegoDesignMetadataResponse,
+)
+from src.i18n.messages import error_from_exception, progress
+from src.i18n.export_catalog import (
+    content_disposition,
+    create_export_context,
+    localized_filename,
 )
 from src.services.lego_design_service import (
     create_lego_design_result,
@@ -40,21 +47,27 @@ def create_lego_design_router(config: dict) -> APIRouter:
         try:
             return lego_design_candidates(request.app.state.db_engine, config, footprint)
         except ValueError as error:
-            raise HTTPException(
-                status_code=config["http_status"]["bad_request"],
-                detail=str(error),
+            raise domain_error_from_exception(
+                error,
+                "lego_design.candidates_failed",
+                params={"footprint": footprint},
+                http_status=config["http_status"]["bad_request"],
             ) from error
 
     @router.post(config["routes"]["jobs"], response_model=LegoDesignJobResponse)
     def create_job(request_body: LegoDesignJobRequest, request: Request) -> dict:
         job_id = uuid4().hex[: int(config["jobs"]["job_id_hex_length"])]
+        export_context = create_export_context(request_body.locale, request_body.timezone)
         job = {
             "jobId": job_id,
             "status": config["job_status"]["queued"],
-            "progress": config["progress"]["queued"],
+            "progress": progress(config["progress"]["queued"], "lego_design.progress.queued"),
             "projectId": request_body.projectId,
             "result": None,
             "error": None,
+            "locale": request_body.locale,
+            "timezone": request_body.timezone,
+            "catalogVersion": export_context["catalogVersion"],
         }
         with request.app.state.lego_design_jobs_lock:
             request.app.state.lego_design_jobs[job_id] = job
@@ -71,9 +84,10 @@ def create_lego_design_router(config: dict) -> APIRouter:
         with request.app.state.lego_design_jobs_lock:
             active_job = request.app.state.lego_design_jobs.get(job_id)
         if active_job is None:
-            raise HTTPException(
-                status_code=config["http_status"]["not_found"],
-                detail=config["errors"]["job_not_found"],
+            raise DomainError(
+                config["errors"]["job_not_found"],
+                params={"jobId": job_id},
+                http_status=config["http_status"]["not_found"],
             )
         return public_job(active_job)
 
@@ -86,31 +100,35 @@ def create_lego_design_router(config: dict) -> APIRouter:
         with request.app.state.lego_design_jobs_lock:
             active_job = request.app.state.lego_design_jobs.get(job_id)
         if active_job is None:
-            raise HTTPException(
-                status_code=config["http_status"]["not_found"],
-                detail=config["errors"]["job_not_found"],
+            raise DomainError(
+                config["errors"]["job_not_found"],
+                params={"jobId": job_id},
+                http_status=config["http_status"]["not_found"],
             )
         if active_job["status"] != config["job_status"]["complete"] or active_job["result"] is None:
-            raise HTTPException(
-                status_code=config["http_status"]["bad_request"],
-                detail=config["errors"]["design_not_ready"],
+            raise DomainError(
+                config["errors"]["design_not_ready"],
+                params={"jobId": job_id},
+                http_status=config["http_status"]["bad_request"],
             )
         metadata = lego_design_metadata(request.app.state.db_engine, config)
         try:
-            content = export_lego_design_ldraw(active_job["result"], metadata, include_base, config)
+            content = export_lego_design_ldraw(
+                active_job["result"], metadata, include_base, config, job_export_context(active_job),
+            )
         except ValueError as error:
-            raise HTTPException(
-                status_code=config["http_status"]["bad_request"],
-                detail=str(error),
+            raise domain_error_from_exception(
+                error,
+                "lego_design.export_ldraw_failed",
+                params={"jobId": job_id},
+                http_status=config["http_status"]["bad_request"],
             ) from error
-        filename = config["ldraw"]["filename_template"].format(job_id=job_id)
+        filename = localized_filename(job_export_context(active_job), "legoLdraw", jobId=job_id)
         return Response(
             content=content,
             media_type=config["ldraw"]["content_type"],
             headers={
-                config["ldraw"]["content_disposition_header"]: config["ldraw"]["content_disposition_template"].format(
-                    filename=filename,
-                ),
+                config["ldraw"]["content_disposition_header"]: content_disposition(filename),
             },
         )
 
@@ -123,20 +141,22 @@ def create_lego_design_router(config: dict) -> APIRouter:
         active_job = completed_job(job_id, request, config)
         metadata = lego_design_metadata(request.app.state.db_engine, config)
         try:
-            plan = export_lego_design_plan(active_job["result"], metadata, include_base, config)
+            plan = export_lego_design_plan(
+                active_job["result"], metadata, include_base, config, job_export_context(active_job),
+            )
         except ValueError as error:
-            raise HTTPException(
-                status_code=config["http_status"]["bad_request"],
-                detail=str(error),
+            raise domain_error_from_exception(
+                error,
+                "lego_design.export_plan_failed",
+                params={"jobId": job_id},
+                http_status=config["http_status"]["bad_request"],
             ) from error
-        filename = config["plan_export"]["filename_template"].format(job_id=job_id)
+        filename = localized_filename(job_export_context(active_job), "legoPlan", jobId=job_id)
         return Response(
             content=json.dumps(plan, ensure_ascii=False, indent=config["plan_export"]["json_indent"]),
             media_type=config["plan_export"]["content_type"],
             headers={
-                config["plan_export"]["content_disposition_header"]: config["plan_export"]["content_disposition_template"].format(
-                    filename=filename,
-                ),
+                config["plan_export"]["content_disposition_header"]: content_disposition(filename),
             },
         )
 
@@ -147,20 +167,32 @@ def completed_job(job_id: str, request: Request, config: dict) -> dict:
     with request.app.state.lego_design_jobs_lock:
         active_job = request.app.state.lego_design_jobs.get(job_id)
     if active_job is None:
-        raise HTTPException(
-            status_code=config["http_status"]["not_found"],
-            detail=config["errors"]["job_not_found"],
+        raise DomainError(
+            config["errors"]["job_not_found"],
+            params={"jobId": job_id},
+            http_status=config["http_status"]["not_found"],
         )
     if active_job["status"] != config["job_status"]["complete"] or active_job["result"] is None:
-        raise HTTPException(
-            status_code=config["http_status"]["bad_request"],
-            detail=config["errors"]["design_not_ready"],
+        raise DomainError(
+            config["errors"]["design_not_ready"],
+            params={"jobId": job_id},
+            http_status=config["http_status"]["bad_request"],
         )
     return active_job
 
 
 def run_lego_design_job(app: object, config: dict, job_id: str, project_id: str) -> None:
-    update_job(app, job_id, {"status": config["job_status"]["running"]})
+    update_job(
+        app,
+        job_id,
+        {
+            "status": config["job_status"]["running"],
+            "progress": progress(
+                config["progress"]["metadata_loaded"],
+                "lego_design.progress.processing",
+            ),
+        },
+    )
     try:
         project = load_pixel_art_project(
             app.state.db_engine,
@@ -174,24 +206,32 @@ def run_lego_design_job(app: object, config: dict, job_id: str, project_id: str)
             project,
             metadata,
             config,
-            lambda progress: update_job(app, job_id, {"progress": progress}),
+            lambda percent: update_job(
+                app,
+                job_id,
+                {"progress": progress(percent, "lego_design.progress.processing")},
+            ),
         )
         update_job(
             app,
             job_id,
             {
                 "status": config["job_status"]["complete"],
-                "progress": config["progress"]["complete"],
+                "progress": progress(
+                    config["progress"]["complete"],
+                    "lego_design.progress.completed",
+                ),
                 "result": result,
             },
         )
-    except ValueError as error:
+    except Exception as error:
         update_job(
             app,
             job_id,
             {
                 "status": config["job_status"]["failed"],
-                "error": str(error),
+                "progress": progress(100, "lego_design.progress.failed"),
+                "error": error_from_exception(error, "lego_design.generation_failed"),
             },
         )
 
@@ -212,4 +252,15 @@ def public_job(job: dict) -> dict:
         "projectId": job["projectId"],
         "result": job["result"],
         "error": job["error"],
+        "locale": job["locale"],
+        "timezone": job["timezone"],
+        "catalogVersion": job["catalogVersion"],
+    }
+
+
+def job_export_context(job: dict) -> dict[str, str]:
+    return {
+        "locale": job["locale"],
+        "timezone": job["timezone"],
+        "catalogVersion": job["catalogVersion"],
     }

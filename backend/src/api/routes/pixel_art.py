@@ -1,8 +1,9 @@
 """Pixel art API routes."""
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from pydantic import ValidationError
 
+from src.api.errors import DomainError, domain_error_from_exception
 from src.api.schemas.pixel_art import (
     PixelArtGenerateSettings,
     PixelArtProjectListResponse,
@@ -18,6 +19,7 @@ from src.services.pixel_art_service import (
     save_pixel_art_project,
     update_pixel_art_project_pixels,
 )
+from src.i18n.domain_content import normalize_content_locale
 
 
 def create_pixel_art_router(config: dict) -> APIRouter:
@@ -44,15 +46,16 @@ def create_pixel_art_router(config: dict) -> APIRouter:
     async def save_pixel_art_project_route(
         request: Request,
         name: str = Form(...),
+        contentLocale: str = Form(...),
         settings: str = Form(...),
         image: UploadFile = File(...),
     ) -> dict:
         try:
             generation_settings = PixelArtGenerateSettings.model_validate_json(settings)
         except ValidationError as error:
-            raise HTTPException(
-                status_code=config["http_status"]["bad_request"],
-                detail=config["errors"]["invalid_settings"],
+            raise DomainError(
+                config["errors"]["invalid_settings"],
+                http_status=config["http_status"]["bad_request"],
             ) from error
         image_bytes = await image.read()
         try:
@@ -64,9 +67,10 @@ def create_pixel_art_router(config: dict) -> APIRouter:
                 generation_settings,
             )
         except ValueError as error:
-            raise HTTPException(
-                status_code=config["http_status"]["bad_request"],
-                detail=str(error),
+            raise domain_error_from_exception(
+                error,
+                "pixel_art.generation_failed",
+                http_status=config["http_status"]["bad_request"],
             ) from error
         return save_pixel_art_project(
             request.app.state.db_engine,
@@ -74,15 +78,17 @@ def create_pixel_art_router(config: dict) -> APIRouter:
             name,
             image_bytes,
             asset,
+            normalize_content_locale(contentLocale),
         )
 
     @router.get(config["routes"]["project"], response_model=PixelArtProjectResponse)
     def pixel_art_project(project_id: str, request: Request) -> dict:
         project = load_pixel_art_project(request.app.state.db_engine, config, project_id)
         if project is None:
-            raise HTTPException(
-                status_code=config["http_status"]["not_found"],
-                detail=config["errors"]["project_not_found"],
+            raise DomainError(
+                config["errors"]["project_not_found"],
+                params={"projectId": project_id},
+                http_status=config["http_status"]["not_found"],
             )
         return project
 
@@ -100,9 +106,10 @@ def create_pixel_art_router(config: dict) -> APIRouter:
             request_body.pixels,
         )
         if project is None:
-            raise HTTPException(
-                status_code=config["http_status"]["not_found"],
-                detail=config["errors"]["project_not_found"],
+            raise DomainError(
+                config["errors"]["project_not_found"],
+                params={"projectId": project_id},
+                http_status=config["http_status"]["not_found"],
             )
         return project
 

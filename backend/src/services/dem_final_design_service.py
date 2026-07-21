@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import sessionmaker
 
+from src.i18n.export_catalog import export_document, localized_step_name, validate_export_context
 from src.model.models import Color, InventoryPart, LDrawPart, XrefPartNumber
 from src.services.dem_lego_design_service import (
     apply_dem_part_xref,
@@ -1414,25 +1415,30 @@ def load_colored_replacement_final_dem_design(
 def export_dem_final_design_ldraw(
     dem_design: dict[str, Any],
     config: dict[str, Any],
+    export_context: dict[str, Any],
 ) -> str:
     """Convert the final DEM design to step-constrained LDraw text."""
     ldraw_config = config["dem_ldraw"]
+    export_context = validate_export_context(export_context)
     support_base = dem_design["supportBase"]
     structure = dem_design["baseStructure"]
     surface_placements = dem_design["surfacePlacements"]
     grid_width = structure["widthStud"]
     grid_depth = structure["depthStud"]
 
-    lines = _dem_ldraw_header(ldraw_config)
+    lines = _dem_ldraw_header(ldraw_config, export_context)
 
+    localized_steps = [
+        {**step, "name": localized_step_name(step, export_context, "dem")}
+        for step in dem_design["steps"]
+    ]
     constrained_steps = _dem_resolve_and_constrain_steps(
-        dem_design["steps"],
+        localized_steps,
         support_base,
         structure["placements"],
         surface_placements,
         ldraw_config,
     )
-
     for step_index, step in enumerate(constrained_steps):
         if step_index:
             lines.append(_dem_ldraw_step_line(ldraw_config))
@@ -1583,11 +1589,15 @@ def _map_dem_placement(
     }
 
 
-def _dem_ldraw_header(config: dict[str, Any]) -> list[str]:
+def _dem_ldraw_header(config: dict[str, Any], export_context: dict[str, Any]) -> list[str]:
+    document = export_document(export_context, "demDesignReport")
     return [
         _dem_ldraw_meta_line(config["file_command"], config["model_file_name"], config),
         _dem_ldraw_meta_line(config["name_command"], config["model_file_name"], config),
         _dem_ldraw_meta_line(config["author_command"], config["author"], config),
+        _dem_ldraw_meta_line(config["comment_prefix"], document["title"], config),
+        _dem_ldraw_meta_line(config["comment_prefix"], document["description"], config),
+        _dem_ldraw_meta_line(config["comment_prefix"], document["catalogVersion"], config),
     ]
 
 

@@ -73,7 +73,7 @@
       "pattern_key": "idx_dem_slope_pattern_key"
     },
     "errors": {
-      "missing_ldraw_parts": "DEM slope catalog references missing LDraw parts: {part_ids}"
+      "missing_ldraw_parts": "dem_slope_catalog.missing_ldraw_parts"
     }
   },
   "pattern_generation": {
@@ -90,9 +90,9 @@
       {"name": "west", "x": -1, "z": 0}
     ],
     "errors": {
-      "empty_pattern_surface": "DEM slope pattern surface is empty",
-      "missing_source_rotation": "DEM slope capability is missing the configured source rotation",
-      "pattern_table_not_empty": "DEM slope candidate pattern table must be empty before schema recreation"
+      "empty_pattern_surface": "dem_slope_catalog.empty_pattern_surface",
+      "missing_source_rotation": "dem_slope_catalog.missing_source_rotation",
+      "pattern_table_not_empty": "dem_slope_catalog.pattern_table_not_empty"
     }
   },
   "output": {

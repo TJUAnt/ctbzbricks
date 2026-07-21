@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from src.api.schemas.task import (
+    StructuredCheckResponse,
+    StructuredIssueResponse,
+    StructuredMessageResponse,
+)
 
 
 class ComponentArtifactResponse(BaseModel):
@@ -36,8 +42,10 @@ class ComponentImportResponse(BaseModel):
     createdBy: str
     createdAt: str
     completedAt: str | None
-    failureReason: str | None
+    failure: StructuredMessageResponse | None
     metadata: dict[str, Any]
+    sourceFilename: str | None = None
+    sourceFileSize: int | None = None
 
 
 class ComponentSceneSnapshotResponse(BaseModel):
@@ -48,7 +56,7 @@ class ComponentSceneSnapshotResponse(BaseModel):
     rootModelId: str | None
     document: dict[str, Any]
     bom: dict[str, int]
-    parseIssues: list[dict[str, Any]]
+    parseIssues: list[StructuredIssueResponse]
     createdAt: str
 
 
@@ -69,10 +77,50 @@ class ComponentImportCreateResponse(BaseModel):
     exchangeArtifact: ComponentArtifactResponse | None
 
 
+class ComponentUploadFileSpec(BaseModel):
+    filename: str
+    contentType: str | None = None
+    fileSize: int | None = None
+
+
+class ComponentUploadSessionCreateRequest(BaseModel):
+    sourceFile: ComponentUploadFileSpec
+    exchangeFile: ComponentUploadFileSpec | None = None
+    targetComponentId: str | None = None
+    baseVersionId: str | None = None
+    contentLocale: str
+
+
+class ComponentUploadTargetResponse(BaseModel):
+    role: str
+    artifactId: str
+    artifactType: str
+    originalFilename: str
+    bucket: str
+    objectPath: str
+    contentType: str
+    uploadSessionId: str
+
+
+class ComponentUploadSessionResponse(BaseModel):
+    id: str
+    ownerId: str
+    status: str
+    bucket: str
+    uploads: list[ComponentUploadTargetResponse]
+    createdBy: str
+    createdAt: str
+    completedAt: str | None
+    failure: StructuredMessageResponse | None
+    metadata: dict[str, Any]
+
+
 class ComponentImportParseResponse(BaseModel):
     importJob: ComponentImportResponse
     sceneSnapshot: ComponentSceneSnapshotResponse
     candidate: ComponentCandidateResponse
+    component: "ComponentResponse"
+    version: "ComponentVersionResponse"
 
 
 class ComponentRelationCandidateResponse(BaseModel):
@@ -158,25 +206,18 @@ class ComponentValidationReportResponse(BaseModel):
     componentVersionId: str | None
     validationLevel: str
     passed: bool
-    checks: list[dict[str, Any]]
-    issues: list[dict[str, Any]]
+    checks: list[StructuredCheckResponse]
+    issues: list[StructuredIssueResponse]
     validatorVersion: str
     createdAt: str
-
-
-class ComponentApproveRequest(BaseModel):
-    name: str
-    category: str | None = None
-    componentId: str | None = None
-    version: str = "0.1.0"
-    revision: int = 1
-    description: str | None = None
-    tags: list[str] = []
 
 
 class ComponentResponse(BaseModel):
     id: str
     name: str
+    contentKind: str
+    contentLocale: str
+    translationStatus: str
     category: str | None
     status: str
     currentVersionId: str | None
@@ -186,6 +227,72 @@ class ComponentResponse(BaseModel):
     createdBy: str
     createdAt: str
     updatedAt: str | None
+
+
+class ComponentPreviewPartResponse(BaseModel):
+    """One Part instance placed by the Component assembly snapshot."""
+
+    instanceId: str = Field(description="Stable ID of this assembly instance.")
+    partRef: str = Field(description="Normalized LDraw Part filename, such as 3001.dat.")
+    colorCode: str = Field(description="LDraw color code stored by the assembly instance.")
+    transform: dict[str, Any] = Field(
+        description=(
+            "World transform in LDraw coordinates: position in LDU plus a row-major "
+            "3 by 3 orientation matrix."
+        )
+    )
+    bbox: dict[str, float] = Field(
+        description=(
+            "Local Part bounds in LDU, used for logical-size calculations and diagnostics; "
+            "the bounds are not the rendered shape."
+        )
+    )
+
+
+class ComponentPreviewSourceResponse(BaseModel):
+    """Repository record from which the preview assembly was selected."""
+
+    kind: str = Field(description="Source kind: component or import.")
+    id: str = Field(description="Stable Component Repo source ID.")
+    name: str = Field(description="Localized Component name or imported artifact filename.")
+    status: str = Field(description="Machine-readable workflow status of the source record.")
+
+
+class ComponentPreviewMeshResponse(BaseModel):
+    """Indexed local-space triangle mesh shared by all instances of one Part."""
+
+    partRef: str = Field(description="Part reference matched by assembly instances.")
+    positions: list[float] = Field(
+        description="Flat xyz vertex coordinates in LDU, grouped by three values."
+    )
+    indices: list[int] = Field(
+        description="Zero-based vertex indices grouped by three values per triangle."
+    )
+    triangleCount: int = Field(description="Number of triangles represented by indices.")
+
+
+class ComponentPreviewResponse(BaseModel):
+    """Render contract combining Component placement data with reusable Part geometry."""
+
+    source: ComponentPreviewSourceResponse = Field(
+        description="Repository record selected for this preview."
+    )
+    component: ComponentResponse | None = Field(
+        description="Component metadata, or null when previewing an unbound import."
+    )
+    versionId: str | None = Field(
+        description="Component version ID, or null before an import becomes a version."
+    )
+    partCount: int = Field(description="Number of Part instances in the assembly.")
+    logicalSize: dict[str, float] = Field(
+        description="Overall assembly size in studs for width/depth and plates for height."
+    )
+    parts: list[ComponentPreviewPartResponse] = Field(
+        description="Assembly instances and their world transforms."
+    )
+    meshes: list[ComponentPreviewMeshResponse] = Field(
+        description="One reusable local-space mesh for each unique partRef."
+    )
 
 
 class ComponentVersionResponse(BaseModel):
@@ -210,11 +317,9 @@ class ComponentVersionResponse(BaseModel):
     publishedAt: str | None
 
 
-class ComponentApproveResponse(BaseModel):
-    component: ComponentResponse
-    version: ComponentVersionResponse
-    validationReport: ComponentValidationReportResponse
-
-
 class ComponentVersionPublishRequest(BaseModel):
     releaseNote: str | None = None
+    name: str | None = None
+    category: str | None = None
+    version: str | None = None
+    contentLocale: str | None = None

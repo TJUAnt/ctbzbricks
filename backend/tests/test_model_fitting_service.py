@@ -67,6 +67,8 @@ class ModelFittingServiceTest(unittest.TestCase):
                     "modelTypeHint": None,
                     "semanticPreset": None,
                     "targetWidthStud": None,
+                    "locale": "zh-CN",
+                    "timezone": "Asia/Shanghai",
                 },
             )
 
@@ -103,6 +105,8 @@ class ModelFittingServiceTest(unittest.TestCase):
                     "modelTypeHint": config["semantic"]["vehicle_model_type"],
                     "semanticPreset": config["semantic"]["vehicle_8_wide_preset"],
                     "targetWidthStud": 8,
+                    "locale": "en-US",
+                    "timezone": "UTC",
                 },
             )
 
@@ -111,6 +115,8 @@ class ModelFittingServiceTest(unittest.TestCase):
             config["semantic"]["vehicle_8_wide_preset"],
         )
         self.assertEqual(job["settings"]["scaleToLdu"], 80)
+        self.assertEqual(job["locale"], "en-US")
+        self.assertEqual(job["timezone"], "UTC")
         self.assertEqual(job["targetAnalysis"]["normalizedBBox"]["width"], 160)
         self.assertEqual(len(job["blocks"]), len(config["semantic"]["block_templates"]))
         self.assertEqual(job["blocks"][0]["blockType"], config["target_block"]["vehicle_region_type"])
@@ -235,6 +241,7 @@ def seed_mesh_model_asset(engine, config: dict, model_path: Path) -> None:
             ModelAsset(
                 id="mesh-model",
                 name="mesh model",
+                content_locale="en-US",
                 model_type=config["model_asset"]["required_model_type"],
                 source_type="direct_upload",
                 source_name="sample.glb",
@@ -259,6 +266,7 @@ def seed_non_mesh_model_asset(engine) -> None:
             ModelAsset(
                 id="dem-model",
                 name="dem model",
+                content_locale="en-US",
                 model_type="dem",
                 source_type="test",
                 source_name="dem.json",

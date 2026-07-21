@@ -85,17 +85,17 @@ class LDrawModel:
 class LDrawParseIssue:
     """Non-fatal parser issue."""
 
-    issue_type: str
-    line_no: int
-    message: str
-    raw_line: str
+    code: str
+    severity: str
+    params: dict[str, Any]
+    path: tuple[str | int, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "issueType": self.issue_type,
-            "lineNo": self.line_no,
-            "message": self.message,
-            "rawLine": self.raw_line,
+            "code": self.code,
+            "severity": self.severity,
+            "params": self.params,
+            "path": list(self.path),
         }
 
 

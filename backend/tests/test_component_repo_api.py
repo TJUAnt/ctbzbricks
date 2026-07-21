@@ -9,12 +9,21 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
+from src.api.errors import install_error_handlers
 from src.api.routes.component_repo import create_component_repo_router
 from src.component_repo.services import ensure_component_repo_tables
 from src.component_repo.storage import LocalArtifactStorage
 from src.config.app_settings import load_json_config
 from src.config.component_repo_config import REQUIRED_COMPONENT_REPO_CONFIG_KEYS
-from src.model.models import ConnectorInstance
+from src.model.models import (
+    ConnectorInstance,
+    LDrawFile,
+    LDrawPart,
+    LDrawPartGeometry,
+)
+from src.services.fitting_candidate_profile_service import (
+    ensure_fitting_candidate_profile_table,
+)
 
 
 class ComponentRepoApiTest(unittest.TestCase):
@@ -27,8 +36,10 @@ class ComponentRepoApiTest(unittest.TestCase):
         )
         ConnectorInstance.__table__.create(bind=engine)
         ensure_component_repo_tables(engine)
+        ensure_fitting_candidate_profile_table(engine)
         with tempfile.TemporaryDirectory() as directory:
             app = FastAPI()
+            install_error_handlers(app)
             app.state.db_engine = engine
             app.state.component_repo_storage = LocalArtifactStorage(
                 root_path=Path(directory),
@@ -36,10 +47,46 @@ class ComponentRepoApiTest(unittest.TestCase):
                 provider=config["storage"]["local_provider"],
             )
             app.include_router(create_component_repo_router(config))
+            openapi = app.openapi()
+            preview_operation = openapi["paths"][
+                config["routes"]["component_preview_first"]
+            ]["get"]
+            self.assertEqual(
+                preview_operation["summary"],
+                "Get the first previewable Component Repo item",
+            )
+            self.assertIn("Component snapshot defines placement", preview_operation["description"])
+            locale_parameter = next(
+                parameter
+                for parameter in preview_operation["parameters"]
+                if parameter["name"] == "contentLocale"
+            )
+            self.assertIn("locale-neutral", locale_parameter["description"])
+            mesh_schema = openapi["components"]["schemas"]["ComponentPreviewMeshResponse"]
+            self.assertIn(
+                "LDU",
+                mesh_schema["properties"]["positions"]["description"],
+            )
+            version_preview_operation = openapi["paths"][
+                config["routes"]["component_version_preview"]
+            ]["get"]
+            self.assertEqual(version_preview_operation["summary"], "Get one Component version preview")
             client = TestClient(app)
+
+            empty_preview_response = client.get(
+                config["routes"]["component_preview_first"],
+                params={"contentLocale": "zh-CN"},
+            )
+
+            self.assertEqual(empty_preview_response.status_code, 404)
+            self.assertEqual(
+                empty_preview_response.json()["error"]["code"],
+                "component_repo.preview_empty",
+            )
 
             response = client.post(
                 config["routes"]["component_imports"],
+                data={"content_locale": "zh-CN"},
                 files={
                     "source_file": (
                         "wheel_shell_component2.ldr",
@@ -79,9 +126,15 @@ class ComponentRepoApiTest(unittest.TestCase):
         )
         ConnectorInstance.__table__.create(bind=engine)
         ensure_component_repo_tables(engine)
+        ensure_fitting_candidate_profile_table(engine)
         seed_connector_pair(engine)
         with tempfile.TemporaryDirectory() as directory:
+            preview_root = Path(directory) / "ldraw"
+            seed_preview_ldraw_library(preview_root)
+            config["preview"]["ldraw_root_env"] = "COMPONENT_REPO_TEST_LDRAW_ROOT"
+            config["preview"]["ldraw_root_candidates"] = [str(preview_root)]
             app = FastAPI()
+            install_error_handlers(app)
             app.state.db_engine = engine
             app.state.component_repo_storage = LocalArtifactStorage(
                 root_path=Path(directory),
@@ -93,6 +146,7 @@ class ComponentRepoApiTest(unittest.TestCase):
 
             response = client.post(
                 config["routes"]["component_imports"],
+                data={"content_locale": "en-US"},
                 files={
                     "source_file": (
                         "wheel_shell_component.io",
@@ -120,6 +174,16 @@ class ComponentRepoApiTest(unittest.TestCase):
                 config["artifacts"]["ldraw_ldr"],
             )
 
+            imports_response = client.get(config["routes"]["component_imports"])
+
+            self.assertEqual(imports_response.status_code, 200)
+            self.assertEqual(len(imports_response.json()), 1)
+            self.assertEqual(
+                imports_response.json()[0]["sourceFilename"],
+                "wheel_shell_component.io",
+            )
+            self.assertEqual(imports_response.json()[0]["sourceFileSize"], len(b"io-bytes"))
+
             parse_response = client.post(
                 config["routes"]["component_import_parse"].format(
                     import_id=payload["importJob"]["id"],
@@ -134,6 +198,10 @@ class ComponentRepoApiTest(unittest.TestCase):
             )
             self.assertEqual(parse_payload["candidate"]["summary"]["modelCount"], 1)
             self.assertEqual(parse_payload["candidate"]["summary"]["partInstanceCount"], 2)
+            self.assertEqual(
+                parse_payload["version"]["status"],
+                config["versions"]["status"]["draft"],
+            )
 
             candidate_response = client.get(
                 config["routes"]["component_import_candidate"].format(
@@ -145,6 +213,72 @@ class ComponentRepoApiTest(unittest.TestCase):
             self.assertEqual(
                 candidate_response.json()["id"],
                 parse_payload["candidate"]["id"],
+            )
+
+            explicit_candidate_preview_response = client.get(
+                config["routes"]["candidate_preview"].format(
+                    candidate_id=parse_payload["candidate"]["id"],
+                ),
+                params={"contentLocale": "zh-CN"},
+            )
+
+            self.assertEqual(explicit_candidate_preview_response.status_code, 200)
+            self.assertEqual(
+                explicit_candidate_preview_response.json()["versionId"],
+                parse_payload["version"]["id"],
+            )
+            self.assertEqual(
+                explicit_candidate_preview_response.json()["partCount"],
+                2,
+            )
+
+            candidate_preview_response = client.get(
+                config["routes"]["component_preview_first"],
+                params={"contentLocale": "zh-CN"},
+            )
+
+            self.assertEqual(candidate_preview_response.status_code, 200)
+            self.assertEqual(candidate_preview_response.json()["source"]["kind"], "component")
+            self.assertEqual(
+                candidate_preview_response.json()["source"]["id"],
+                parse_payload["component"]["id"],
+            )
+            self.assertEqual(
+                candidate_preview_response.json()["source"]["name"],
+                "wheel_shell_component",
+            )
+            self.assertEqual(
+                candidate_preview_response.json()["source"]["status"],
+                config["components"]["status"]["draft"],
+            )
+            self.assertEqual(
+                candidate_preview_response.json()["component"]["id"],
+                parse_payload["component"]["id"],
+            )
+            self.assertEqual(
+                candidate_preview_response.json()["versionId"],
+                parse_payload["version"]["id"],
+            )
+            self.assertEqual(candidate_preview_response.json()["partCount"], 2)
+            meshes_by_ref = {
+                mesh["partRef"]: mesh
+                for mesh in candidate_preview_response.json()["meshes"]
+            }
+            self.assertEqual(set(meshes_by_ref), {"male.dat", "female.dat"})
+            self.assertEqual(meshes_by_ref["male.dat"]["triangleCount"], 2)
+            self.assertEqual(meshes_by_ref["female.dat"]["triangleCount"], 1)
+            self.assertEqual(len(meshes_by_ref["male.dat"]["positions"]), 12)
+            self.assertEqual(len(meshes_by_ref["male.dat"]["indices"]), 6)
+
+            unavailable_free_response = client.get(
+                config["routes"]["candidate_free_connectors"].format(
+                    candidate_id=parse_payload["candidate"]["id"],
+                )
+            )
+            self.assertEqual(unavailable_free_response.status_code, 409)
+            self.assertEqual(
+                unavailable_free_response.json()["error"]["code"],
+                "component_repo.part_library_unavailable",
             )
 
             relation_response = client.post(
@@ -189,38 +323,36 @@ class ComponentRepoApiTest(unittest.TestCase):
             self.assertEqual(validation_response.status_code, 200)
             self.assertTrue(validation_response.json()["passed"])
 
-            approve_response = client.post(
-                config["routes"]["candidate_approve"].format(
-                    candidate_id=parse_payload["candidate"]["id"],
-                ),
-                json={
-                    "name": "Wheel Shell Component",
-                    "category": "technic",
-                    "version": "0.1.0",
-                    "tags": ["api-test"],
-                },
+            draft_version_id = parse_payload["version"]["id"]
+
+            draft_preview_response = client.get(
+                config["routes"]["component_preview_first"],
+                params={"contentLocale": "zh-CN"},
             )
 
-            self.assertEqual(approve_response.status_code, 200)
-            self.assertEqual(
-                approve_response.json()["version"]["status"],
-                config["versions"]["status"]["draft"],
-            )
-            draft_version_id = approve_response.json()["version"]["id"]
+            self.assertEqual(draft_preview_response.status_code, 200)
+            self.assertEqual(draft_preview_response.json()["versionId"], draft_version_id)
+            self.assertEqual(draft_preview_response.json()["component"]["status"], "draft")
 
-            hidden_draft_response = client.get(
+            draft_response = client.get(
                 config["routes"]["component_version"].format(
                     version_id=draft_version_id,
                 )
             )
 
-            self.assertEqual(hidden_draft_response.status_code, 404)
+            self.assertEqual(draft_response.status_code, 200)
 
             publish_response = client.post(
                 config["routes"]["component_version_publish"].format(
                     version_id=draft_version_id,
                 ),
-                json={"releaseNote": "first publish"},
+                json={
+                    "releaseNote": "first publish",
+                    "name": "Wheel Shell Component",
+                    "category": "technic",
+                    "version": "0.1.0",
+                    "contentLocale": "en-US",
+                },
             )
 
             self.assertEqual(publish_response.status_code, 200)
@@ -229,11 +361,24 @@ class ComponentRepoApiTest(unittest.TestCase):
                 config["versions"]["status"]["published"],
             )
 
-            components_response = client.get(config["routes"]["components"])
+            components_response = client.get(
+                config["routes"]["components"],
+                params={"contentLocale": "zh-CN"},
+            )
+            preview_response = client.get(
+                config["routes"]["component_preview_first"],
+                params={"contentLocale": "zh-CN"},
+            )
             versions_response = client.get(
                 config["routes"]["component_versions"].format(
-                    component_id=approve_response.json()["component"]["id"],
+                    component_id=parse_payload["component"]["id"],
                 )
+            )
+            version_preview_response = client.get(
+                config["routes"]["component_version_preview"].format(
+                    version_id=draft_version_id,
+                ),
+                params={"contentLocale": "zh-CN"},
             )
             version_source_response = client.get(
                 config["routes"]["component_version_source"].format(
@@ -258,8 +403,27 @@ class ComponentRepoApiTest(unittest.TestCase):
 
             self.assertEqual(components_response.status_code, 200)
             self.assertEqual(len(components_response.json()), 1)
+            self.assertEqual(components_response.json()[0]["contentLocale"], "en-US")
+            self.assertEqual(components_response.json()[0]["contentKind"], "user")
+            self.assertEqual(preview_response.status_code, 200)
+            self.assertEqual(
+                preview_response.json()["component"]["id"],
+                parse_payload["component"]["id"],
+            )
+            self.assertEqual(preview_response.json()["component"]["name"], "Wheel Shell Component")
+            self.assertEqual(preview_response.json()["partCount"], 2)
+            self.assertEqual(
+                [part["partRef"] for part in preview_response.json()["parts"]],
+                ["male.dat", "female.dat"],
+            )
+            self.assertEqual(
+                preview_response.json()["logicalSize"],
+                {"widthStud": 1.0, "depthStud": 1.0, "heightPlate": 1.0},
+            )
             self.assertEqual(versions_response.status_code, 200)
             self.assertEqual(len(versions_response.json()), 1)
+            self.assertEqual(version_preview_response.status_code, 200)
+            self.assertEqual(version_preview_response.json()["versionId"], draft_version_id)
             self.assertEqual(version_source_response.status_code, 200)
             self.assertEqual(version_source_response.content, b"io-bytes")
             self.assertEqual(immutable_interface_response.status_code, 400)
@@ -286,11 +450,70 @@ def fixture_path(relative_path: str) -> Path:
     return Path(__file__).resolve().parents[2] / relative_path
 
 
+def seed_preview_ldraw_library(root: Path) -> None:
+    parts = root / "parts"
+    high_resolution_primitives = root / "p" / "48"
+    parts.mkdir(parents=True)
+    high_resolution_primitives.mkdir(parents=True)
+    (parts / "male.dat").write_text(
+        "1 16 0 0 0 1 0 0 0 1 0 0 0 1 curve.dat\n",
+        encoding="utf-8",
+    )
+    (parts / "female.dat").write_text(
+        "3 16 0 0 0 20 0 0 0 8 20\n",
+        encoding="utf-8",
+    )
+    (high_resolution_primitives / "curve.dat").write_text(
+        "4 16 0 0 0 20 0 0 20 8 20 0 8 20\n",
+        encoding="utf-8",
+    )
+
+
 def seed_connector_pair(engine) -> None:
     from sqlalchemy.orm import sessionmaker
 
+    LDrawFile.__table__.create(bind=engine, checkfirst=True)
+    LDrawPart.__table__.create(bind=engine, checkfirst=True)
+    LDrawPartGeometry.__table__.create(bind=engine, checkfirst=True)
     Session = sessionmaker(bind=engine)
     with Session() as session:
+        for row_id, part_num in ((1, "male.dat"), (2, "female.dat")):
+            session.add(
+                LDrawFile(
+                    id=row_id,
+                    relative_path=f"parts/{part_num}",
+                    file_name=part_num,
+                    library_section="parts",
+                )
+            )
+            session.add(
+                LDrawPart(
+                    id=row_id,
+                    ldraw_part_num=part_num,
+                    file_id=row_id,
+                    name=part_num,
+                    category="Technic",
+                    relative_path=f"parts/{part_num}",
+                )
+            )
+            session.add(
+                LDrawPartGeometry(
+                    id=row_id,
+                    ldraw_part_id=row_id,
+                    bbox_min_x=0,
+                    bbox_min_y=0,
+                    bbox_min_z=0,
+                    bbox_max_x=20,
+                    bbox_max_y=8,
+                    bbox_max_z=20,
+                    width_ldu=20,
+                    height_ldu=8,
+                    depth_ldu=20,
+                    logical_width_stud=1,
+                    logical_depth_stud=1,
+                    logical_height_plate=1,
+                )
+            )
         session.add(
             ConnectorInstance(
                 id=1,

@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session
 
 from src.config.app_settings import load_json_config
+from src.i18n.messages import message
 from src.config.db_config import get_db_url
 from src.model.models import (
     DemSlopeCandidate,
@@ -53,7 +54,7 @@ def calculate_patterns(
     session: Session,
     slope_config: dict[str, Any],
     dem_config: dict[str, Any],
-) -> tuple[dict[int, tuple[dict[str, Any], ...]], list[dict[str, str]]]:
+) -> tuple[dict[int, tuple[dict[str, Any], ...]], list[dict[str, Any]]]:
     generation_config = slope_config["pattern_generation"]
     candidate_rows = session.execute(
         select(DemSlopeCandidate, LDrawPart)
@@ -81,8 +82,16 @@ def calculate_patterns(
                 maximum_patterns,
                 generation_config,
             )
-        except ValueError as error:
-            failures.append({"partId": part.ldraw_part_num, "error": str(error)})
+        except ValueError:
+            failures.append(
+                {
+                    "partId": part.ldraw_part_num,
+                    "error": message(
+                        "dem_slope_catalog.pattern_generation_failed",
+                        {"partId": part.ldraw_part_num},
+                    ),
+                }
+            )
         else:
             patterns_by_candidate[int(candidate.id)] = patterns
         if index % progress_interval == 0 or index == len(candidate_rows):

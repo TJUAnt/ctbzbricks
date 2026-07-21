@@ -6,14 +6,37 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Engine, delete, func, select
+from sqlalchemy import Engine, delete, func, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
+from src.i18n.messages import locale_catalog
 from src.model.models import ModelAsset
 
 
 def ensure_model_asset_table(engine: Engine) -> None:
     ModelAsset.__table__.create(bind=engine, checkfirst=True)
+    ensure_model_asset_content_locale_column(engine)
+
+
+def ensure_model_asset_content_locale_column(engine: Engine) -> None:
+    """Upgrade legacy model_assets tables created before locale provenance."""
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns(ModelAsset.__tablename__)
+    }
+    if "content_locale" in columns:
+        return
+    default_locale = str(locale_catalog()["default_locale"])
+    escaped_locale = default_locale.replace("'", "''")
+    preparer = engine.dialect.identifier_preparer
+    table_name = preparer.quote(ModelAsset.__tablename__)
+    column_name = preparer.quote("content_locale")
+    statement = (
+        f"ALTER TABLE {table_name} ADD COLUMN {column_name} "
+        f"VARCHAR(16) NOT NULL DEFAULT '{escaped_locale}'"
+    )
+    with engine.begin() as connection:
+        connection.execute(text(statement))
 
 
 def save_dem_model_asset(
@@ -22,12 +45,14 @@ def save_dem_model_asset(
     terrain_config: dict[str, Any],
     asset: dict[str, Any],
     model: dict[str, Any],
+    content_locale: str,
 ) -> None:
     Session = sessionmaker(bind=engine)
     with Session() as session:
         model_asset = ModelAsset(
             id=model["modelId"],
             name=model["name"],
+            content_locale=content_locale,
             model_type=asset_config["dem_model_type"],
             source_type=asset_config["dem_source_type"],
             source_name=model["source"],
@@ -55,12 +80,14 @@ def save_lego_heightmap_model_asset(
     terrain_config: dict[str, Any],
     asset: dict[str, Any],
     model: dict[str, Any],
+    content_locale: str,
 ) -> None:
     Session = sessionmaker(bind=engine)
     with Session() as session:
         model_asset = ModelAsset(
             id=model["modelId"],
             name=model["name"],
+            content_locale=content_locale,
             model_type=asset_config["lego_heightmap_model_type"],
             source_type=asset_config["lego_heightmap_source_type"],
             source_name=model["source"],
@@ -122,6 +149,7 @@ def model_asset_response(model_asset: ModelAsset) -> dict[str, Any]:
     return {
         "id": model_asset.id,
         "name": model_asset.name,
+        "contentLocale": model_asset.content_locale,
         "modelType": model_asset.model_type,
         "sourceType": model_asset.source_type,
         "sourceName": model_asset.source_name,

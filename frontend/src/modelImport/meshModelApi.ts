@@ -1,4 +1,6 @@
 import type { ModelAsset } from '../assets/modelAssetApi';
+import { requestJson } from '../api/client';
+import { currentTaskContext } from '../api/taskContext';
 
 export async function uploadMeshModel(
   apiUrl: string,
@@ -7,15 +9,12 @@ export async function uploadMeshModel(
 ): Promise<ModelAsset> {
   const formData = new FormData();
   formData.append('name', name);
+  formData.append('contentLocale', currentTaskContext().locale);
   formData.append('model', model);
-  const response = await fetch(apiUrl, {
+  return requestJson<ModelAsset>(apiUrl, {
     method: 'POST',
     body: formData,
   });
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  return (await response.json()) as ModelAsset;
 }
 
 export function meshModelFileUrl(

@@ -1,5 +1,8 @@
+import { apiFetch, requestJson } from '../api/client';
+import { currentTaskContext } from '../api/taskContext';
 import type { LegoHeightmapScale } from '../legoTerrain/legoHeightmap';
-import legoDesignConfig from './legoDesignConfig.json';
+import legoDesignConfig from './legoDesignConfig';
+import { responseFileName } from './legoDesignApi';
 
 export type DemFinalDesignRequest = {
   modelId: string;
@@ -8,6 +11,8 @@ export type DemFinalDesignRequest = {
   verticalMetersPerPlate: number;
   aggregation: string;
   minCoverageRatio: number;
+  locale: string;
+  timezone: string;
 };
 
 export type DemFinalBomItem = {
@@ -89,6 +94,12 @@ export type DemStructurePlacement = {
 };
 
 export type DemFinalDesign = {
+  modelId: string;
+  exportContext: {
+    locale: string;
+    timezone: string;
+    catalogVersion: string;
+  };
   strategy: string;
   replacementDiagnostics: {
     heightmapModelId: string;
@@ -201,31 +212,42 @@ export function createDemFinalDesignRequest(
     verticalMetersPerPlate: scale.verticalMetersPerPlate,
     aggregation: scale.aggregation,
     minCoverageRatio: scale.minCoverageRatio,
+    ...currentTaskContext(),
   };
 }
 
 export async function createDemFinalDesign(request: DemFinalDesignRequest): Promise<DemFinalDesign> {
-  const response = await fetch(legoDesignConfig.demFinalDesignApiUrl, {
+  return requestJson<DemFinalDesign>(legoDesignConfig.demFinalDesignApiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
   });
-  if (!response.ok) {
-    const errorBody = (await response.json()) as { detail?: string };
-    throw new Error(errorBody.detail ?? legoDesignConfig.texts.designFailed);
-  }
-  return (await response.json()) as DemFinalDesign;
 }
 
-export async function exportDemFinalDesignLdraw(design: DemFinalDesign): Promise<Blob> {
-  const response = await fetch(legoDesignConfig.demFinalDesignLdrawApiUrl, {
+export async function exportDemFinalDesignLdraw(
+  design: DemFinalDesign,
+): Promise<{ blob: Blob; fileName: string }> {
+  const response = await apiFetch(legoDesignConfig.demFinalDesignLdrawApiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(design),
   });
-  if (!response.ok) {
-    const errorBody = (await response.json()) as { detail?: string };
-    throw new Error(errorBody.detail ?? legoDesignConfig.texts.exportFailed);
-  }
-  return await response.blob();
+  return {
+    blob: await response.blob(),
+    fileName: responseFileName(response, 'dem-lego-design.ldr'),
+  };
+}
+
+export async function exportDemFinalDesignReport(
+  design: DemFinalDesign,
+): Promise<{ blob: Blob; fileName: string }> {
+  const response = await apiFetch(legoDesignConfig.demFinalDesignReportApiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(design),
+  });
+  return {
+    blob: await response.blob(),
+    fileName: responseFileName(response, 'dem-lego-design-report.json'),
+  };
 }

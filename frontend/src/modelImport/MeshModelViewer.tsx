@@ -3,7 +3,7 @@ import { Box, Palette } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import appConfig from '../app/appConfig.json';
+import appConfig from '../app/appConfig';
 import type { ModelAsset } from '../assets/modelAssetApi';
 import { meshModelFileUrl } from './meshModelApi';
 

@@ -20,7 +20,7 @@ import {
   type PixelCell,
   type PixelPaletteColor,
 } from './pixelArtApi';
-import pixelArtConfig from './pixelArtConfig.json';
+import pixelArtConfig from './pixelArtConfig';
 
 type SourceImage = {
   file: File;

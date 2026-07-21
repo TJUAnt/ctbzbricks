@@ -1,14 +1,17 @@
 """Tests for Component Repo artifact and import foundations."""
 
 from pathlib import Path
+import json
 import tempfile
 import unittest
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 
 from src.component_repo.services import (
     create_component_artifact,
     create_component_import,
+    complete_component_upload_session,
+    create_component_upload_session,
     ensure_component_repo_tables,
     get_component_candidate_for_import,
     parse_component_import,
@@ -23,6 +26,55 @@ WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ComponentRepoServicesTest(unittest.TestCase):
+    def test_legacy_component_repo_tables_are_upgraded(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE component_imports ("
+                    "id VARCHAR(36) PRIMARY KEY, failure_reason TEXT NULL)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO component_imports (id, failure_reason) "
+                    "VALUES ('legacy-import', 'legacy parser failure')"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE TABLE components ("
+                    "id VARCHAR(36) PRIMARY KEY, name VARCHAR(255) NOT NULL)"
+                )
+            )
+
+        ensure_component_repo_tables(engine)
+
+        import_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("component_imports")
+        }
+        component_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("components")
+        }
+        with engine.connect() as connection:
+            failure_code, failure_params = connection.execute(
+                text(
+                    "SELECT failure_code, failure_params_json "
+                    "FROM component_imports WHERE id = 'legacy-import'"
+                )
+            ).one()
+        self.assertIn("failure_code", import_columns)
+        self.assertIn("failure_params_json", import_columns)
+        self.assertIn("content_kind", component_columns)
+        self.assertIn("content_locale", component_columns)
+        self.assertEqual(failure_code, "component_repo.legacy_failure")
+        self.assertEqual(
+            json.loads(failure_params),
+            {"legacyMessage": "legacy parser failure"},
+        )
+
     def test_create_and_read_component_artifact_roundtrips_bytes(self) -> None:
         config = component_repo_config()
         engine = test_engine()
@@ -108,6 +160,45 @@ class ComponentRepoServicesTest(unittest.TestCase):
         self.assertEqual(import_row["status"], config["imports"]["status"]["uploaded"])
         self.assertEqual(import_row["createdBy"], config["audit"]["system_user"])
 
+    def test_complete_upload_session_creates_artifacts_and_import(self) -> None:
+        config = component_repo_config()
+        engine = test_engine()
+        owner_id = "user-123"
+        actor = f"auth:{owner_id}"
+        with tempfile.TemporaryDirectory() as directory:
+            storage = local_storage(config, directory)
+            upload_session = create_component_upload_session(
+                engine,
+                config,
+                owner_id,
+                "wheel_shell_component.io",
+                "application/octet-stream",
+                "wheel_shell_component2.ldr",
+                "text/plain",
+                created_by=actor,
+            )
+            for upload in upload_session["uploads"]:
+                content = b"io" if upload["role"] == "source" else b"0 FILE model\n"
+                storage.write_bytes(upload["objectPath"], content, upload["contentType"])
+
+            result = complete_component_upload_session(
+                engine,
+                config,
+                storage,
+                upload_session["id"],
+                owner_id,
+                completed_by=actor,
+            )
+
+        self.assertEqual(result["importJob"]["createdBy"], actor)
+        self.assertEqual(result["sourceArtifact"]["uploadedBy"], actor)
+        self.assertEqual(result["exchangeArtifact"]["uploadedBy"], actor)
+        self.assertTrue(result["sourceArtifact"]["storageKey"].startswith(f"{owner_id}/component-repo/imports/"))
+        self.assertEqual(
+            result["sourceArtifact"]["metadata"]["uploadMethod"],
+            "direct_storage",
+        )
+
     def test_parse_component_import_persists_scene_snapshot_and_candidate(self) -> None:
         config = component_repo_config()
         engine = test_engine()
@@ -143,11 +234,21 @@ class ComponentRepoServicesTest(unittest.TestCase):
                 storage,
                 import_row["id"],
             )
+            repeated = parse_component_import(
+                engine,
+                config,
+                storage,
+                import_row["id"],
+            )
             candidate = get_component_candidate_for_import(engine, import_row["id"])
 
         self.assertEqual(result["importJob"]["status"], config["imports"]["status"]["parsed"])
         self.assertEqual(result["sceneSnapshot"]["rootModelId"], "model_0001")
-        self.assertEqual(result["candidate"]["status"], config["candidates"]["status"]["pending_review"])
+        self.assertEqual(result["candidate"]["status"], config["candidates"]["status"]["in_review"])
+        self.assertEqual(result["component"]["status"], config["components"]["status"]["draft"])
+        self.assertEqual(result["version"]["status"], config["versions"]["status"]["draft"])
+        self.assertEqual(repeated["candidate"]["id"], result["candidate"]["id"])
+        self.assertEqual(repeated["version"]["id"], result["version"]["id"])
         self.assertEqual(result["candidate"]["summary"]["modelCount"], 4)
         self.assertEqual(result["candidate"]["summary"]["partInstanceCount"], 3)
         self.assertEqual(result["candidate"]["summary"]["submodelInstanceCount"], 3)
@@ -197,7 +298,7 @@ class ComponentRepoServicesTest(unittest.TestCase):
                     candidate = get_component_candidate_for_import(engine, import_row["id"])
 
                 self.assertEqual(result["importJob"]["status"], config["imports"]["status"]["parsed"])
-                self.assertEqual(result["candidate"]["status"], config["candidates"]["status"]["pending_review"])
+                self.assertEqual(result["candidate"]["status"], config["candidates"]["status"]["in_review"])
                 self.assertGreaterEqual(result["candidate"]["summary"]["modelCount"], 1)
                 self.assertGreaterEqual(result["candidate"]["summary"]["partInstanceCount"], 1)
                 self.assertEqual(

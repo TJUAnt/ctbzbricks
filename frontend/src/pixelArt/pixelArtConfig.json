@@ -10,6 +10,7 @@
     "updateMethod": "PUT",
     "formKeys": {
       "name": "name",
+      "contentLocale": "contentLocale",
       "settings": "settings",
       "image": "image"
     },
@@ -18,7 +19,7 @@
   },
   "fileInputId": "pixel-art-image-file",
   "fileAccept": "image/jpeg,image/png,image/webp",
-  "defaultProjectName": "像素图项目",
+  "defaultProjectName": "pixelArt:defaultProjectName",
   "emptyFileCount": 0,
   "workflow": {
     "uploadStep": 1,
@@ -28,11 +29,31 @@
     "initialStep": 1
   },
   "ratios": [
-    { "label": "1:1", "width": 1, "height": 1 },
-    { "label": "4:3", "width": 4, "height": 3 },
-    { "label": "16:9", "width": 16, "height": 9 },
-    { "label": "3:4", "width": 3, "height": 4 },
-    { "label": "9:16", "width": 9, "height": 16 }
+    {
+      "label": "pixelArt:ratios.0.label",
+      "width": 1,
+      "height": 1
+    },
+    {
+      "label": "pixelArt:ratios.1.label",
+      "width": 4,
+      "height": 3
+    },
+    {
+      "label": "pixelArt:ratios.2.label",
+      "width": 16,
+      "height": 9
+    },
+    {
+      "label": "pixelArt:ratios.3.label",
+      "width": 3,
+      "height": 4
+    },
+    {
+      "label": "pixelArt:ratios.4.label",
+      "width": 9,
+      "height": 16
+    }
   ],
   "grid": {
     "defaultWidth": 64,
@@ -59,7 +80,16 @@
   },
   "color": {
     "defaultCount": 16,
-    "options": [2, 4, 8, 16, 24, 32, 48, 64],
+    "options": [
+      2,
+      4,
+      8,
+      16,
+      24,
+      32,
+      48,
+      64
+    ],
     "sampleColorIndex": -1
   },
   "algorithms": {
@@ -68,9 +98,18 @@
     "logoText": "logo_text",
     "sideMixedPlateBrickPixel": "side_mixed_plate_brick_pixel",
     "options": [
-      { "id": "photo_illustration", "label": "照片/插画" },
-      { "id": "logo_text", "label": "Logo/文字" },
-      { "id": "side_mixed_plate_brick_pixel", "label": "侧面 Plate/Brick 混合" }
+      {
+        "id": "photo_illustration",
+        "label": "pixelArt:algorithms.options.photo_illustration.label"
+      },
+      {
+        "id": "logo_text",
+        "label": "pixelArt:algorithms.options.logo_text.label"
+      },
+      {
+        "id": "side_mixed_plate_brick_pixel",
+        "label": "pixelArt:algorithms.options.side_mixed_plate_brick_pixel.label"
+      }
     ]
   },
   "sideLayout": {
@@ -79,20 +118,45 @@
     "brickPartType": "brick",
     "platePartType": "plate",
     "brickStartRole": "start",
-    "summaryLabel": "Side layout",
-    "sidePixelLabel": "Plate x Plate",
-    "brickLabel": "Brick",
-    "plateLabel": "Plate",
+    "summaryLabel": "pixelArt:sideLayout.summaryLabel",
+    "sidePixelLabel": "pixelArt:sideLayout.sidePixelLabel",
+    "brickLabel": "pixelArt:sideLayout.brickLabel",
+    "plateLabel": "pixelArt:sideLayout.plateLabel",
     "brickStrokeColor": "rgba(37, 99, 235, 0.82)",
     "plateStrokeColor": "rgba(180, 83, 9, 0.72)",
     "overlayLineWidth": 2
   },
   "preprocessing": {
-    "brightness": { "default": 1, "minimum": 0.7, "maximum": 1.3, "step": 0.05 },
-    "contrast": { "default": 1.1, "minimum": 0.7, "maximum": 1.6, "step": 0.05 },
-    "saturation": { "default": 1, "minimum": 0.5, "maximum": 1.5, "step": 0.05 },
-    "sharpness": { "default": 1.15, "minimum": 0.7, "maximum": 1.8, "step": 0.05 },
-    "localContrast": { "default": 0.35, "minimum": 0, "maximum": 1, "step": 0.05 },
+    "brightness": {
+      "default": 1,
+      "minimum": 0.7,
+      "maximum": 1.3,
+      "step": 0.05
+    },
+    "contrast": {
+      "default": 1.1,
+      "minimum": 0.7,
+      "maximum": 1.6,
+      "step": 0.05
+    },
+    "saturation": {
+      "default": 1,
+      "minimum": 0.5,
+      "maximum": 1.5,
+      "step": 0.05
+    },
+    "sharpness": {
+      "default": 1.15,
+      "minimum": 0.7,
+      "maximum": 1.8,
+      "step": 0.05
+    },
+    "localContrast": {
+      "default": 0.35,
+      "minimum": 0,
+      "maximum": 1,
+      "step": 0.05
+    },
     "preserveLightDetails": true
   },
   "previewProcessing": {
@@ -142,67 +206,67 @@
     "maxSteps": 10
   },
   "texts": {
-    "title": "图片像素化",
-    "subtitle": "上传、按比例裁剪、生成量化像素图并精修",
-    "stepUpload": "1 上传与裁剪",
-    "stepPreprocessing": "2 图像预处理",
-    "stepGrid": "3 像素化",
-    "stepEdit": "4 生成与精修",
-    "uploadImage": "上传图片",
-    "savedProjects": "已保存像素图",
-    "savedProjectsSubtitle": "查看数据库中已保存的量化像素图",
-    "emptyProjects": "暂无已保存像素图",
-    "loadProjectsFailed": "像素图列表加载失败",
-    "refresh": "刷新",
-    "sourceImage": "原图",
-    "projectName": "项目名称",
-    "projectNamePlaceholder": "输入项目名称",
-    "ratio": "裁剪比例",
-    "customRatio": "自定义比例",
-    "customRatioWidth": "比例宽",
-    "customRatioHeight": "比例高",
-    "confirmCrop": "确认裁剪",
-    "backToCrop": "返回裁剪",
-    "confirmPreprocessing": "进入像素化",
-    "backToPreprocessing": "返回预处理",
-    "confirmGrid": "进入生成",
-    "backToGrid": "返回像素化",
-    "outputGrid": "输出网格",
-    "gridWidth": "宽度格数",
-    "gridHeight": "高度格数",
-    "totalCells": "总格子数",
-    "colorCount": "颜色数量",
-    "algorithm": "生成算法",
-    "preprocessing": "图像预处理",
-    "brightness": "亮度",
-    "contrast": "对比度",
-    "saturation": "饱和度",
-    "sharpness": "锐化",
-    "localContrast": "局部对比度",
-    "preserveLightDetails": "保留浅色细节",
-    "generate": "生成像素图",
-    "generating": "正在生成",
-    "saveEdits": "保存精修",
-    "savingEdits": "正在保存",
-    "undo": "撤回",
-    "redo": "向前",
-    "saved": "已保存",
-    "editsSaved": "精修已保存",
-    "saveFailed": "保存失败",
-    "emptyImage": "请选择图片",
-    "emptyResult": "生成后显示像素图",
-    "palette": "候选色",
-    "selectedCells": "已选格子",
-    "pixelCount": "像素格",
-    "modelId": "项目 ID",
-    "imageSize": "图片尺寸",
-    "pickFromSource": "从原图取色",
-    "candidateColors": "候选色",
-    "clearSelection": "清除选择",
-    "selectCells": "选择格子",
-    "panCanvas": "移动画布",
-    "editSource": "原图取色",
-    "pixelEditor": "像素图精修",
-    "cropWorkspace": "框选像素化范围"
+    "title": "pixelArt:texts.title",
+    "subtitle": "pixelArt:texts.subtitle",
+    "stepUpload": "pixelArt:texts.stepUpload",
+    "stepPreprocessing": "pixelArt:texts.stepPreprocessing",
+    "stepGrid": "pixelArt:texts.stepGrid",
+    "stepEdit": "pixelArt:texts.stepEdit",
+    "uploadImage": "pixelArt:texts.uploadImage",
+    "savedProjects": "pixelArt:texts.savedProjects",
+    "savedProjectsSubtitle": "pixelArt:texts.savedProjectsSubtitle",
+    "emptyProjects": "pixelArt:texts.emptyProjects",
+    "loadProjectsFailed": "pixelArt:texts.loadProjectsFailed",
+    "refresh": "pixelArt:texts.refresh",
+    "sourceImage": "pixelArt:texts.sourceImage",
+    "projectName": "pixelArt:texts.projectName",
+    "projectNamePlaceholder": "pixelArt:texts.projectNamePlaceholder",
+    "ratio": "pixelArt:texts.ratio",
+    "customRatio": "pixelArt:texts.customRatio",
+    "customRatioWidth": "pixelArt:texts.customRatioWidth",
+    "customRatioHeight": "pixelArt:texts.customRatioHeight",
+    "confirmCrop": "pixelArt:texts.confirmCrop",
+    "backToCrop": "pixelArt:texts.backToCrop",
+    "confirmPreprocessing": "pixelArt:texts.confirmPreprocessing",
+    "backToPreprocessing": "pixelArt:texts.backToPreprocessing",
+    "confirmGrid": "pixelArt:texts.confirmGrid",
+    "backToGrid": "pixelArt:texts.backToGrid",
+    "outputGrid": "pixelArt:texts.outputGrid",
+    "gridWidth": "pixelArt:texts.gridWidth",
+    "gridHeight": "pixelArt:texts.gridHeight",
+    "totalCells": "pixelArt:texts.totalCells",
+    "colorCount": "pixelArt:texts.colorCount",
+    "algorithm": "pixelArt:texts.algorithm",
+    "preprocessing": "pixelArt:texts.preprocessing",
+    "brightness": "pixelArt:texts.brightness",
+    "contrast": "pixelArt:texts.contrast",
+    "saturation": "pixelArt:texts.saturation",
+    "sharpness": "pixelArt:texts.sharpness",
+    "localContrast": "pixelArt:texts.localContrast",
+    "preserveLightDetails": "pixelArt:texts.preserveLightDetails",
+    "generate": "pixelArt:texts.generate",
+    "generating": "pixelArt:texts.generating",
+    "saveEdits": "pixelArt:texts.saveEdits",
+    "savingEdits": "pixelArt:texts.savingEdits",
+    "undo": "pixelArt:texts.undo",
+    "redo": "pixelArt:texts.redo",
+    "saved": "pixelArt:texts.saved",
+    "editsSaved": "pixelArt:texts.editsSaved",
+    "saveFailed": "pixelArt:texts.saveFailed",
+    "emptyImage": "pixelArt:texts.emptyImage",
+    "emptyResult": "pixelArt:texts.emptyResult",
+    "palette": "pixelArt:texts.palette",
+    "selectedCells": "pixelArt:texts.selectedCells",
+    "pixelCount": "pixelArt:texts.pixelCount",
+    "modelId": "pixelArt:texts.modelId",
+    "imageSize": "pixelArt:texts.imageSize",
+    "pickFromSource": "pixelArt:texts.pickFromSource",
+    "candidateColors": "pixelArt:texts.candidateColors",
+    "clearSelection": "pixelArt:texts.clearSelection",
+    "selectCells": "pixelArt:texts.selectCells",
+    "panCanvas": "pixelArt:texts.panCanvas",
+    "editSource": "pixelArt:texts.editSource",
+    "pixelEditor": "pixelArt:texts.pixelEditor",
+    "cropWorkspace": "pixelArt:texts.cropWorkspace"
   }
 }

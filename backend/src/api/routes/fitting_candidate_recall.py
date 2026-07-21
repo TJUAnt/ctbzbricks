@@ -1,7 +1,8 @@
 """Fitting candidate recall API routes."""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 
+from src.api.errors import domain_error_from_exception
 from src.api.schemas.fitting_candidate_recall import (
     FittingCandidateRecallRequest,
     FittingCandidateRecallResponse,
@@ -9,7 +10,10 @@ from src.api.schemas.fitting_candidate_recall import (
 from src.services.fitting_candidate_recall_service import recall_fitting_candidates
 
 
-def create_fitting_candidate_recall_router(config: dict) -> APIRouter:
+def create_fitting_candidate_recall_router(
+    config: dict,
+    component_config: dict | None = None,
+) -> APIRouter:
     router = APIRouter()
 
     @router.post(
@@ -25,11 +29,13 @@ def create_fitting_candidate_recall_router(config: dict) -> APIRouter:
                 request.app.state.db_engine,
                 config,
                 request_body,
+                component_config,
             )
         except ValueError as error:
-            raise HTTPException(
-                status_code=config["http_status"]["bad_request"],
-                detail=str(error),
+            raise domain_error_from_exception(
+                error,
+                "fitting_candidate_recall.failed",
+                http_status=config["http_status"]["bad_request"],
             ) from error
 
     return router

@@ -1,7 +1,8 @@
 """Reusable LDraw submodel API routes."""
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 
+from src.api.errors import DomainError, domain_error_from_exception
 from src.api.schemas.submodel import (
     SubmodelCreateRequest,
     SubmodelListResponse,
@@ -30,18 +31,20 @@ def create_submodel_router(config: dict) -> APIRouter:
                 request_body.model_dump(),
             )
         except ValueError as error:
-            raise HTTPException(
-                status_code=config["http_status"]["bad_request"],
-                detail=str(error),
+            raise domain_error_from_exception(
+                error,
+                "submodel.create_failed",
+                http_status=config["http_status"]["bad_request"],
             ) from error
 
     @router.get(config["routes"]["submodel"], response_model=SubmodelResponse)
     def submodel(submodel_id: str, request: Request) -> dict:
         saved_submodel = get_submodel(request.app.state.db_engine, submodel_id)
         if saved_submodel is None:
-            raise HTTPException(
-                status_code=config["http_status"]["not_found"],
-                detail=config["errors"]["submodel_not_found"],
+            raise DomainError(
+                config["errors"]["submodel_not_found"],
+                params={"submodelId": submodel_id},
+                http_status=config["http_status"]["not_found"],
             )
         return saved_submodel
 

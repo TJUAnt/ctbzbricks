@@ -5,8 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine
 
+from src.api.errors import ERROR_RESPONSES, install_error_handlers
 from src.api.routes.auth import create_auth_router
 from src.api.routes.dem_lego_design import create_dem_lego_design_router
+from src.api.routes.domain_content import create_domain_content_router
 from src.api.routes.component_repo import create_component_repo_router
 from src.api.routes.fitting_candidate_recall import (
     create_fitting_candidate_recall_router,
@@ -31,6 +33,7 @@ from src.config.submodel_config import REQUIRED_SUBMODEL_CONFIG_KEYS
 from src.services.fitting_candidate_profile_service import (
     ensure_fitting_candidate_profile_table,
 )
+from src.services.domain_content_service import ensure_domain_translation_tables
 from src.services.model_asset_service import ensure_model_asset_table
 from src.services.model_fitting_service import ensure_model_fitting_tables
 from src.services.part_shape_profile_service import ensure_part_shape_profile_table
@@ -219,7 +222,8 @@ def create_app() -> FastAPI:
             "model_store_path": str(BACKEND_ROOT.parent / mesh_model_config["storage"]["model_store_path"]),
         },
     }
-    app = FastAPI(title=config["app"]["title"])
+    app = FastAPI(title=config["app"]["title"], responses=ERROR_RESPONSES)
+    install_error_handlers(app)
     app.state.search_api_config = config
     app.state.model_asset_config = config["model_assets"]
     app.state.terrain_config = terrain_config
@@ -249,6 +253,7 @@ def create_app() -> FastAPI:
     ensure_fitting_candidate_profile_table(app.state.db_engine)
     ensure_model_fitting_tables(app.state.db_engine)
     ensure_component_repo_tables(app.state.db_engine)
+    ensure_domain_translation_tables(app.state.db_engine)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config["cors"]["allow_origins"],
@@ -276,9 +281,15 @@ def create_app() -> FastAPI:
     app.include_router(create_mesh_model_router(mesh_model_config))
     app.include_router(create_pixel_art_router(pixel_art_config))
     app.include_router(create_submodel_router(submodel_config))
-    app.include_router(create_fitting_candidate_recall_router(fitting_candidate_recall_config))
+    app.include_router(
+        create_fitting_candidate_recall_router(
+            fitting_candidate_recall_config,
+            component_repo_config,
+        )
+    )
     app.include_router(create_model_fitting_router(model_fitting_config))
     app.include_router(create_component_repo_router(component_repo_config))
+    app.include_router(create_domain_content_router(component_repo_config))
     return app
 
 

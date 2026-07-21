@@ -343,16 +343,16 @@
     "not_found": 404
   },
   "errors": {
-    "model_not_found": "Model fitting source model not found: {model_id}",
-    "unsupported_model_type": "Model fitting requires a mesh model asset: {model_id}",
-    "model_file_not_found": "Model fitting source model file not found: {model_id}",
-    "invalid_glb": "Invalid GLB mesh file for model fitting",
-    "missing_position_accessor": "GLB mesh primitive is missing POSITION accessor",
-    "unsupported_accessor_component_type": "Unsupported GLB accessor component type: {component_type}",
-    "unsupported_accessor_type": "Unsupported GLB accessor type: {accessor_type}",
-    "solution_not_found": "Model fitting solution not found: {solution_id}",
-    "job_not_found": "Model fitting job not found: {job_id}",
-    "invalid_target_width": "Model fitting target width must be greater than zero",
-    "invalid_source_width": "Model fitting source model width must be greater than zero"
+    "model_not_found": "model_fitting.model_not_found",
+    "unsupported_model_type": "model_fitting.unsupported_model_type",
+    "model_file_not_found": "model_fitting.model_file_not_found",
+    "invalid_glb": "model_fitting.invalid_glb",
+    "missing_position_accessor": "model_fitting.missing_position_accessor",
+    "unsupported_accessor_component_type": "model_fitting.unsupported_accessor_component_type",
+    "unsupported_accessor_type": "model_fitting.unsupported_accessor_type",
+    "solution_not_found": "model_fitting.solution_not_found",
+    "job_not_found": "model_fitting.job_not_found",
+    "invalid_target_width": "model_fitting.invalid_target_width",
+    "invalid_source_width": "model_fitting.invalid_source_width"
   }
 }

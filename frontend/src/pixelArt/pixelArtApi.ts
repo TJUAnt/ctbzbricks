@@ -1,4 +1,6 @@
-import pixelArtConfig from './pixelArtConfig.json';
+import { requestJson } from '../api/client';
+import pixelArtConfig from './pixelArtConfig';
+import { currentTaskContext } from '../api/taskContext';
 
 export type PixelArtCrop = {
   x: number;
@@ -54,6 +56,7 @@ export type PixelPaletteColor = {
 export type PixelArtProject = {
   modelId: string;
   name: string;
+  contentLocale: 'zh-CN' | 'en-US';
   source: string;
   createdAt: string;
   schema: string;
@@ -68,6 +71,7 @@ export type PixelArtProject = {
 export type PixelArtProjectSummary = {
   modelId: string;
   name: string;
+  contentLocale: 'zh-CN' | 'en-US';
   source: string;
   createdAt: string;
   gridWidth: number;
@@ -87,12 +91,7 @@ export async function loadPixelArtProjects(page: number, pageSize: number): Prom
   const url = new URL(pixelArtConfig.projectsApiUrl, window.location.origin);
   url.searchParams.set('page', String(page));
   url.searchParams.set('page_size', String(pageSize));
-  const response = await fetch(`${url.pathname}${url.search}`);
-  if (!response.ok) {
-    const errorBody = (await response.json()) as { detail?: string };
-    throw new Error(errorBody.detail ?? response.statusText);
-  }
-  return (await response.json()) as PixelArtProjectList;
+  return requestJson<PixelArtProjectList>(`${url.pathname}${url.search}`);
 }
 
 export async function savePixelArtProject(
@@ -102,24 +101,20 @@ export async function savePixelArtProject(
 ): Promise<PixelArtProject> {
   const formData = new FormData();
   formData.append(pixelArtConfig.request.formKeys.name, name);
+  formData.append(pixelArtConfig.request.formKeys.contentLocale, currentTaskContext().locale);
   formData.append(pixelArtConfig.request.formKeys.settings, JSON.stringify(settings));
   formData.append(pixelArtConfig.request.formKeys.image, image);
 
-  const response = await fetch(pixelArtConfig.projectsApiUrl, {
+  return requestJson<PixelArtProject>(pixelArtConfig.projectsApiUrl, {
     method: pixelArtConfig.request.method,
     body: formData,
   });
-  if (!response.ok) {
-    const errorBody = (await response.json()) as { detail?: string };
-    throw new Error(errorBody.detail ?? response.statusText);
-  }
-  return (await response.json()) as PixelArtProject;
 }
 
 export async function updatePixelArtProjectPixels(
   project: PixelArtProject,
 ): Promise<PixelArtProject> {
-  const response = await fetch(
+  return requestJson<PixelArtProject>(
     pixelArtConfig.projectPixelsApiUrl.replace(
       pixelArtConfig.routePlaceholders.projectId,
       project.modelId,
@@ -135,9 +130,4 @@ export async function updatePixelArtProjectPixels(
       }),
     },
   );
-  if (!response.ok) {
-    const errorBody = (await response.json()) as { detail?: string };
-    throw new Error(errorBody.detail ?? response.statusText);
-  }
-  return (await response.json()) as PixelArtProject;
 }

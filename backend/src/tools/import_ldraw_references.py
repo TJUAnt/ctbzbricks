@@ -65,7 +65,8 @@ def _scan_support_files(ldraw_root: Path) -> list[dict]:
                     "line_count": None,
                     "source": "ldraw_official",
                     "import_status": "parsed",
-                    "parse_error": None,
+                    "parse_error_code": None,
+                    "parse_error_params_json": None,
                 }
             )
 
@@ -86,7 +87,8 @@ def _upsert_files(session, file_records: list[dict]) -> None:
                     "file_role",
                     "source",
                     "import_status",
-                    "parse_error",
+                    "parse_error_code",
+                    "parse_error_params_json",
                 ),
             )
         )
@@ -126,13 +128,13 @@ def _resolve_ref(
     from_relative_path: str,
     ref_name: str,
     file_ids_by_path: dict[str, int],
-) -> tuple[int | None, str | None, str, str | None]:
+) -> tuple[int | None, str | None, str, str | None, dict | None]:
     for candidate in _candidate_paths(from_relative_path, ref_name):
         file_id = file_ids_by_path.get(candidate)
         if file_id is not None:
-            return file_id, candidate, "resolved", None
+            return file_id, candidate, "resolved", None, None
 
-    return None, None, "missing", "referenced file not found"
+    return None, None, "missing", "ldraw.reference_not_found", {"reference": ref_name}
 
 
 def _parse_reference_line(line: str):
@@ -180,7 +182,7 @@ def _parse_references(
             if parsed is None:
                 continue
 
-            to_file_id, resolved_path, status, error = _resolve_ref(
+            to_file_id, resolved_path, status, error_code, error_params = _resolve_ref(
                 relative_path,
                 parsed["ref_name"],
                 file_ids_by_path,
@@ -194,7 +196,8 @@ def _parse_references(
                     "ref_name": parsed["ref_name"],
                     "resolved_relative_path": resolved_path,
                     "resolve_status": status,
-                    "resolve_error": error,
+                    "resolve_error_code": error_code,
+                    "resolve_error_params_json": error_params,
                     "pos_x": parsed["pos_x"],
                     "pos_y": parsed["pos_y"],
                     "pos_z": parsed["pos_z"],
@@ -226,7 +229,8 @@ def _upsert_reference_batch(session, reference_records: list[dict]) -> None:
                 "ref_name",
                 "resolved_relative_path",
                 "resolve_status",
-                "resolve_error",
+                "resolve_error_code",
+                "resolve_error_params_json",
                 "pos_x",
                 "pos_y",
                 "pos_z",

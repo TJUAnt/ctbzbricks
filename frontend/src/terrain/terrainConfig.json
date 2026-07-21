@@ -25,24 +25,26 @@
     "featuresKey": "features",
     "featureCollectionType": "FeatureCollection",
     "propertiesKey": "properties",
-    "modelNamePropertyKeys": ["name"],
-    "modelNameEmptyValue": "",
+    "modelNamePropertyKeys": [
+      "name"
+    ],
+    "modelNameEmptyValue": "terrain:geojson.modelNameEmptyValue",
     "propertyValueLimit": 6,
-    "nullValue": "null",
-    "arrayValue": "[array]",
-    "objectValue": "[object]",
-    "emptyValue": "-"
+    "nullValue": "terrain:geojson.nullValue",
+    "arrayValue": "terrain:geojson.arrayValue",
+    "objectValue": "terrain:geojson.objectValue",
+    "emptyValue": "terrain:geojson.emptyValue"
   },
   "demDatasets": {
     "defaultKey": "dem_1km",
     "options": [
       {
         "key": "dem_1km",
-        "label": "DEM 1km"
+        "label": "terrain:demDatasets.options.0.label"
       },
       {
         "key": "dem_250m",
-        "label": "DEM 250m"
+        "label": "terrain:demDatasets.options.1.label"
       }
     ]
   },
@@ -55,47 +57,63 @@
   },
   "testCamera": {
     "aspect": 1,
-    "westPoint": [-1, 0, 0],
-    "eastPoint": [1, 0, 0],
-    "northPoint": [0, 0, -1],
-    "southPoint": [0, 0, 1]
+    "westPoint": [
+      -1,
+      0,
+      0
+    ],
+    "eastPoint": [
+      1,
+      0,
+      0
+    ],
+    "northPoint": [
+      0,
+      0,
+      -1
+    ],
+    "southPoint": [
+      0,
+      0,
+      1
+    ]
   },
   "texts": {
-    "title": "台湾 DEM 地形",
-    "subtitle": "GeoJSON 边界裁剪 / 1km DEM / Three.js",
-    "loading": "正在加载地形数据",
-    "importing": "正在计算 DEM 模型",
-    "importGeojson": "导入 GeoJSON",
-    "demDataset": "DEM 数据源",
-    "previewScale": "预览缩放",
-    "confirmRerender": "确认重渲染",
-    "saveModel": "保存模型",
-    "modelName": "模型名称",
-    "modelNamePlaceholder": "输入模型名称",
-    "saved": "已保存",
-    "modelList": "DEM 模型列表",
-    "refreshModels": "刷新列表",
-    "noModels": "暂无已保存模型",
-    "resetView": "重置视角",
-    "guideLabel": "DEM 方向辅助",
-    "compassNorth": "N",
-    "compassEast": "E",
-    "compassSouth": "S",
-    "compassWest": "W",
-    "normalVectorLabel": "法线向量",
-    "normalVectorDirection": "+Y",
-    "source": "数据源",
-    "geojsonInfo": "Properties",
-    "geojsonNoProperties": "无 properties",
-    "sourceNameSeparator": " / ",
-    "assetCount": "DEM 数量",
-    "mixedValue": "混合",
-    "grid": "网格",
-    "elevation": "高程",
-    "validSamples": "有效采样",
-    "invalidAsset": "地形数据格式不匹配",
-    "invalidGeojson": "GeoJSON 文件格式不正确",
-    "loadFailed": "地形数据加载失败"
+    "title": "terrain:texts.title",
+    "subtitle": "terrain:texts.subtitle",
+    "loading": "terrain:texts.loading",
+    "importing": "terrain:texts.importing",
+    "importGeojson": "terrain:texts.importGeojson",
+    "demDataset": "terrain:texts.demDataset",
+    "previewScale": "terrain:texts.previewScale",
+    "confirmRerender": "terrain:texts.confirmRerender",
+    "saveModel": "terrain:texts.saveModel",
+    "modelName": "terrain:texts.modelName",
+    "modelNamePlaceholder": "terrain:texts.modelNamePlaceholder",
+    "saved": "terrain:texts.saved",
+    "modelList": "terrain:texts.modelList",
+    "refreshModels": "terrain:texts.refreshModels",
+    "noModels": "terrain:texts.noModels",
+    "resetView": "terrain:texts.resetView",
+    "guideLabel": "terrain:texts.guideLabel",
+    "compassNorth": "terrain:texts.compassNorth",
+    "compassEast": "terrain:texts.compassEast",
+    "compassSouth": "terrain:texts.compassSouth",
+    "compassWest": "terrain:texts.compassWest",
+    "normalVectorLabel": "terrain:texts.normalVectorLabel",
+    "normalVectorDirection": "terrain:texts.normalVectorDirection",
+    "source": "terrain:texts.source",
+    "geojsonInfo": "terrain:texts.geojsonInfo",
+    "geojsonNoProperties": "terrain:texts.geojsonNoProperties",
+    "sourceNameSeparator": "terrain:texts.sourceNameSeparator",
+    "assetCount": "terrain:texts.assetCount",
+    "mixedValue": "terrain:texts.mixedValue",
+    "grid": "terrain:texts.grid",
+    "elevation": "terrain:texts.elevation",
+    "validSamples": "terrain:texts.validSamples",
+    "invalidAsset": "terrain:texts.invalidAsset",
+    "invalidGeojson": "terrain:texts.invalidGeojson",
+    "loadFailed": "terrain:texts.loadFailed"
   },
   "scene": {
     "backgroundColor": "#eef3f0",
@@ -104,8 +122,16 @@
     "defaultVerticalExaggeration": 8,
     "latitudeMetersPerDegree": 111320,
     "radiansPerDegree": 0.017453292519943295,
-    "cameraPosition": [0, 5.5, 9.2],
-    "cameraTarget": [0, 0.35, 0],
+    "cameraPosition": [
+      0,
+      5.5,
+      9.2
+    ],
+    "cameraTarget": [
+      0,
+      0.35,
+      0
+    ],
     "fieldOfView": 45,
     "nearPlane": 0.1,
     "farPlane": 100,
@@ -113,7 +139,11 @@
     "ambientLightIntensity": 1.8,
     "directionalLightColor": "#ffffff",
     "directionalLightIntensity": 2.2,
-    "directionalLightPosition": [4, 7, 5],
+    "directionalLightPosition": [
+      4,
+      7,
+      5
+    ],
     "terrainRoughness": 0.82,
     "terrainMetalness": 0,
     "compassRotationCssProperty": "--terrain-compass-rotation",

@@ -1,9 +1,10 @@
 """Unit tests for unified fitting candidate profiles."""
 
 import unittest
+import json
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from src.config.app_settings import load_json_config
@@ -13,6 +14,7 @@ from src.config.fitting_candidate_profile_config import (
 from src.config.part_shape_profile_config import REQUIRED_PART_SHAPE_PROFILE_CONFIG_KEYS
 from src.ldraw.surface_profile import PartSurfaceProfile
 from src.model.models import (
+    Component,
     ConnectorInstance,
     FittingCandidateProfile,
     LDrawFile,
@@ -24,7 +26,9 @@ from src.model.models import (
     LDrawSubmodelPart,
 )
 from src.services.fitting_candidate_profile_service import (
+    backfill_basic_fitting_candidate_profiles,
     ensure_fitting_candidate_profile_table,
+    ensure_ldraw_part_geometry_error_columns,
     save_part_fitting_candidate_profile,
     save_submodel_fitting_candidate_profile,
 )
@@ -40,6 +44,95 @@ from src.tools.build_fitting_candidate_profiles import (
 
 
 class FittingCandidateProfileServiceTest(unittest.TestCase):
+    def test_legacy_geometry_errors_are_upgraded_to_structured_fields(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE ldraw_parts ("
+                    "id INTEGER PRIMARY KEY, ldraw_part_num VARCHAR(128) NOT NULL)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE TABLE ldraw_part_geometry ("
+                    "id INTEGER PRIMARY KEY, ldraw_part_id INTEGER NOT NULL, "
+                    "geometry_status VARCHAR(32), geometry_error TEXT)"
+                )
+            )
+            connection.execute(
+                text("INSERT INTO ldraw_parts VALUES (1, '6637a.dat')")
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO ldraw_part_geometry VALUES "
+                    "(1, 1, 'failed', 'legacy geometry failure')"
+                )
+            )
+
+        ensure_ldraw_part_geometry_error_columns(engine)
+
+        columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("ldraw_part_geometry")
+        }
+        with engine.connect() as connection:
+            error_code, error_params = connection.execute(
+                text(
+                    "SELECT geometry_error_code, geometry_error_params_json "
+                    "FROM ldraw_part_geometry WHERE id = 1"
+                )
+            ).one()
+        self.assertIn("geometry_error_code", columns)
+        self.assertIn("geometry_error_params_json", columns)
+        self.assertEqual(error_code, "ldraw.geometry.build_failed")
+        self.assertEqual(
+            json.loads(error_params),
+            {"partId": "6637a.dat", "errorCount": 1},
+        )
+
+    def test_legacy_profile_error_is_upgraded_to_structured_fields(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE fitting_candidate_profiles ("
+                    "id INTEGER PRIMARY KEY, candidate_id VARCHAR(128) NOT NULL, "
+                    "profile_error TEXT NULL)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO fitting_candidate_profiles "
+                    "(id, candidate_id, profile_error) "
+                    "VALUES (1, 'legacy-submodel', 'legacy geometry failure')"
+                )
+            )
+
+        ensure_fitting_candidate_profile_table(engine)
+
+        columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("fitting_candidate_profiles")
+        }
+        with engine.connect() as connection:
+            error_code, error_params = connection.execute(
+                text(
+                    "SELECT profile_error_code, profile_error_params_json "
+                    "FROM fitting_candidate_profiles WHERE id = 1"
+                )
+            ).one()
+        self.assertIn("profile_error_code", columns)
+        self.assertIn("profile_error_params_json", columns)
+        self.assertEqual(error_code, "fitting_candidate_profile.generation_failed")
+        self.assertEqual(
+            json.loads(error_params),
+            {
+                "candidateId": "legacy-submodel",
+                "legacyMessage": "legacy geometry failure",
+            },
+        )
+
     def test_part_candidate_profile_uses_ready_shape_profile_and_connector_summary(self) -> None:
         fitting_config = load_json_config(
             "fitting_candidate_profile.json",
@@ -75,8 +168,69 @@ class FittingCandidateProfileServiceTest(unittest.TestCase):
             candidate["connectorSummary"]["byTypeGender"][0]["connectorType"],
             "stud",
         )
+        Session = sessionmaker(bind=engine)
+        with Session() as session:
+            profile = session.query(FittingCandidateProfile).one()
+            self.assertEqual(
+                (profile.width_stud, profile.depth_stud, profile.height_plate),
+                (1.0, 1.0, 1.0),
+            )
+            self.assertFalse(profile.is_sticker)
+            self.assertEqual(profile.normalized_type, "plate")
 
-    def test_ready_only_candidate_loader_excludes_failed_shape_profiles(self) -> None:
+    def test_part_candidate_profile_persists_sticker_flag(self) -> None:
+        fitting_config = load_json_config(
+            "fitting_candidate_profile.json",
+            REQUIRED_FITTING_CANDIDATE_PROFILE_CONFIG_KEYS,
+        )
+        part_shape_config = load_json_config(
+            "part_shape_profile.json",
+            REQUIRED_PART_SHAPE_PROFILE_CONFIG_KEYS,
+        )
+        engine = test_engine()
+        seed_part(engine)
+        Session = sessionmaker(bind=engine)
+        with Session() as session:
+            part = session.query(LDrawPart).one()
+            part.name = "Plate 1 x 1 with Sticker"
+            session.commit()
+        save_part_surface_profile(
+            engine,
+            part_shape_config,
+            "3024.dat",
+            sample_profile(),
+            "source-hash",
+        )
+
+        save_part_fitting_candidate_profile(engine, fitting_config, "3024.dat")
+
+        with Session() as session:
+            profile = session.query(FittingCandidateProfile).one()
+            self.assertTrue(profile.is_sticker)
+            self.assertEqual(profile.normalized_type, "plate")
+
+    def test_part_candidate_profile_does_not_require_shape_profile(self) -> None:
+        fitting_config = load_json_config(
+            "fitting_candidate_profile.json",
+            REQUIRED_FITTING_CANDIDATE_PROFILE_CONFIG_KEYS,
+        )
+        engine = test_engine()
+        seed_part(engine)
+
+        candidate = save_part_fitting_candidate_profile(
+            engine,
+            fitting_config,
+            "3024.dat",
+        )
+
+        self.assertEqual(candidate["profileStatus"], "ready")
+        self.assertEqual(
+            candidate["logicalSize"]["logicalSize"],
+            {"widthStud": 1.0, "depthStud": 1.0, "heightPlate": 1.0},
+        )
+        self.assertEqual(candidate["shapeProfile"], {})
+
+    def test_basic_candidate_loader_includes_geometry_when_shape_profile_failed(self) -> None:
         fitting_config = load_json_config(
             "fitting_candidate_profile.json",
             REQUIRED_FITTING_CANDIDATE_PROFILE_CONFIG_KEYS,
@@ -106,7 +260,34 @@ class FittingCandidateProfileServiceTest(unittest.TestCase):
         with Session() as session:
             parts = load_candidate_parts(session, fitting_config, None, None, True, None, None)
 
-        self.assertEqual(parts, ["3024.dat"])
+        self.assertEqual(parts, ["3024.dat", "3005.dat"])
+
+    def test_basic_backfill_indexes_all_parts_with_complete_geometry(self) -> None:
+        fitting_config = load_json_config(
+            "fitting_candidate_profile.json",
+            REQUIRED_FITTING_CANDIDATE_PROFILE_CONFIG_KEYS,
+        )
+        engine = test_engine()
+        seed_part(engine)
+        seed_brick_part(engine)
+
+        result = backfill_basic_fitting_candidate_profiles(
+            engine,
+            fitting_config,
+            component_status="active",
+            batch_size=1,
+        )
+
+        Session = sessionmaker(bind=engine)
+        with Session() as session:
+            profiles = session.query(FittingCandidateProfile).order_by(
+                FittingCandidateProfile.candidate_id
+            ).all()
+        self.assertEqual(result, {"part": 2, "component": 0, "total": 2})
+        self.assertEqual(
+            [profile.candidate_id for profile in profiles],
+            ["3005.dat", "3024.dat"],
+        )
 
     def test_submodel_candidate_profile_summarizes_parts_colors_and_connectors(self) -> None:
         fitting_config = load_json_config(
@@ -160,9 +341,10 @@ class FittingCandidateProfileServiceTest(unittest.TestCase):
         self.assertEqual(candidate["profileStatus"], fitting_config["profile"]["failed_status"])
         self.assertEqual(
             candidate["profileError"],
-            fitting_config["errors"]["submodel_part_geometry_not_found"].format(
-                ldraw_part_num="3005.dat",
-            ),
+            {
+                "code": "fitting_candidate_profile.submodel_part_geometry_not_found",
+                "params": {"candidateId": "door-module"},
+            },
         )
         self.assertEqual(candidate["sourceMetadata"]["partCount"], 2)
         self.assertEqual(len(candidate["shapeProfile"]["parts"]), 2)
@@ -192,6 +374,7 @@ def test_engine():
     LDrawPart.__table__.create(bind=engine)
     LDrawPartGeometry.__table__.create(bind=engine)
     ConnectorInstance.__table__.create(bind=engine)
+    Component.__table__.create(bind=engine)
     LDrawSubmodel.__table__.create(bind=engine)
     LDrawSubmodelPart.__table__.create(bind=engine)
     LDrawSubmodelConnector.__table__.create(bind=engine)

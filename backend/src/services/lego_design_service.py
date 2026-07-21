@@ -8,6 +8,13 @@ from typing import Any
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import sessionmaker
 
+from src.i18n.export_catalog import (
+    export_document,
+    export_text,
+    localize_lego_plan,
+    localized_step_name,
+    validate_export_context,
+)
 from src.model.models import (
     Color,
     LDrawPart,
@@ -1185,14 +1192,17 @@ def export_lego_design_ldraw(
     metadata: dict[str, list[dict[str, Any]]],
     include_base: bool,
     config: dict[str, Any],
+    export_context: dict[str, Any],
 ) -> str:
     ldraw_config = config["ldraw"]
+    export_context = validate_export_context(export_context)
     validate_design_parts_available(design, metadata, config)
     if design.get("modules"):
-        return export_lego_terrain_ldraw(design, metadata, include_base, config)
-    lines = ldraw_header(ldraw_config)
+        return export_lego_terrain_ldraw(design, metadata, include_base, config, export_context)
+    lines = ldraw_header(ldraw_config, export_context)
     support = create_support_base_placements(design, metadata, config) if include_base else None
     steps = create_lego_pixmap_steps(design, support, include_base, config)
+    localize_lego_steps(steps, export_context)
     lines.extend(ldraw_step_lines(steps, design["width"], design["height"], config))
     return ldraw_config["line_separator"].join(lines) + ldraw_config["line_separator"]
 
@@ -1202,10 +1212,15 @@ def export_lego_design_plan(
     metadata: dict[str, list[dict[str, Any]]],
     include_base: bool,
     config: dict[str, Any],
+    export_context: dict[str, Any],
 ) -> dict[str, Any]:
+    export_context = validate_export_context(export_context)
     validate_design_parts_available(design, metadata, config)
     if design.get("modules"):
-        return export_lego_terrain_plan(design, metadata, include_base, config)
+        return localize_lego_plan(
+            export_lego_terrain_plan(design, metadata, include_base, config),
+            export_context,
+        )
     ldraw_config = config["ldraw"]
     plan_config = config["plan_export"]
     layers = []
@@ -1248,7 +1263,7 @@ def export_lego_design_plan(
         )
     )
     steps = create_lego_pixmap_steps(design, support, include_base, config)
-    return {
+    return localize_lego_plan({
         "format": plan_config["format"],
         "includeSupportBase": include_base,
         "grid": {
@@ -1271,7 +1286,7 @@ def export_lego_design_plan(
         "modelDimensions": design["modelDimensions"],
         "bom": design["bom"],
         "colorMappings": design["colorMappings"],
-    }
+    }, export_context)
 
 
 def export_lego_terrain_ldraw(
@@ -1279,14 +1294,15 @@ def export_lego_terrain_ldraw(
     metadata: dict[str, list[dict[str, Any]]],
     include_base: bool,
     config: dict[str, Any],
+    export_context: dict[str, Any],
 ) -> str:
     ldraw_config = config["ldraw"]
-    submodel_config = ldraw_config["submodels"]
-    lines = ldraw_header(ldraw_config)
-    lines.extend(ldraw_section(submodel_config["main_assembly_name"], ldraw_config))
+    lines = ldraw_header(ldraw_config, export_context)
+    lines.extend(ldraw_section(export_text(export_context, "layers.terrainAssembly"), ldraw_config))
     if include_base:
         support = create_support_base_placements(design, metadata, config)
         base_steps = terrain_base_steps(support, design, config)
+        localize_lego_steps(base_steps, export_context)
         lines.extend(ldraw_step_lines(base_steps, design["width"], design["height"], config))
         if base_steps:
             lines.append(ldraw_step_line(ldraw_config))
@@ -1296,6 +1312,7 @@ def export_lego_terrain_ldraw(
         lines.append(ldraw_meta_line(ldraw_config["file_command"], terrain_module_file_name(module, config), ldraw_config))
         lines.extend(ldraw_section(module["id"], ldraw_config))
         module_steps = terrain_module_steps(module, design, config)
+        localize_lego_steps(module_steps, export_context)
         lines.extend(ldraw_step_lines(module_steps, design["width"], design["height"], config))
     return ldraw_config["line_separator"].join(lines) + ldraw_config["line_separator"]
 
@@ -1830,12 +1847,21 @@ def support_color(color_config: dict[str, Any], algorithm_config: dict[str, Any]
     }
 
 
-def ldraw_header(config: dict[str, Any]) -> list[str]:
+def ldraw_header(config: dict[str, Any], export_context: dict[str, Any]) -> list[str]:
+    document = export_document(export_context, "legoDesignPlan")
     return [
         ldraw_meta_line(config["file_command"], config["model_file_name"], config),
         ldraw_meta_line(config["name_command"], config["model_file_name"], config),
         ldraw_meta_line(config["author_command"], config["author"], config),
+        ldraw_meta_line(config["comment_prefix"], document["title"], config),
+        ldraw_meta_line(config["comment_prefix"], document["description"], config),
+        ldraw_meta_line(config["comment_prefix"], document["catalogVersion"], config),
     ]
+
+
+def localize_lego_steps(steps: list[dict[str, Any]], export_context: dict[str, Any]) -> None:
+    for step in steps:
+        step["name"] = localized_step_name(step, export_context, "lego")
 
 
 def ldraw_section(section: str, config: dict[str, Any]) -> list[str]:

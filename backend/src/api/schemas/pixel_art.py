@@ -33,6 +33,7 @@ class PixelArtGenerateSettings(BaseModel):
 class PixelArtProjectResponse(BaseModel):
     modelId: str
     name: str
+    contentLocale: str
     source: str
     createdAt: str
     assetSchema: str = Field(alias="schema")
@@ -52,6 +53,7 @@ class PixelArtPixelsUpdateRequest(BaseModel):
 class PixelArtProjectSummary(BaseModel):
     modelId: str
     name: str
+    contentLocale: str
     source: str
     createdAt: str
     gridWidth: int

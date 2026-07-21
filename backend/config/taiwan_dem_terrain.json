@@ -127,10 +127,10 @@
     "not_found": 404
   },
   "errors": {
-    "invalid_dem_dataset": "DEM dataset is not configured",
-    "invalid_dem_model": "DEM model not found",
-    "invalid_heightmap_aggregation": "Unsupported height aggregation",
-    "missing_heightmap_land_cover": "Valid DEM samples require land cover",
-    "missing_heightmap_land_cover_color": "DEM land cover class requires a color"
+    "invalid_dem_dataset": "terrain.invalid_dem_dataset",
+    "invalid_dem_model": "terrain.invalid_dem_model",
+    "invalid_heightmap_aggregation": "terrain.invalid_heightmap_aggregation",
+    "missing_heightmap_land_cover": "terrain.missing_heightmap_land_cover",
+    "missing_heightmap_land_cover_color": "terrain.missing_heightmap_land_cover_color"
   }
 }

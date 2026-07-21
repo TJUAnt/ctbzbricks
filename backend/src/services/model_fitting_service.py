@@ -74,8 +74,11 @@ def create_model_fitting_job(
             status=config["job_status"]["complete"],
             settings_json=settings,
             target_analysis_json=target_analysis,
+            locale=payload["locale"],
+            timezone=payload["timezone"],
             created_at=created_at,
-            error_message=None,
+            error_code=None,
+            error_params_json=None,
         )
         blocks = target_blocks_for_job(
             config,
@@ -510,7 +513,13 @@ def model_fitting_job_response(job: ModelFittingJob) -> dict[str, Any]:
         "status": job.status,
         "settings": job.settings_json,
         "targetAnalysis": job.target_analysis_json,
-        "errorMessage": job.error_message,
+        "error": (
+            {"code": job.error_code, "params": job.error_params_json or {}}
+            if job.error_code
+            else None
+        ),
+        "locale": job.locale,
+        "timezone": job.timezone,
         "createdAt": job.created_at.isoformat(),
         "updatedAt": job.updated_at.isoformat() if job.updated_at else None,
         "blocks": [

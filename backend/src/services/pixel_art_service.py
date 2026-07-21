@@ -11,6 +11,7 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from src.model.models import PixelArtProject
+from src.i18n.domain_content import normalize_content_locale
 
 
 def ensure_pixel_art_project_table(engine: Engine) -> None:
@@ -23,12 +24,15 @@ def save_pixel_art_project(
     name: str,
     source_image_bytes: bytes,
     asset: dict[str, Any],
+    content_locale: str,
 ) -> dict[str, Any]:
+    content_locale = normalize_content_locale(content_locale)
     model_id = uuid4().hex[: int(config["storage"]["project_id_hex_length"])]
     created_at = datetime.now(timezone.utc)
     project = PixelArtProject(
         id=model_id,
         name=name,
+        content_locale=content_locale,
         schema=asset["schema"],
         source_type=config["metadata"]["source_type"],
         source_name=asset["source"],
@@ -109,6 +113,7 @@ def pixel_art_project_response(config: dict[str, Any], project: PixelArtProject)
     return {
         "modelId": project.id,
         "name": project.name,
+        "contentLocale": project.content_locale,
         "source": project.source_name,
         "createdAt": project.created_at.isoformat(),
         "schema": project.schema,
@@ -125,6 +130,7 @@ def pixel_art_project_summary(config: dict[str, Any], project: PixelArtProject) 
     return {
         "modelId": project.id,
         "name": project.name,
+        "contentLocale": project.content_locale,
         "source": project.source_name,
         "createdAt": project.created_at.isoformat(),
         "gridWidth": project.grid_width,

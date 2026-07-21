@@ -82,6 +82,7 @@ class PartSearchServiceTest(unittest.TestCase):
             query="3020",
             strict_bbox=True,
             include_substitutes=False,
+            contentLocale="en-US",
         )
         self.assertEqual(
             search_kwargs_from_request(request, SEARCH_CONFIG)["rebrickable_part_num"],
@@ -93,6 +94,7 @@ class PartSearchServiceTest(unittest.TestCase):
             query="2x4",
             strict_bbox=True,
             include_substitutes=False,
+            contentLocale="zh-CN",
         )
         self.assertEqual(
             search_kwargs_options_from_request(request, SEARCH_CONFIG),

@@ -15,6 +15,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
+import { localizeStructuredMessage } from '../api/client';
 import type { PixelArtProject, PixelArtProjectList, PixelArtProjectSummary } from '../pixelArt/pixelArtApi';
 import {
   createLegoDesignJob,
@@ -34,18 +35,19 @@ import {
   createDemFinalDesign,
   createDemFinalDesignRequest,
   exportDemFinalDesignLdraw,
+  exportDemFinalDesignReport,
   type DemFinalBomItem,
   type DemFinalDesign,
   type DemSurfacePlacement,
 } from './demFinalDesignApi';
-import appConfig from '../app/appConfig.json';
+import appConfig from '../app/appConfig';
 import { loadModelAssetPage, type ModelAsset, type ModelAssetPage } from '../assets/modelAssetApi';
 import type { LegoHeightmapScale } from '../legoTerrain/legoHeightmap';
-import legoTerrainConfig from '../legoTerrain/legoTerrainConfig.json';
+import legoTerrainConfig from '../legoTerrain/legoTerrainConfig';
 import { loadTerrainModel, routeWithParam } from '../terrain/terrainApi';
-import terrainConfig from '../terrain/terrainConfig.json';
+import terrainConfig from '../terrain/terrainConfig';
 import type { TerrainAsset } from '../terrain/terrainTypes';
-import legoDesignConfig from './legoDesignConfig.json';
+import legoDesignConfig from './legoDesignConfig';
 
 export function LegoDesignPage() {
   const [page, setPage] = React.useState(legoDesignConfig.pagination.initialPage);
@@ -186,7 +188,11 @@ export function LegoDesignPage() {
       return;
     }
     if (nextJob.status === legoDesignConfig.jobStatus.failed) {
-      setError(nextJob.error ?? legoDesignConfig.texts.designFailed);
+      setError(
+        nextJob.error
+          ? localizeStructuredMessage(nextJob.error)
+          : legoDesignConfig.texts.designFailed,
+      );
       setGenerating(false);
       return;
     }
@@ -201,8 +207,8 @@ export function LegoDesignPage() {
     setError(null);
     try {
       if (demDesign) {
-        const blob = await exportDemFinalDesignLdraw(demDesign);
-        downloadBlob(blob, legoDesignConfig.demFinalDesign.planFileName.replace('.json', '.ldr'));
+        const exported = await exportDemFinalDesignLdraw(demDesign);
+        downloadBlob(exported.blob, exported.fileName);
       } else if (job && job.status === legoDesignConfig.jobStatus.complete && design) {
         const exported = await exportLegoDesign(job.jobId, includeSupportBase);
         downloadBlob(exported.blob, exported.fileName);
@@ -219,12 +225,8 @@ export function LegoDesignPage() {
     setError(null);
     try {
       if (demDesign) {
-        downloadBlob(
-          new Blob([JSON.stringify(demDesign, null, legoDesignConfig.demFinalDesign.planIndentation)], {
-            type: legoDesignConfig.demFinalDesign.planContentType,
-          }),
-          legoDesignConfig.demFinalDesign.planFileName,
-        );
+        const exported = await exportDemFinalDesignReport(demDesign);
+        downloadBlob(exported.blob, exported.fileName);
         return;
       }
       if (!job || job.status !== legoDesignConfig.jobStatus.complete || !design) {
@@ -675,9 +677,9 @@ function DemPlacementBlock({
 function ProgressPanel({ job }: { job: LegoDesignJob }) {
   return (
     <div className="lego-design-progress">
-      <span>{job.progress}%</span>
+      <span>{localizeStructuredMessage(job.progress, 'tasks')}</span>
       <div>
-        <div style={{ width: `${job.progress}%` }} />
+        <div style={{ width: `${job.progress.percent}%` }} />
       </div>
     </div>
   );

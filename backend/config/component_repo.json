@@ -18,9 +18,13 @@
   },
   "routes": {
     "component_imports": "/api/component-imports",
+    "component_import_upload_session": "/api/component-imports/upload-session",
+    "component_import_upload_complete": "/api/component-imports/{upload_session_id}/upload-complete",
     "component_import": "/api/component-imports/{import_id}",
     "component_import_parse": "/api/component-imports/{import_id}/parse",
     "component_import_candidate": "/api/component-imports/{import_id}/candidate",
+    "candidate_detail": "/api/component-candidates/{candidate_id}",
+    "candidate_preview": "/api/component-candidates/{candidate_id}/preview",
     "candidate_relations": "/api/component-candidates/{candidate_id}/relations",
     "candidate_relations_detect": "/api/component-candidates/{candidate_id}/relations/detect",
     "candidate_relation_confirm": "/api/component-candidates/{candidate_id}/relations/{relation_id}/confirm",
@@ -28,11 +32,16 @@
     "candidate_free_connectors": "/api/component-candidates/{candidate_id}/connectors/free",
     "candidate_interfaces": "/api/component-candidates/{candidate_id}/interfaces",
     "candidate_validate": "/api/component-candidates/{candidate_id}/validate",
-    "candidate_approve": "/api/component-candidates/{candidate_id}/approve",
     "components": "/api/components",
+    "component_preview_first": "/api/component-previews/first",
     "component_detail": "/api/components/{component_id}",
+    "component_translation": "/api/components/{component_id}/translations/{locale}",
+    "part_translation": "/api/parts/{part_number}/translations/{locale}",
+    "i18n_metrics": "/api/i18n/metrics",
+    "i18n_events": "/api/i18n/events",
     "component_versions": "/api/components/{component_id}/versions",
     "component_version": "/api/component-versions/{version_id}",
+    "component_version_preview": "/api/component-versions/{version_id}/preview",
     "component_version_publish": "/api/component-versions/{version_id}/publish",
     "component_version_deprecate": "/api/component-versions/{version_id}/deprecate",
     "component_version_archive": "/api/component-versions/{version_id}/archive",
@@ -69,7 +78,49 @@
       "unclosed_model": "unclosed_model"
     }
   },
+  "preview": {
+    "ldraw_root_env": "LDRAW_ROOT",
+    "ldraw_root_candidates": [
+      "/Applications/Studio 2.0/ldraw",
+      "D:\\Program Files\\LDraw"
+    ],
+    "coordinate_precision": 6,
+    "mesh": {
+      "file_pattern": "*.dat",
+      "text_encodings": ["utf-8", "latin-1"],
+      "maximum_recursion_depth": 64,
+      "line_type": {
+        "comment": "0",
+        "reference": "1",
+        "triangle": "3",
+        "quadrilateral": "4"
+      },
+      "ignored_missing_references": ["6221655zc01.dat"],
+      "surface_excluded_path_patterns": [],
+      "top_connection_path_patterns": [],
+      "syntax": {
+        "reference_token_count": 15,
+        "triangle_vertex_count": 3,
+        "quadrilateral_vertex_count": 4,
+        "face_header_token_count": 2,
+        "coordinate_count": 3
+      },
+      "errors": {
+        "text_decode": "component_repo.preview_unavailable",
+        "maximum_recursion": "component_repo.preview_unavailable",
+        "recursive_include": "component_repo.preview_unavailable",
+        "missing_file": "component_repo.preview_unavailable",
+        "invalid_line": "component_repo.preview_unavailable",
+        "missing_reference": "component_repo.preview_unavailable"
+      }
+    }
+  },
   "imports": {
+    "upload_session_status": {
+      "pending": "pending",
+      "completed": "completed",
+      "failed": "failed"
+    },
     "status": {
       "uploaded": "uploaded",
       "parsing": "parsing",
@@ -81,7 +132,7 @@
     "status": {
       "pending_review": "pending_review",
       "in_review": "in_review",
-      "approved": "approved",
+      "published": "published",
       "rejected": "rejected"
     }
   },
@@ -198,6 +249,7 @@
   },
   "database": {
     "artifact_table": "component_artifacts",
+    "upload_session_table": "component_upload_sessions",
     "import_table": "component_imports",
     "scene_snapshot_table": "component_scene_snapshots",
     "candidate_table": "component_candidates",
@@ -230,6 +282,9 @@
       "artifact_type": "idx_component_artifacts_type",
       "artifact_sha": "idx_component_artifacts_sha256",
       "artifact_uploaded": "idx_component_artifacts_uploaded_at",
+      "upload_session_owner": "idx_component_upload_sessions_owner",
+      "upload_session_status": "idx_component_upload_sessions_status",
+      "upload_session_created": "idx_component_upload_sessions_created_at",
       "import_status": "idx_component_imports_status",
       "import_created": "idx_component_imports_created_at",
       "snapshot_import": "idx_component_scene_snapshots_import",
@@ -255,10 +310,10 @@
     }
   },
   "errors": {
-    "invalid_artifact_type": "Unsupported component artifact type: {artifact_type}",
-    "missing_supabase_config": "Missing Supabase Storage configuration",
-    "immutable_artifact_exists": "Immutable artifact already exists at storage key: {storage_key}",
-    "artifact_not_found": "Component artifact not found: {artifact_id}",
-    "hash_mismatch": "Component artifact hash mismatch: {artifact_id}"
+    "invalid_artifact_type": "component_repo.invalid_artifact_type",
+    "missing_supabase_config": "component_repo.missing_supabase_config",
+    "immutable_artifact_exists": "component_repo.immutable_artifact_exists",
+    "artifact_not_found": "component_repo.artifact_not_found",
+    "hash_mismatch": "component_repo.hash_mismatch"
   }
 }

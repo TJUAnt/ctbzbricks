@@ -81,12 +81,12 @@
     }
   },
   "errors": {
-    "empty_ldraw_content": "Submodel LDraw content is required",
-    "invalid_ldraw_part_line": "Invalid LDraw part line at line {line_number}",
-    "invalid_color_percentage": "Color percentage is outside the configured range",
-    "invalid_connection_point_orientation": "Connection point orientation must contain the configured number of values",
-    "insufficient_parts": "Submodel must contain the configured minimum number of part lines",
-    "submodel_not_found": "Submodel not found"
+    "empty_ldraw_content": "submodel.empty_ldraw_content",
+    "invalid_ldraw_part_line": "submodel.invalid_ldraw_part_line",
+    "invalid_color_percentage": "submodel.invalid_color_percentage",
+    "invalid_connection_point_orientation": "submodel.invalid_connection_point_orientation",
+    "insufficient_parts": "submodel.insufficient_parts",
+    "submodel_not_found": "submodel.not_found"
   },
   "http_status": {
     "bad_request": 400,

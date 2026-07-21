@@ -1,6 +1,12 @@
 {
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "i18n:types": "node scripts/generate-i18n-types.mjs",
+    "i18n:validate": "node scripts/check-i18n-resources.mjs",
+    "i18n:hash": "node scripts/check-i18n-resources.mjs --print-hash",
+    "i18n:check": "node scripts/generate-i18n-types.mjs --check && npm run i18n:validate",
+    "prebuild": "npm run i18n:check",
+    "pretest": "npm run i18n:check",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run"
@@ -12,10 +18,13 @@
     "@types/three": "^0.184.1",
     "@vitejs/plugin-react": "4.3.4",
     "autoprefixer": "latest",
+    "i18next": "^26.3.6",
+    "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "latest",
     "postcss": "latest",
     "react": "latest",
     "react-dom": "latest",
+    "react-i18next": "^17.0.10",
     "react-router-dom": "^7.17.0",
     "tailwindcss": "^3.4.17",
     "three": "^0.184.0",

@@ -6,7 +6,8 @@
     "surface_patch_candidates": "/api/dem-lego-design/surface-patch/candidates",
     "surface_plan": "/api/dem-lego-design/surface-plan",
     "final_design": "/api/dem-lego-design/final-design",
-    "final_design_ldraw": "/api/dem-lego-design/final-design/ldraw"
+    "final_design_ldraw": "/api/dem-lego-design/final-design/ldraw",
+    "final_design_report": "/api/dem-lego-design/final-design/report"
   },
   "parts": {
     "name_space_separator": " ",
@@ -89,7 +90,7 @@
       "41855.dat", "99301.dat", "3675.dat", "43708.dat", "22388.dat"
     ],
     "errors": {
-      "aggregation_invalid": "DEM height aggregation is not configured"
+      "aggregation_invalid": "dem_lego_design.design_input.aggregation_invalid"
     }
   },
   "algorithm": {
@@ -152,12 +153,12 @@
         "coordinate_count": 3
       },
       "errors": {
-        "text_decode": "Cannot decode LDraw file {path}: {errors}",
-        "maximum_recursion": "Maximum LDraw recursion depth reached at {path}",
-        "recursive_include": "Recursive LDraw include detected at {path}",
-        "missing_file": "LDraw file is missing: {path}",
-        "invalid_line": "Invalid LDraw geometry line at {path}:{line}",
-        "missing_reference": "Missing LDraw reference {reference} at {path}:{line}"
+        "text_decode": "dem_lego_design.mesh.text_decode",
+        "maximum_recursion": "dem_lego_design.mesh.maximum_recursion",
+        "recursive_include": "dem_lego_design.mesh.recursive_include",
+        "missing_file": "dem_lego_design.mesh.missing_file",
+        "invalid_line": "dem_lego_design.mesh.invalid_line",
+        "missing_reference": "dem_lego_design.mesh.missing_reference"
       }
     },
     "sampling": {
@@ -172,9 +173,9 @@
       "center_divisor": 2,
       "rounding_decimal_places": 6,
       "errors": {
-        "empty_mesh": "LDraw part mesh contains no triangles",
-        "non_stud_width": "LDraw part {part_id} width is not aligned to the stud grid",
-        "non_stud_depth": "LDraw part {part_id} depth is not aligned to the stud grid"
+        "empty_mesh": "dem_lego_design.sampling.empty_mesh",
+        "non_stud_width": "dem_lego_design.sampling.non_stud_width",
+        "non_stud_depth": "dem_lego_design.sampling.non_stud_depth"
       }
     }
   },
@@ -207,16 +208,16 @@
         {"degrees": 270, "quarter_turns": 3}
       ],
       "errors": {
-        "target_surface_empty": "Target surface must contain at least one sample",
-        "target_surface_not_rectangular": "Target surface rows must have equal lengths",
-        "target_color_not_rectangular": "Target color rows must have equal lengths",
-        "target_dimensions_mismatch": "Target surface dimensions must equal target color dimensions multiplied by the profile sample rate",
-        "profile_sample_rate_mismatch": "All surface profiles must use the same sample rate"
+          "target_surface_empty": "dem_lego_design.surface_patch.target_surface_empty",
+          "target_surface_not_rectangular": "dem_lego_design.surface_patch.target_surface_not_rectangular",
+          "target_color_not_rectangular": "dem_lego_design.surface_patch.target_color_not_rectangular",
+          "target_dimensions_mismatch": "dem_lego_design.surface_patch.target_dimensions_mismatch",
+          "profile_sample_rate_mismatch": "dem_lego_design.surface_patch.profile_sample_rate_mismatch"
       }
     },
     "errors": {
-      "part_ids_empty": "At least one LDraw surface part id is required",
-      "part_ids_duplicate": "LDraw surface part ids must be unique"
+      "part_ids_empty": "dem_lego_design.surface_patch.part_ids_empty",
+      "part_ids_duplicate": "dem_lego_design.surface_patch.part_ids_duplicate"
     }
   },
   "surface_plan": {
@@ -231,10 +232,10 @@
       {"x": 0, "z": 1}
     ],
     "errors": {
-      "surface_not_coverable": "No remaining slope replacement produces a buildable BaseH",
-      "candidate_outside_target": "Surface patch candidate extends outside the target",
-      "candidate_cells_empty": "Surface patch candidate must cover at least one stud cell",
-      "target_height_dimensions_mismatch": "Target height dimensions must equal target color dimensions"
+      "surface_not_coverable": "dem_lego_design.surface_plan.surface_not_coverable",
+      "candidate_outside_target": "dem_lego_design.surface_plan.candidate_outside_target",
+      "candidate_cells_empty": "dem_lego_design.surface_plan.candidate_cells_empty",
+      "target_height_dimensions_mismatch": "dem_lego_design.surface_plan.target_height_dimensions_mismatch"
     }
   },
   "colored_replacement": {
@@ -247,10 +248,10 @@
     "transient_heightmap_model_id_template": "transient-colored-heightmap-{source_dem_model_id}",
     "missing_surface_fill_color": "Colored replacement final design is missing a usable surface fill color",
     "errors": {
-      "heightmap_cells_missing": "Colored Heightmap cells are missing",
-      "heightmap_dimensions_invalid": "Colored Heightmap dimensions do not match its cells",
-      "target_dimensions_mismatch": "Colored replacement target dimensions must match Heightmap dimensions",
-      "rotation_missing": "Colored replacement rotation is not configured"
+      "heightmap_cells_missing": "dem_lego_design.colored_replacement.heightmap_cells_missing",
+      "heightmap_dimensions_invalid": "dem_lego_design.colored_replacement.heightmap_dimensions_invalid",
+      "target_dimensions_mismatch": "dem_lego_design.colored_replacement.target_dimensions_mismatch",
+      "rotation_missing": "dem_lego_design.colored_replacement.rotation_missing"
     },
     "minimum_base_height_plate": 0,
     "maximum_height_error_plate": 0,
@@ -373,7 +374,7 @@
       }
     },
     "errors": {
-      "support_base_failed": "DEM support base could not be generated"
+      "support_base_failed": "dem_lego_design.support_base.failed"
     }
   },
   "vertical_continuity": {
@@ -392,10 +393,10 @@
       {"degrees": 270, "quarter_turns": 3}
     ],
     "errors": {
-      "rotation_missing": "Vertical continuity rotation is not configured",
-      "sample_resolution": "Vertical continuity must sample exactly one column per LDU",
-      "profile_sample_resolution": "Vertical continuity profile resolution does not match one LDU",
-      "profile_missing": "Vertical continuity profile is missing for {part_id}"
+      "rotation_missing": "dem_lego_design.vertical_continuity.rotation_missing",
+      "sample_resolution": "dem_lego_design.vertical_continuity.sample_resolution",
+      "profile_sample_resolution": "dem_lego_design.vertical_continuity.profile_sample_resolution",
+      "profile_missing": "dem_lego_design.vertical_continuity.profile_missing"
     }
   },
   "final_design": {
@@ -436,7 +437,7 @@
         "blue_end": 6
       },
       "errors": {
-        "target_color_missing": "Final DEM design target color metadata is missing"
+        "target_color_missing": "dem_lego_design.final_design.target_color_missing"
       }
     },
     "steps": {
@@ -470,29 +471,27 @@
       "maximum_placements_per_step": 100
     },
     "errors": {
-      "strategy_invalid": "DEM final design strategy is not configured",
-      "part_metadata_missing": "Final DEM design is missing LDraw part metadata",
-      "color_metadata_missing": "Final DEM design is missing color metadata",
-      "structure_not_coverable": "No globally selected surface plan has a buildable BaseH structure",
-      "validation_failed": "Final DEM design failed global validation"
+      "strategy_invalid": "dem_lego_design.final_design.strategy_invalid",
+      "part_metadata_missing": "dem_lego_design.final_design.part_metadata_missing",
+      "color_metadata_missing": "dem_lego_design.final_design.color_metadata_missing",
+      "structure_not_coverable": "dem_lego_design.final_design.structure_not_coverable",
+      "validation_failed": "dem_lego_design.final_design.validation_failed"
     }
   },
   "errors": {
-    "base_h_empty": "BaseH must contain at least one row and one column",
-    "base_h_not_rectangular": "BaseH rows must have equal lengths",
-    "base_h_negative": "BaseH heights must be non-negative integers",
-    "part_metadata_missing": "DEM BaseH requires configured brick and plate candidates",
-    "base_h_uncovered": "DEM BaseH cannot be covered by the configured LEGO parts",
-    "surface_profile_part_id": "LDraw part id must include a valid .dat file name"
+    "base_h_empty": "dem_lego_design.base_h_empty",
+    "base_h_not_rectangular": "dem_lego_design.base_h_not_rectangular",
+    "base_h_negative": "dem_lego_design.base_h_negative",
+    "part_metadata_missing": "dem_lego_design.part_metadata_missing",
+    "base_h_uncovered": "dem_lego_design.base_h_uncovered",
+    "surface_profile_part_id": "dem_lego_design.surface_profile_part_id"
   },
   "http_status": {
     "bad_request": 400
   },
   "dem_ldraw": {
     "content_type": "text/plain; charset=utf-8",
-    "filename_template": "dem-lego-design.ldr",
     "content_disposition_header": "Content-Disposition",
-    "content_disposition_template": "attachment; filename=\"{filename}\"",
     "line_separator": "\n",
     "metadata_line_type": 0,
     "part_line_type": 1,

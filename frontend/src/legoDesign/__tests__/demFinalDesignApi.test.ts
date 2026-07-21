@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { currentTaskContext } from '../../api/taskContext';
 import { createDemFinalDesignRequest } from '../demFinalDesignApi';
 
 describe('DEM final design request', () => {
-  it('sends only the model identity and user scale to the backend', () => {
+  it('freezes locale and timezone with the model identity and user scale', () => {
     const request = createDemFinalDesignRequest(
       'model-id',
       'surface-plan',
@@ -21,6 +22,7 @@ describe('DEM final design request', () => {
       verticalMetersPerPlate: 500,
       aggregation: 'percentile',
       minCoverageRatio: 0.25,
+      ...currentTaskContext(),
     });
   });
 });

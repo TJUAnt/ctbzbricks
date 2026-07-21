@@ -8,6 +8,8 @@ REQUIRED_FITTING_CANDIDATE_RECALL_CONFIG_KEYS = (
     "defaults",
     "limits",
     "scoring",
+    "fuzzy_type",
+    "part_filters",
     "irregular",
     "json_keys",
     "response",

@@ -77,12 +77,7 @@ def deserialize_ldraw_document(content: str, config: dict[str, Any]) -> LDrawDoc
             continue
         if tokens[0] == ldraw["studio_v2_line_type"]:
             issues.append(
-                LDrawParseIssue(
-                    issue_type=ldraw["issues"]["unsupported_line_type"],
-                    line_no=line_no,
-                    message="Studio type 11 line is preserved as an unsupported line in Stage 1",
-                    raw_line=raw_line,
-                )
+                parse_issue(ldraw["issues"]["unsupported_line_type"], line_no)
             )
             current_model["meta_lines"].append(raw_line)
             continue
@@ -90,12 +85,7 @@ def deserialize_ldraw_document(content: str, config: dict[str, Any]) -> LDrawDoc
 
     if current_model is not None:
         issues.append(
-            LDrawParseIssue(
-                issue_type=ldraw["issues"]["unclosed_model"],
-                line_no=current_model["start_line_no"],
-                message="Model section reached EOF without 0 NOFILE",
-                raw_line=current_model["source_name"],
-            )
+            parse_issue(ldraw["issues"]["unclosed_model"], current_model["start_line_no"])
         )
         models.append(current_model)
 
@@ -133,24 +123,14 @@ def parse_type1_reference(
 ) -> LDrawReference | None:
     if len(tokens) < ldraw["type1_token_count"]:
         issues.append(
-            LDrawParseIssue(
-                issue_type=ldraw["issues"]["invalid_type1_line"],
-                line_no=line_no,
-                message="Type 1 line does not contain enough tokens",
-                raw_line=raw_line,
-            )
+            parse_issue(ldraw["issues"]["invalid_type1_line"], line_no)
         )
         return None
     try:
         values = tuple(float(token) for token in tokens[2:14])
     except ValueError:
         issues.append(
-            LDrawParseIssue(
-                issue_type=ldraw["issues"]["invalid_type1_line"],
-                line_no=line_no,
-                message="Type 1 transform contains a non-numeric value",
-                raw_line=raw_line,
-            )
+            parse_issue(ldraw["issues"]["invalid_type1_line"], line_no)
         )
         return None
     reference_name = " ".join(tokens[14:]).strip()
@@ -180,11 +160,10 @@ def materialize_models(
         normalized_name = normalize_reference_name(source_name)
         if normalized_name in seen_names:
             issues.append(
-                LDrawParseIssue(
-                    issue_type=ldraw["issues"]["duplicate_model_name"],
-                    line_no=raw_model["start_line_no"],
-                    message=f"Duplicate model name: {source_name}",
-                    raw_line=source_name,
+                parse_issue(
+                    ldraw["issues"]["duplicate_model_name"],
+                    raw_model["start_line_no"],
+                    {"modelName": source_name},
                 )
             )
         seen_names.add(normalized_name)
@@ -268,3 +247,16 @@ def resolve_submodel_reference(
 
 def normalize_reference_name(value: str) -> str:
     return value.strip().lower()
+
+
+def parse_issue(
+    issue_type: str,
+    line_no: int,
+    params: dict[str, Any] | None = None,
+) -> LDrawParseIssue:
+    return LDrawParseIssue(
+        code=f"component_repo.parse.{issue_type}",
+        severity="warning",
+        params={"line": line_no, **dict(params or {})},
+        path=("lines", line_no),
+    )

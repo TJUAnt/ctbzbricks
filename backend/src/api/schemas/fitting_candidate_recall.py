@@ -2,7 +2,10 @@
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from src.api.schemas.task import StructuredMessageResponse
+from src.i18n.domain_content import normalize_content_locale
 
 
 class FittingCandidateRecallBBoxRequest(BaseModel):
@@ -33,8 +36,16 @@ class FittingCandidateRecallRequest(BaseModel):
     connectors: list[FittingCandidateRecallConnectorRequest] | None = None
     categories: list[str] | None = None
     colorCodes: list[str] | None = None
+    typeQuery: str | None = None
+    allowPlanarRotation: bool = True
     includeIrregular: bool | None = None
     limit: int | None = None
+    contentLocale: str = "en-US"
+
+    @field_validator("contentLocale")
+    @classmethod
+    def validate_content_locale(cls, value: str) -> str:
+        return normalize_content_locale(value)
 
 
 class FittingCandidateRecallCandidateResponse(BaseModel):
@@ -44,13 +55,19 @@ class FittingCandidateRecallCandidateResponse(BaseModel):
     source: str
     score: float
     scoreReasons: list[str]
+    name: str | None = None
+    description: str | None = None
+    contentLocale: str = "en-US"
+    translationStatus: str = "source"
+    matchedType: str | None = None
+    typeScore: float | None = None
     bbox: dict[str, Any] | None
     logicalSize: dict[str, Any] | None
     appearanceTags: dict[str, Any] | None
     colorSummary: list[dict[str, Any]] | None
     connectorSummary: dict[str, Any] | None
     sourceMetadata: dict[str, Any] | None
-    profileError: str | None
+    profileError: StructuredMessageResponse | None
     profileErrorType: str | None
 
 

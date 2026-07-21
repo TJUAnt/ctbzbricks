@@ -94,6 +94,13 @@ def detect_relation_candidates(
             )
         ).all()
         if existing:
+            candidate.status = config["candidates"]["status"]["in_review"]
+            candidate.review_decisions_json = {
+                **(candidate.review_decisions_json or {}),
+                "relationDetectionCompleted": True,
+                "partLibraryVersionId": part_library["id"],
+            }
+            session.commit()
             return [relation_candidate_response(row) for row in existing]
         rows = []
         for index_a, connector_a in enumerate(connectors):
@@ -132,6 +139,12 @@ def detect_relation_candidates(
                 )
                 session.add(relation)
                 rows.append(relation)
+        candidate.status = config["candidates"]["status"]["in_review"]
+        candidate.review_decisions_json = {
+            **(candidate.review_decisions_json or {}),
+            "relationDetectionCompleted": True,
+            "partLibraryVersionId": part_library["id"],
+        }
         session.commit()
         for row in rows:
             session.refresh(row)
@@ -178,6 +191,24 @@ def confirm_relation_candidate(
             return assembly_relation_response(existing)
         if relation.status == config["relations"]["candidate_status"]["rejected"]:
             raise ValueError(f"Component relation candidate already rejected: {relation_candidate_id}")
+        occupied = {
+            connector_id
+            for assembly in session.scalars(
+                select(ComponentAssemblyRelation).where(
+                    ComponentAssemblyRelation.component_candidate_id == relation.component_candidate_id
+                )
+            ).all()
+            for connector_id in (
+                assembly.endpoint_a_json.get("worldConnectorId"),
+                assembly.endpoint_b_json.get("worldConnectorId"),
+            )
+        }
+        relation_connector_ids = {
+            relation.endpoint_a_json.get("worldConnectorId"),
+            relation.endpoint_b_json.get("worldConnectorId"),
+        }
+        if occupied & relation_connector_ids:
+            raise ValueError("component_repo.connector_capacity_exceeded")
         relation.status = config["relations"]["candidate_status"]["confirmed"]
         assembly = ComponentAssemblyRelation(
             id=str(uuid4()),
@@ -218,6 +249,13 @@ def reject_relation_candidate(
                 f"Component relation candidate {relation_candidate_id} does not belong to candidate {component_candidate_id}"
             )
         ensure_candidate_not_published(session, config, relation.component_candidate_id)
+        assembly = session.scalar(
+            select(ComponentAssemblyRelation).where(
+                ComponentAssemblyRelation.relation_candidate_id == relation_candidate_id
+            )
+        )
+        if assembly is not None:
+            raise ValueError("component_repo.confirmed_relation_cannot_be_rejected")
         relation.status = config["relations"]["candidate_status"]["rejected"]
         session.commit()
         session.refresh(relation)
@@ -461,6 +499,9 @@ def ensure_candidate_not_published(
     config: dict[str, Any],
     component_candidate_id: str,
 ) -> None:
+    candidate = session.get(ComponentCandidate, component_candidate_id)
+    if candidate is not None and candidate.status == config["candidates"]["status"]["published"]:
+        raise ValueError(f"Published component candidate is immutable: {component_candidate_id}")
     published = session.scalar(
         select(ComponentVersion).where(
             ComponentVersion.component_candidate_id == component_candidate_id,

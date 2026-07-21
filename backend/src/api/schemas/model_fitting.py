@@ -4,8 +4,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from src.api.schemas.task import StructuredMessageResponse, TaskContextRequest
 
-class ModelFittingCreateJobRequest(BaseModel):
+
+class ModelFittingCreateJobRequest(TaskContextRequest):
     modelId: str
     name: str | None = None
     scaleToLdu: float | None = None
@@ -67,7 +69,9 @@ class ModelFittingJobResponse(BaseModel):
     status: str
     settings: dict[str, Any]
     targetAnalysis: dict[str, Any]
-    errorMessage: str | None
+    error: StructuredMessageResponse | None
+    locale: str
+    timezone: str
     createdAt: str
     updatedAt: str | None
     blocks: list[ModelFittingTargetBlockResponse]

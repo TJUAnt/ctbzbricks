@@ -1,3 +1,5 @@
+import type { StructuredMessage } from '../api/client';
+
 export type TerrainBounds = {
   west: number;
   south: number;
@@ -49,11 +51,13 @@ export type TerrainModelMetadata = {
 export type TerrainJob = {
   jobId: string;
   status: string;
-  progress: number;
+  progress: StructuredMessage & { percent: number };
   sourceName: string;
   asset: TerrainAsset | null;
   model: TerrainModelMetadata | null;
-  error: string | null;
+  error: StructuredMessage | null;
+  locale: 'zh-CN' | 'en-US';
+  timezone: string;
 };
 
 export type TerrainSceneConfig = {

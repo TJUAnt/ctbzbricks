@@ -2,6 +2,8 @@ import React from 'react';
 import { ArrowUp, Compass, Grid3X3, Layers3, Mountain, RotateCcw } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { localizeStructuredMessage } from '../api/client';
+import { formatNumber } from '../i18n/formatters';
 import {
   combineGeojsonFeatureCollections,
   createTerrainJob,
@@ -15,7 +17,7 @@ import {
   summarizeGeojsonDocuments,
   type TerrainGeojsonFileInfo,
 } from './terrainApi';
-import terrainConfig from './terrainConfig.json';
+import terrainConfig from './terrainConfig';
 import {
   combinedTerrainBounds,
   createBoundaryLines,
@@ -48,6 +50,7 @@ export function TerrainDemPage() {
   const [terrainName, setTerrainName] = React.useState<string | null>(null);
   const [saveMessage, setSaveMessage] = React.useState<string | null>(null);
   const [geojsonInfo, setGeojsonInfo] = React.useState<TerrainGeojsonFileInfo[] | null>(null);
+  const [progressMessage, setProgressMessage] = React.useState('');
 
   React.useEffect(() => {
     let active = true;
@@ -155,8 +158,9 @@ export function TerrainDemPage() {
           status: 'importing',
           assets: currentState.assets,
           error: null,
-          progress: Math.round(job.progress),
+          progress: job.progress.percent,
         }));
+        setProgressMessage(localizeStructuredMessage(job.progress, 'tasks'));
       });
       if (!completedJob.asset) {
         throw new Error(terrainConfig.texts.loadFailed);
@@ -202,7 +206,11 @@ export function TerrainDemPage() {
       onProgress(currentJob);
     }
     if (currentJob.status === terrainConfig.jobStatus.failed) {
-      throw new Error(currentJob.error ?? terrainConfig.texts.loadFailed);
+      throw new Error(
+        currentJob.error
+          ? localizeStructuredMessage(currentJob.error)
+          : terrainConfig.texts.loadFailed,
+      );
     }
     return currentJob;
   };
@@ -318,6 +326,7 @@ export function TerrainDemPage() {
             <Mountain aria-hidden="true" />
             <div>
               <span>{terrainConfig.texts.importing}</span>
+              <small>{progressMessage}</small>
               <div className="terrain-progress" aria-valuenow={terrainState.progress}>
                 <div style={{ width: `${terrainState.progress}%` }} />
               </div>
@@ -644,7 +653,7 @@ export function TerrainStats({ assets, config }: { assets: TerrainAsset[]; confi
       <Metric
         icon={<Layers3 aria-hidden="true" />}
         label={config.texts.assetCount}
-        value={assets.length.toLocaleString()}
+        value={formatNumber(assets.length)}
       />
       <Metric
         icon={<Grid3X3 aria-hidden="true" />}
@@ -659,7 +668,7 @@ export function TerrainStats({ assets, config }: { assets: TerrainAsset[]; confi
       <Metric
         icon={<Grid3X3 aria-hidden="true" />}
         label={config.texts.validSamples}
-        value={validSampleCount.toLocaleString()}
+        value={formatNumber(validSampleCount)}
       />
     </div>
   );
@@ -719,7 +728,7 @@ function TerrainModelList({
             >
               <span>{model.source}</span>
               <strong>
-                {model.columns} x {model.rows} / {model.validSampleCount.toLocaleString()}
+                {model.columns} x {model.rows} / {formatNumber(model.validSampleCount)}
               </strong>
             </button>
           ))}

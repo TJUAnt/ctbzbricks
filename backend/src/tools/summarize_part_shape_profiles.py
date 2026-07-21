@@ -129,13 +129,14 @@ def profile_failures(session: object, failure_limit: int) -> list[dict]:
             LDrawPart.category,
             LDrawPart.ldraw_part_num,
             LDrawPartShapeProfile.profile_error_type,
-            LDrawPartShapeProfile.profile_error,
+            LDrawPartShapeProfile.profile_error_code,
+            LDrawPartShapeProfile.profile_error_params_json,
         )
         .join(
             LDrawPartShapeProfile,
             LDrawPartShapeProfile.ldraw_part_id == LDrawPart.id,
         )
-        .where(LDrawPartShapeProfile.profile_error.is_not(None))
+        .where(LDrawPartShapeProfile.profile_error_code.is_not(None))
         .order_by(LDrawPart.category, LDrawPart.ldraw_part_num)
         .limit(failure_limit)
     )
@@ -144,9 +145,9 @@ def profile_failures(session: object, failure_limit: int) -> list[dict]:
             "category": category,
             "partId": part_id,
             "errorType": error_type,
-            "error": error,
+            "error": {"code": error, "params": params or {}},
         }
-        for category, part_id, error_type, error in rows
+        for category, part_id, error_type, error, params in rows
     ]
 
 

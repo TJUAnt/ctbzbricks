@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from src.config.app_settings import BACKEND_ROOT, load_json_config
 from src.config.db_config import get_db_url
+from src.i18n.messages import message
 from src.ldraw.mesh import collect_ldraw_mesh
 from src.ldraw.surface_profile import build_part_surface_profile
 from src.model.models import (
@@ -297,7 +298,17 @@ def profile_parts(config: dict[str, Any], dem_config: dict[str, Any]) -> list[di
         }
         mesh = collect_ldraw_mesh(part.relative_path, files, profile_config["mesh"])
         if mesh.errors:
-            record.update({"status": "mesh_error", "errors": list(mesh.errors)})
+            record.update(
+                {
+                    "status": "mesh_error",
+                    "errors": [
+                        message(
+                            "dem_slope_catalog.mesh_failed",
+                            {"partId": part.ldraw_part_num, "errorCount": len(mesh.errors)},
+                        )
+                    ],
+                }
+            )
         else:
             try:
                 profile = build_part_surface_profile(
@@ -307,8 +318,18 @@ def profile_parts(config: dict[str, Any], dem_config: dict[str, Any]) -> list[di
                     mesh.top_connection_origins,
                     profile_config["sampling"],
                 )
-            except ValueError as error:
-                record.update({"status": "profile_error", "errors": [str(error)]})
+            except ValueError:
+                record.update(
+                    {
+                        "status": "profile_error",
+                        "errors": [
+                            message(
+                                "dem_slope_catalog.profile_failed",
+                                {"partId": part.ldraw_part_num},
+                            )
+                        ],
+                    }
+                )
             else:
                 record.update(
                     {

@@ -126,7 +126,8 @@ def _upsert_files(session, part_records: list[dict]) -> None:
             "line_count": None,
             "source": "ldraw_official",
             "import_status": "parsed",
-            "parse_error": None,
+            "parse_error_code": None,
+            "parse_error_params_json": None,
         }
         for record in part_records
     ]
@@ -146,7 +147,8 @@ def _upsert_files(session, part_records: list[dict]) -> None:
                     "category",
                     "source",
                     "import_status",
-                    "parse_error",
+                    "parse_error_code",
+                    "parse_error_params_json",
                 ),
             )
         )
@@ -177,7 +179,8 @@ def _upsert_parts(session, part_records: list[dict]) -> None:
                 "file_hash": None,
                 "source": "ldraw_official",
                 "import_status": "parsed",
-                "parse_error": None,
+                "parse_error_code": None,
+                "parse_error_params_json": None,
             }
         )
 
@@ -195,7 +198,8 @@ def _upsert_parts(session, part_records: list[dict]) -> None:
                     "relative_path",
                     "source",
                     "import_status",
-                    "parse_error",
+                    "parse_error_code",
+                    "parse_error_params_json",
                 ),
             )
         )

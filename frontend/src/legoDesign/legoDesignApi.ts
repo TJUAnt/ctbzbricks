@@ -1,5 +1,8 @@
+import { apiFetch, requestJson } from '../api/client';
+import type { StructuredMessage } from '../api/client';
+import { currentTaskContext } from '../api/taskContext';
 import type { PixelArtProject, PixelArtProjectList } from '../pixelArt/pixelArtApi';
-import legoDesignConfig from './legoDesignConfig.json';
+import legoDesignConfig from './legoDesignConfig';
 
 export type LegoDesignColor = {
   id: number;
@@ -101,42 +104,33 @@ export type LegoModelDimensions = {
 export type LegoDesignJob = {
   jobId: string;
   status: string;
-  progress: number;
+  progress: StructuredMessage & { percent: number };
   projectId: string;
   result: LegoDesignResult | null;
-  error: string | null;
+  error: StructuredMessage | null;
+  locale: string;
+  timezone: string;
+  catalogVersion: string;
 };
 
 export async function loadLegoDesignMetadata(): Promise<LegoDesignMetadata> {
-  const response = await fetch(legoDesignConfig.metadataApiUrl);
-  if (!response.ok) {
-    throw new Error(legoDesignConfig.texts.metadataFailed);
-  }
-  return (await response.json()) as LegoDesignMetadata;
+  return requestJson<LegoDesignMetadata>(legoDesignConfig.metadataApiUrl);
 }
 
 export async function createLegoDesignJob(projectId: string): Promise<LegoDesignJob> {
-  const response = await fetch(legoDesignConfig.jobsApiUrl, {
+  return requestJson<LegoDesignJob>(legoDesignConfig.jobsApiUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ projectId }),
+    body: JSON.stringify({ projectId, ...currentTaskContext() }),
   });
-  if (!response.ok) {
-    throw new Error(legoDesignConfig.texts.designFailed);
-  }
-  return (await response.json()) as LegoDesignJob;
 }
 
 export async function loadLegoDesignJob(jobId: string): Promise<LegoDesignJob> {
-  const response = await fetch(
+  return requestJson<LegoDesignJob>(
     legoDesignConfig.jobApiUrl.replace(legoDesignConfig.routePlaceholders.jobId, jobId),
   );
-  if (!response.ok) {
-    throw new Error(legoDesignConfig.texts.designFailed);
-  }
-  return (await response.json()) as LegoDesignJob;
 }
 
 export async function exportLegoDesign(
@@ -148,10 +142,7 @@ export async function exportLegoDesign(
     window.location.origin,
   );
   url.searchParams.set(legoDesignConfig.supportBase.queryParam, String(includeSupportBase));
-  const response = await fetch(`${url.pathname}${url.search}`);
-  if (!response.ok) {
-    throw new Error(legoDesignConfig.texts.exportFailed);
-  }
+  const response = await apiFetch(`${url.pathname}${url.search}`);
   return {
     blob: await response.blob(),
     fileName: responseFileName(response, legoDesignConfig.download.defaultFileName),
@@ -167,46 +158,42 @@ export async function exportLegoDesignPlan(
     window.location.origin,
   );
   url.searchParams.set(legoDesignConfig.supportBase.queryParam, String(includeSupportBase));
-  const response = await fetch(`${url.pathname}${url.search}`);
-  if (!response.ok) {
-    throw new Error(legoDesignConfig.texts.exportPlanFailed);
-  }
+  const response = await apiFetch(`${url.pathname}${url.search}`);
   return {
     blob: await response.blob(),
     fileName: responseFileName(response, legoDesignConfig.download.defaultPlanFileName),
   };
 }
 
-function responseFileName(response: Response, defaultFileName: string): string {
+export function responseFileName(response: Response, defaultFileName: string): string {
   const disposition = response.headers.get(legoDesignConfig.download.contentDispositionHeader);
-  const parameter = legoDesignConfig.download.fileNameParameter;
-  if (!disposition || !disposition.includes(parameter)) {
+  if (!disposition) {
     return defaultFileName;
   }
-  return disposition.split(parameter)[legoDesignConfig.pagination.pageStep]?.split('"').join('')
-    ?? defaultFileName;
+  const encodedMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1]);
+    } catch {
+      return defaultFileName;
+    }
+  }
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] ?? defaultFileName;
 }
 
 export async function loadLegoDesignPixelProjects(page: number): Promise<PixelArtProjectList> {
   const url = new URL(legoDesignConfig.projectsApiUrl, window.location.origin);
   url.searchParams.set('page', String(page));
   url.searchParams.set('page_size', String(legoDesignConfig.pageSize));
-  const response = await fetch(`${url.pathname}${url.search}`);
-  if (!response.ok) {
-    throw new Error(legoDesignConfig.texts.loadFailed);
-  }
-  return (await response.json()) as PixelArtProjectList;
+  return requestJson<PixelArtProjectList>(`${url.pathname}${url.search}`);
 }
 
 export async function loadLegoDesignPixelProject(projectId: string): Promise<PixelArtProject> {
-  const response = await fetch(
+  return requestJson<PixelArtProject>(
     legoDesignConfig.projectApiUrl.replace(
       legoDesignConfig.routePlaceholders.projectId,
       projectId,
     ),
   );
-  if (!response.ok) {
-    throw new Error(legoDesignConfig.texts.projectFailed);
-  }
-  return (await response.json()) as PixelArtProject;
 }

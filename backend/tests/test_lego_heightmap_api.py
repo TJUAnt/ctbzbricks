@@ -4,8 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from fastapi import HTTPException
-
+from src.api.errors import DomainError
 from src.api.routes.lego_heightmap import create_lego_heightmap_router
 from src.api.schemas.lego_heightmap import LegoHeightmapFromDemRequest
 
@@ -45,6 +44,7 @@ class LegoHeightmapApiTest(unittest.TestCase):
         self.body = LegoHeightmapFromDemRequest(
             name="colored heightmap",
             modelId="dem-model",
+            contentLocale="zh-CN",
             scale=SCALE,
         )
 
@@ -87,11 +87,12 @@ class LegoHeightmapApiTest(unittest.TestCase):
         side_effect=ValueError("DEM model not found"),
     )
     def test_missing_dem_returns_not_found(self, _load_dem) -> None:
-        with self.assertRaises(HTTPException) as raised:
+        with self.assertRaises(DomainError) as raised:
             self.endpoint(self.body, self.request)
 
-        self.assertEqual(raised.exception.status_code, TERRAIN_CONFIG["http_status"]["not_found"])
-        self.assertEqual(raised.exception.detail, "DEM model not found")
+        self.assertEqual(raised.exception.http_status, TERRAIN_CONFIG["http_status"]["not_found"])
+        self.assertEqual(raised.exception.code, "terrain.model_not_found")
+        self.assertEqual(raised.exception.params, {"modelId": "dem-model"})
 
 
 if __name__ == "__main__":

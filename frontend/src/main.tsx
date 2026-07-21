@@ -10,6 +10,7 @@ import {
   HelpCircle,
   Home,
   Image as ImageIcon,
+  Languages,
   Map,
   Search,
   Upload,
@@ -17,10 +18,11 @@ import {
   Wand2,
 } from 'lucide-react';
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
-import appConfig from './app/appConfig.json';
+import appConfig from './app/appConfig';
 import { ModelAssetsPage } from './assets/ModelAssetsPage';
 import { ModelViewerPage } from './assets/ModelViewerPage';
 import type { ModelAsset } from './assets/modelAssetApi';
+import { requestJson } from './api/client';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ComponentCandidateWorkbenchPage } from './componentRepo/ComponentCandidateWorkbenchPage';
 import { ComponentImportPage } from './componentRepo/ComponentImportPage';
@@ -29,9 +31,20 @@ import { LegoDesignPage } from './legoDesign/LegoDesignPage';
 import { LegoTerrainBuilderPage } from './legoTerrain/LegoTerrainBuilderPage';
 import { DirectModelImportPage } from './modelImport/DirectModelImportPage';
 import { PartSearchPage } from './parts/PartSearchPage';
+import { PartViewerPage } from './parts/PartViewerPage';
 import { PixelArtPage } from './pixelArt/PixelArtPage';
 import { PixelArtProjectsPage } from './pixelArt/PixelArtProjectsPage';
 import { TerrainDemPage } from './terrain/TerrainDemPage';
+import i18n, {
+  productLocales,
+  resolvedLocale,
+  useAppTranslation,
+  useDynamicTranslation,
+  type TranslationKey,
+} from './i18n';
+import i18nCatalog from './i18n/catalog.json';
+import { formatNumber } from './i18n/formatters';
+import { I18nextProvider } from 'react-i18next';
 import './styles.css';
 
 const iconByName = {
@@ -99,7 +112,16 @@ const routePaths = appConfig.routePaths as RoutePaths;
 const menuGroups = appConfig.menuGroups as MenuGroupConfig[];
 const dashboardConfig = appConfig.dashboard as DashboardConfig;
 
+function Root() {
+  return (
+    <I18nextProvider i18n={i18n}>
+      <App />
+    </I18nextProvider>
+  );
+}
+
 function App() {
+  useAppTranslation();
   return (
     <AuthProvider>
       <BrowserRouter>
@@ -152,6 +174,7 @@ function WorkbenchTopbar() {
       </NavLink>
 
       <div className="topbar-actions">
+        <LanguageSwitcher />
         <NavLink
           aria-label={appConfig.topbar.homeLabel}
           className="topbar-icon-button"
@@ -167,6 +190,7 @@ function WorkbenchTopbar() {
           <span>{appConfig.topbar.notificationCount}</span>
         </button>
         <button
+          aria-label={userLabel}
           className="topbar-user-button"
           disabled={!isConfigured || isLoading}
           onClick={() => {
@@ -178,11 +202,42 @@ function WorkbenchTopbar() {
           <span className="topbar-avatar">
             <User aria-hidden="true" />
           </span>
-          {userLabel}
-          <ChevronDown aria-hidden="true" />
+          <span className="topbar-user-label">{userLabel}</span>
+          <ChevronDown aria-hidden="true" className="topbar-user-chevron" />
         </button>
       </div>
     </header>
+  );
+}
+
+function LanguageSwitcher() {
+  const tr = useAppTranslation();
+  const translateLocale = useDynamicTranslation();
+  const locale = resolvedLocale();
+
+  return (
+    <label className="topbar-language-select">
+      <Languages aria-hidden="true" />
+      <span className="sr-only">{tr('common:changeLanguage')}</span>
+      <select
+        aria-label={tr('common:changeLanguage')}
+        onChange={(event) => {
+          void i18n.changeLanguage(event.target.value);
+        }}
+        value={locale}
+      >
+        {productLocales.map((productLocale) => (
+          <option key={productLocale} value={productLocale}>
+            {translateLocale(
+              i18nCatalog.localeLabelKeys[
+                productLocale as keyof typeof i18nCatalog.localeLabelKeys
+              ] as TranslationKey,
+            )}
+          </option>
+        ))}
+        {import.meta.env.DEV ? <option value="en-XA">{tr('common:pseudoEnglish')}</option> : null}
+      </select>
+    </label>
   );
 }
 
@@ -289,11 +344,16 @@ function WorkbenchRoutes({
       <Route element={<PixelArtPage />} path={routePathFor(appConfig.pages.pixelArt as PageKey)} />
       <Route element={<PixelArtProjectsPage />} path={routePathFor(appConfig.pages.pixelArtProjects as PageKey)} />
       <Route element={<PartSearchPage />} path={routePathFor(appConfig.pages.partSearch as PageKey)} />
+      <Route element={<PartViewerPage />} path={routePathFor(appConfig.pages.partViewer as PageKey)} />
       <Route element={<ComponentRepoPage />} path={routePathFor(appConfig.pages.componentRepo as PageKey)} />
       <Route element={<ComponentImportPage />} path={routePathFor(appConfig.pages.componentRepoImport as PageKey)} />
       <Route
         element={<ComponentCandidateWorkbenchPage />}
         path={routePathFor(appConfig.pages.componentRepoCandidate as PageKey)}
+      />
+      <Route
+        element={<ComponentCandidateWorkbenchPage />}
+        path={routePathFor(appConfig.pages.componentRepoDetail as PageKey)}
       />
       <Route
         element={<Navigate replace to={routePathFor(appConfig.initialPage as PageKey)} />}
@@ -303,7 +363,7 @@ function WorkbenchRoutes({
   );
 }
 
-function DashboardPage() {
+export function DashboardPage() {
   return (
     <section className="dashboard-page">
       <header className="dashboard-hero">
@@ -329,6 +389,54 @@ function DashboardPage() {
           <DashboardSection key={section.id} section={section} />
         ))}
       </div>
+      <I18nHealthPanel />
+    </section>
+  );
+}
+
+type I18nMetrics = {
+  unknownKeyCount: number;
+  unknownApiCodeCount: number;
+  localeFallbackCount: number;
+  metricOverflowCount: number;
+  hourly: Array<{ hour: string; count: number }>;
+};
+
+function I18nHealthPanel() {
+  const t = useAppTranslation();
+  const [metrics, setMetrics] = React.useState<I18nMetrics | null>(null);
+  const [unavailable, setUnavailable] = React.useState(false);
+  React.useEffect(() => {
+    let active = true;
+    void requestJson<I18nMetrics>('/api/i18n/metrics')
+      .then((value) => { if (active) setMetrics(value); })
+      .catch(() => { if (active) setUnavailable(true); });
+    return () => { active = false; };
+  }, []);
+  const latestHour = metrics?.hourly[metrics.hourly.length - 1]?.hour;
+  const values = metrics ? [
+    [t('app:dashboard.i18nHealth.unknownKeys'), metrics.unknownKeyCount],
+    [t('app:dashboard.i18nHealth.unknownApiCodes'), metrics.unknownApiCodeCount],
+    [t('app:dashboard.i18nHealth.localeFallbacks'), metrics.localeFallbackCount],
+    [t('app:dashboard.i18nHealth.metricOverflow'), metrics.metricOverflowCount],
+  ] as const : [];
+  return (
+    <section className="dashboard-i18n-health">
+      <div>
+        <h2>{t('app:dashboard.i18nHealth.title')}</h2>
+        <p>{t('app:dashboard.i18nHealth.subtitle')}</p>
+      </div>
+      {unavailable ? <p>{t('app:dashboard.i18nHealth.unavailable')}</p> : null}
+      {metrics ? (
+        <>
+          <div className="dashboard-i18n-metrics">
+            {values.map(([label, value]) => (
+              <div key={label}><span>{label}</span><strong>{formatNumber(value)}</strong></div>
+            ))}
+          </div>
+          {latestHour ? <small>{t('app:dashboard.i18nHealth.latestHour', { hour: latestHour })}</small> : null}
+        </>
+      ) : null}
     </section>
   );
 }
@@ -408,4 +516,9 @@ function authUserLabel(email: string | null, isConfigured: boolean, isLoading: b
   return email ?? appConfig.topbar.authSignInLabel;
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(<App />);
+if (typeof document !== 'undefined') {
+  const rootElement = document.getElementById('root');
+  if (rootElement) {
+    ReactDOM.createRoot(rootElement).render(<Root />);
+  }
+}

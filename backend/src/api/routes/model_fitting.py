@@ -1,7 +1,8 @@
 """Model fitting job API routes."""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 
+from src.api.errors import DomainError, domain_error_from_exception
 from src.api.schemas.model_fitting import (
     ModelFittingBlocksResponse,
     ModelFittingCreateJobRequest,
@@ -32,9 +33,11 @@ def create_model_fitting_router(config: dict) -> APIRouter:
                 request_body.model_dump(),
             )
         except ValueError as error:
-            raise HTTPException(
-                status_code=config["http_status"]["bad_request"],
-                detail=str(error),
+            raise domain_error_from_exception(
+                error,
+                "model_fitting.create_failed",
+                params={"modelId": request_body.modelId},
+                http_status=config["http_status"]["bad_request"],
             ) from error
 
     @router.get(config["routes"]["job"], response_model=ModelFittingJobResponse)
@@ -45,9 +48,10 @@ def create_model_fitting_router(config: dict) -> APIRouter:
             job_id,
         )
         if saved_job is None:
-            raise HTTPException(
-                status_code=config["http_status"]["not_found"],
-                detail=config["errors"]["job_not_found"].format(job_id=job_id),
+            raise DomainError(
+                config["errors"]["job_not_found"],
+                params={"jobId": job_id},
+                http_status=config["http_status"]["not_found"],
             )
         return saved_job
 
@@ -59,9 +63,10 @@ def create_model_fitting_router(config: dict) -> APIRouter:
             job_id,
         )
         if saved_blocks is None:
-            raise HTTPException(
-                status_code=config["http_status"]["not_found"],
-                detail=config["errors"]["job_not_found"].format(job_id=job_id),
+            raise DomainError(
+                config["errors"]["job_not_found"],
+                params={"jobId": job_id},
+                http_status=config["http_status"]["not_found"],
             )
         return saved_blocks
 
@@ -72,11 +77,10 @@ def create_model_fitting_router(config: dict) -> APIRouter:
             solution_id,
         )
         if saved_solution is None:
-            raise HTTPException(
-                status_code=config["http_status"]["not_found"],
-                detail=config["errors"]["solution_not_found"].format(
-                    solution_id=solution_id,
-                ),
+            raise DomainError(
+                config["errors"]["solution_not_found"],
+                params={"solutionId": solution_id},
+                http_status=config["http_status"]["not_found"],
             )
         return saved_solution
 
