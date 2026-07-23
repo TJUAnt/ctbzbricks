@@ -18,6 +18,7 @@ from src.config.fitting_candidate_profile_config import (
 from src.services.domain_content_service import (
     component_source_content,
     localized_component_content,
+    localized_part_content,
 )
 from src.services.fitting_candidate_profile_service import (
     remove_component_fitting_candidate_profile,
@@ -33,6 +34,7 @@ from src.component_repo.geometry_service import (
     component_geometry,
     component_preview_meshes,
     component_preview_parts,
+    part_preview_mesh,
     persist_component_logical_size,
 )
 from src.model.models import (
@@ -45,6 +47,8 @@ from src.model.models import (
     ComponentSceneSnapshot,
     ComponentValidationReport,
     ComponentVersion,
+    LDrawPart,
+    LDrawPartGeometry,
 )
 
 
@@ -632,6 +636,146 @@ def component_version_preview(
             component=component_response(component, localized_content),
             version_id=version.id,
         )
+
+
+def library_item_preview(
+    engine: Engine,
+    config: dict[str, Any],
+    item_type: str,
+    item_id: str,
+    content_locale: str,
+) -> dict[str, Any] | None:
+    """Return a render-ready preview for one explicit Component or Part resource."""
+    normalized_type = item_type.casefold()
+    if normalized_type not in {"component", "part"}:
+        raise ValueError("component_repo.preview_type_unsupported")
+    normalized_locale = normalize_content_locale(content_locale)
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        if normalized_type == "part":
+            return part_item_preview(
+                session,
+                config,
+                item_id,
+                normalized_locale,
+            )
+
+        component = session.scalar(
+            select(Component)
+            .options(selectinload(Component.translations))
+            .where(Component.id == item_id)
+        )
+        if component is None:
+            return None
+        version = (
+            session.get(ComponentVersion, component.current_version_id)
+            if component.current_version_id is not None
+            else None
+        )
+        if version is None:
+            version = session.scalar(
+                select(ComponentVersion)
+                .where(ComponentVersion.component_id == component.id)
+                .order_by(ComponentVersion.created_at.desc(), ComponentVersion.id.desc())
+            )
+        if version is None:
+            raise ValueError("component_repo.preview_unavailable")
+        snapshot = session.get(ComponentSceneSnapshot, version.scene_snapshot_id)
+        if snapshot is None:
+            raise ValueError("component_repo.preview_unavailable")
+        localized_content = localized_component_content(
+            session,
+            component,
+            normalized_locale,
+        )
+        return component_preview_payload(
+            session,
+            snapshot,
+            config,
+            source={
+                "kind": "component",
+                "id": component.id,
+                "name": localized_content["name"],
+                "status": version.status,
+            },
+            component=component_response(component, localized_content),
+            version_id=version.id,
+        )
+
+
+def part_item_preview(
+    session: object,
+    config: dict[str, Any],
+    part_number: str,
+    content_locale: str,
+) -> dict[str, Any] | None:
+    """Return one Part as an identity instance plus its real LDraw surface mesh."""
+    row = session.execute(
+        select(LDrawPart, LDrawPartGeometry)
+        .join(LDrawPartGeometry, LDrawPartGeometry.ldraw_part_id == LDrawPart.id)
+        .options(selectinload(LDrawPart.translations))
+        .where(LDrawPart.ldraw_part_num == part_number.casefold())
+    ).first()
+    if row is None:
+        return None
+    part, geometry = row
+    bounds = (
+        geometry.bbox_min_x,
+        geometry.bbox_min_y,
+        geometry.bbox_min_z,
+        geometry.bbox_max_x,
+        geometry.bbox_max_y,
+        geometry.bbox_max_z,
+    )
+    logical_size = (
+        geometry.logical_width_stud,
+        geometry.logical_depth_stud,
+        geometry.logical_height_plate,
+    )
+    mesh = part_preview_mesh(part.ldraw_part_num, part.relative_path, config)
+    if any(value is None for value in bounds) or any(
+        value is None for value in logical_size
+    ) or mesh is None:
+        raise ValueError("component_repo.preview_unavailable")
+    min_x, min_y, min_z, max_x, max_y, max_z = bounds
+    width_stud, depth_stud, height_plate = logical_size
+    localized_content = localized_part_content(session, part, content_locale)
+    return {
+        "source": {
+            "kind": "part",
+            "id": part.ldraw_part_num,
+            "name": localized_content["name"] or part.ldraw_part_num,
+            "status": part.import_status or geometry.geometry_status or "parsed",
+        },
+        "component": None,
+        "versionId": None,
+        "partCount": 1,
+        "logicalSize": {
+            "widthStud": width_stud,
+            "depthStud": depth_stud,
+            "heightPlate": height_plate,
+        },
+        "parts": [
+            {
+                "instanceId": part.ldraw_part_num,
+                "partRef": part.ldraw_part_num,
+                "colorCode": "16",
+                "transform": {
+                    "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "matrix": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                },
+                "bbox": {
+                    "minX": min_x,
+                    "minY": min_y,
+                    "minZ": min_z,
+                    "maxX": max_x,
+                    "maxY": max_y,
+                    "maxZ": max_z,
+                },
+            }
+        ],
+        "meshes": [mesh],
+    }
 
 
 def component_candidate_preview(

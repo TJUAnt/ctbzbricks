@@ -1,38 +1,26 @@
 import React from 'react';
-import { Box, Boxes, Check, Ruler, Search, Shapes } from 'lucide-react';
+import { Box, Boxes, Ruler, Search, Shapes } from 'lucide-react';
 import { create } from 'zustand';
+import { Link } from 'react-router-dom';
 import { errorMessage, requestJson } from '../api/client';
-import { currentTaskContext } from '../api/taskContext';
 import { useAppTranslation } from '../i18n';
 import { formatNumber } from '../i18n/formatters';
-
-type LogicalSize = {
-  logicalSize: {
-    widthStud: number;
-    depthStud: number;
-    heightPlate: number;
-  };
-};
 
 type RecallCandidate = {
   candidateType: 'part' | 'component' | 'submodel';
   candidateId: string;
-  profileStatus: string;
-  score: number;
-  scoreReasons: string[];
   name: string | null;
-  description: string | null;
-  contentLocale: string;
-  translationStatus: string;
-  matchedType: string | null;
-  typeScore: number | null;
-  logicalSize: LogicalSize | null;
-  appearanceTags: Record<string, unknown> | null;
+  imageUrl: string | null;
 };
+
+type RecallColumnCount = 2 | 3 | 4 | 5 | 6;
 
 type RecallResponse = {
   total: number;
   returned: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
   includeIrregular: boolean;
   candidates: RecallCandidate[];
 };
@@ -41,7 +29,9 @@ type RecallState = {
   lengthStud: string;
   widthStud: string;
   heightPlate: string;
-  typeQuery: string;
+  key: string;
+  columnsPerRow: RecallColumnCount;
+  page: number;
   allowPlanarRotation: boolean;
   loading: boolean;
   error: string | null;
@@ -49,18 +39,21 @@ type RecallState = {
   setLengthStud: (value: string) => void;
   setWidthStud: (value: string) => void;
   setHeightPlate: (value: string) => void;
-  setTypeQuery: (value: string) => void;
+  setKey: (value: string) => void;
+  setColumnsPerRow: (value: RecallColumnCount) => void;
   setAllowPlanarRotation: (value: boolean) => void;
-  recall: () => Promise<void>;
+  recall: (page?: number) => Promise<void>;
 };
 
-const componentTypes = ['plate', 'tile', 'slope'] as const;
+const rowsPerPage = 4;
 
 const useRecallStore = create<RecallState>((set, get) => ({
   lengthStud: '4',
   widthStud: '2',
   heightPlate: '1',
-  typeQuery: 'plate',
+  key: 'plate',
+  columnsPerRow: 5,
+  page: 1,
   allowPlanarRotation: true,
   loading: false,
   error: null,
@@ -68,10 +61,15 @@ const useRecallStore = create<RecallState>((set, get) => ({
   setLengthStud: (lengthStud) => set({ lengthStud }),
   setWidthStud: (widthStud) => set({ widthStud }),
   setHeightPlate: (heightPlate) => set({ heightPlate }),
-  setTypeQuery: (typeQuery) => set({ typeQuery }),
+  setKey: (key) => set({ key }),
+  setColumnsPerRow: (columnsPerRow) => {
+    set({ columnsPerRow, page: 1 });
+    void get().recall(1);
+  },
   setAllowPlanarRotation: (allowPlanarRotation) => set({ allowPlanarRotation }),
-  recall: async () => {
+  recall: async (requestedPage) => {
     const state = get();
+    const page = requestedPage ?? state.page;
     set({ loading: true, error: null });
     try {
       const result = await requestJson<RecallResponse>('/api/fitting/candidates/recall', {
@@ -85,14 +83,14 @@ const useRecallStore = create<RecallState>((set, get) => ({
             heightPlate: Number(state.heightPlate),
             tolerance: 0,
           },
-          typeQuery: state.typeQuery,
+          key: state.key.trim() || undefined,
           allowPlanarRotation: state.allowPlanarRotation,
           includeIrregular: false,
-          limit: 50,
-          contentLocale: currentTaskContext().locale,
+          page,
+          pageSize: state.columnsPerRow * rowsPerPage,
         }),
       });
-      set({ response: result, loading: false });
+      set({ response: result, page: result.page, loading: false });
     } catch (error) {
       set({ error: errorMessage(error, 'common.unknown'), loading: false });
     }
@@ -104,7 +102,7 @@ export function PartSearchPage() {
   const state = useRecallStore();
 
   React.useEffect(() => {
-    void state.recall();
+    void state.recall(1);
   }, []);
 
   return (
@@ -130,7 +128,7 @@ export function PartSearchPage() {
             className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-4"
             onSubmit={(event) => {
               event.preventDefault();
-              void state.recall();
+              void state.recall(1);
             }}
           >
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)_auto] lg:items-end">
@@ -164,26 +162,15 @@ export function PartSearchPage() {
               <div>
                 <div className="mb-2 flex items-center gap-2 text-sm font-medium text-zinc-700">
                   <Shapes className="h-4 w-4" />
-                  {tr('partSearch:type')}
-                  <span className="font-normal text-zinc-400">{tr('partSearch:fuzzyMatch')}</span>
+                  {tr('partSearch:nameKey')}
                 </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {componentTypes.map((type) => (
-                    <button
-                      aria-pressed={state.typeQuery === type}
-                      className={`h-11 rounded-lg border px-3 text-sm font-medium uppercase transition ${
-                        state.typeQuery === type
-                          ? 'border-zinc-950 bg-zinc-950 text-white'
-                          : 'border-zinc-300 bg-white text-zinc-700 hover:border-zinc-500'
-                      }`}
-                      key={type}
-                      onClick={() => state.setTypeQuery(type)}
-                      type="button"
-                    >
-                      {type}
-                    </button>
-                  ))}
-                </div>
+                <input
+                  className="h-11 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-950 focus:ring-1 focus:ring-zinc-950"
+                  onChange={(event) => state.setKey(event.target.value)}
+                  placeholder={tr('partSearch:nameKeyPlaceholder')}
+                  type="search"
+                  value={state.key}
+                />
               </div>
 
               <button
@@ -206,7 +193,21 @@ export function PartSearchPage() {
                 />
                 {tr('partSearch:allowRotation')}
               </label>
-              <span className="text-zinc-400">{tr('partSearch:exactDimensions')}</span>
+              <div className="flex flex-wrap items-center gap-4">
+                <span className="text-zinc-400">{tr('partSearch:exactDimensions')}</span>
+                <label className="inline-flex items-center gap-2 text-zinc-600">
+                  <span>{tr('partSearch:itemsPerRow')}</span>
+                  <select
+                    className="h-9 rounded-lg border border-zinc-300 bg-white px-3 font-medium text-zinc-800 outline-none focus:border-zinc-950 focus:ring-1 focus:ring-zinc-950"
+                    onChange={(event) => state.setColumnsPerRow(Number(event.target.value) as RecallColumnCount)}
+                    value={state.columnsPerRow}
+                  >
+                    {[2, 3, 4, 5, 6].map((count) => (
+                      <option key={count} value={count}>{count}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
             </div>
           </form>
 
@@ -219,7 +220,7 @@ export function PartSearchPage() {
       </section>
 
       <section className="mx-auto max-w-7xl px-5 py-6">
-        {state.loading && !state.response ? <RecallSkeleton /> : null}
+        {state.loading && !state.response ? <RecallSkeleton columns={state.columnsPerRow} /> : null}
         {!state.loading && state.response?.total === 0 ? (
           <div className="rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-16 text-center">
             <Search className="mx-auto h-8 w-8 text-zinc-300" />
@@ -227,11 +228,34 @@ export function PartSearchPage() {
             <p className="mt-1 text-sm text-zinc-500">{tr('partSearch:noMatchesHint')}</p>
           </div>
         ) : null}
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {(state.response?.candidates ?? []).map((candidate, index) => (
-            <CandidateCard candidate={candidate} index={index} key={`${candidate.candidateType}:${candidate.candidateId}`} />
+        <div className={`grid gap-3 sm:grid-cols-2 ${recallGridColumns[state.columnsPerRow]}`}>
+          {(state.response?.candidates ?? []).map((candidate) => (
+            <CandidateCard candidate={candidate} key={`${candidate.candidateType}:${candidate.candidateId}`} />
           ))}
         </div>
+        {state.response && state.response.totalPages > 1 ? (
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <button
+              className="h-9 rounded-lg border border-zinc-300 bg-white px-4 text-sm font-medium text-zinc-700 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={state.loading || state.page <= 1}
+              onClick={() => void state.recall(state.page - 1)}
+              type="button"
+            >
+              {tr('partSearch:prev')}
+            </button>
+            <span className="min-w-20 text-center text-sm tabular-nums text-zinc-500">
+              {formatNumber(state.page)} / {formatNumber(state.response.totalPages)}
+            </span>
+            <button
+              className="h-9 rounded-lg border border-zinc-300 bg-white px-4 text-sm font-medium text-zinc-700 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={state.loading || state.page >= state.response.totalPages}
+              onClick={() => void state.recall(state.page + 1)}
+              type="button"
+            >
+              {tr('partSearch:next')}
+            </button>
+          </div>
+        ) : null}
       </section>
     </main>
   );
@@ -267,75 +291,62 @@ function DimensionInput({
   );
 }
 
-function CandidateCard({ candidate, index }: { candidate: RecallCandidate; index: number }) {
-  const tr = useAppTranslation();
-  const dimensions = candidate.logicalSize?.logicalSize;
+function CandidateCard({ candidate }: { candidate: RecallCandidate }) {
   const isComponent = candidate.candidateType === 'component' || candidate.candidateType === 'submodel';
+  const itemType = isComponent ? 'component' : 'part';
   return (
-    <article className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${isComponent ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-600'}`}>
-            {isComponent ? <Boxes className="h-5 w-5" /> : <Box className="h-5 w-5" />}
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${isComponent ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}>
-                {isComponent ? tr('partSearch:component') : tr('partSearch:part')}
-              </span>
-              <span className="text-xs text-zinc-400">#{index + 1}</span>
-            </div>
-            <h2 className="mt-1 truncate text-sm font-semibold">{candidate.name ?? candidate.candidateId}</h2>
-            <div className="mt-0.5 truncate text-xs text-zinc-400">{candidate.candidateId}</div>
-          </div>
-        </div>
-        <div className="text-right">
-          <div className="text-sm font-semibold text-emerald-700">
-            {formatNumber((candidate.typeScore ?? 0) * 100, { maximumFractionDigits: 0 })}%
-          </div>
-          <div className="text-[11px] text-zinc-400">{tr('partSearch:typeMatch')}</div>
-        </div>
+    <Link
+      className="block overflow-hidden rounded-xl border border-zinc-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2"
+      to={`/library/${itemType}/${encodeURIComponent(candidate.candidateId)}`}
+    >
+      <div className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-zinc-50">
+        <CandidateImage
+          alt={candidate.name ?? candidate.candidateId}
+          isComponent={isComponent}
+          src={candidate.imageUrl}
+        />
       </div>
-
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        <Metric label={tr('partSearch:length')} value={formatDimension(dimensions?.widthStud)} unit={tr('partSearch:stud')} />
-        <Metric label={tr('partSearch:width')} value={formatDimension(dimensions?.depthStud)} unit={tr('partSearch:stud')} />
-        <Metric label={tr('partSearch:height')} value={formatDimension(dimensions?.heightPlate)} unit={tr('partSearch:plateUnit')} />
-      </div>
-
-      <div className="mt-3 flex items-center justify-between gap-3 border-t border-zinc-100 pt-3 text-xs">
-        <span className="inline-flex min-w-0 items-center gap-1.5 text-zinc-500">
-          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
-          <span className="truncate">{candidate.matchedType ?? tr('partSearch:typeMatched')}</span>
-        </span>
-        <span className="shrink-0 text-zinc-400">
-          {tr('partSearch:score')} {formatNumber(candidate.score, { maximumFractionDigits: 1 })}
-        </span>
-      </div>
-    </article>
+      <h2 className="mt-3 break-words text-sm font-semibold leading-5 text-zinc-900">
+        {candidate.name ?? candidate.candidateId}
+      </h2>
+      <div className="mt-1 break-all text-xs text-zinc-400">{candidate.candidateId}</div>
+    </Link>
   );
 }
 
-function Metric({ label, value, unit }: { label: string; value: string; unit: string }) {
+function CandidateImage({ alt, isComponent, src }: { alt: string; isComponent: boolean; src: string | null }) {
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => setFailed(false), [src]);
+  if (!src || failed) {
+    return isComponent
+      ? <Boxes className="h-12 w-12 text-blue-300" />
+      : <Box className="h-12 w-12 text-amber-300" />;
+  }
   return (
-    <div className="rounded-lg bg-zinc-50 px-2.5 py-2">
-      <div className="text-[11px] text-zinc-400">{label}</div>
-      <div className="mt-0.5 truncate text-sm font-medium text-zinc-700">
-        {value} <span className="text-[10px] font-normal text-zinc-400">{unit}</span>
-      </div>
-    </div>
+    <img
+      alt={alt}
+      className="h-full w-full object-contain p-3"
+      decoding="async"
+      loading="lazy"
+      onError={() => setFailed(true)}
+      src={src}
+    />
   );
 }
 
-function formatDimension(value: number | undefined): string {
-  return value === undefined ? '—' : formatNumber(value, { maximumFractionDigits: 2 });
-}
+const recallGridColumns: Record<RecallColumnCount, string> = {
+  2: `lg:grid-cols-2`,
+  3: `lg:grid-cols-3`,
+  4: `lg:grid-cols-4`,
+  5: `lg:grid-cols-5`,
+  6: `lg:grid-cols-6`,
+};
 
-function RecallSkeleton() {
+function RecallSkeleton({ columns }: { columns: RecallColumnCount }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <div className={`grid gap-3 sm:grid-cols-2 ${recallGridColumns[columns]}`}>
       {Array.from({ length: 6 }, (_, index) => (
-        <div className="h-48 animate-pulse rounded-xl border border-zinc-200 bg-white" key={index} />
+        <div className="aspect-[4/5] animate-pulse rounded-xl border border-zinc-200 bg-white" key={index} />
       ))}
     </div>
   );

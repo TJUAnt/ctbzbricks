@@ -1,0 +1,21 @@
+{
+  "schema": "brickbuilder-frontend-i18n-catalog-v1",
+  "catalogVersion": "frontend-2026.07.21.3",
+  "sourceLocale": "en-US",
+  "defaultLocale": "zh-CN",
+  "productLocales": ["zh-CN", "en-US"],
+  "validationLocales": ["ja-JP"],
+  "localeLabelKeys": {
+    "zh-CN": "common:chinese",
+    "en-US": "common:english"
+  },
+  "localeAliases": {
+    "zh": "zh-CN",
+    "zh-hans": "zh-CN",
+    "en": "en-US",
+    "ja": "ja-JP"
+  },
+  "rtlLanguageCodes": ["ar", "fa", "he", "ur"],
+  "telemetryEndpoint": "/api/i18n/events",
+  "contentHash": "105dd3915908141531afb960d88b0bb1f0a5dce2dd92531b2d2e0a18daef055d"
+}

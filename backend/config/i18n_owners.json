@@ -1,0 +1,19 @@
+{
+  "schema": "brickbuilder-i18n-owners-v1",
+  "primaryOwner": "repository-maintainer",
+  "owners": {
+    "frontend.common": "product-localization",
+    "frontend.app": "product-localization",
+    "frontend.business": "feature-owner",
+    "frontend.errors": "api-contract-owner",
+    "frontend.tasks": "api-contract-owner",
+    "backend.exports": "api-contract-owner",
+    "domain.components": "component-library-owner",
+    "domain.parts": "part-library-owner",
+    "glossary": "product-localization"
+  },
+  "requiredReviewRoles": [
+    "resource-owner",
+    "native-language-reviewer"
+  ]
+}

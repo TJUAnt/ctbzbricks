@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, UploadFile
 from fastapi.responses import Response
 
 from src.api.errors import DomainError, domain_error_from_exception
@@ -13,6 +13,7 @@ from src.api.schemas.component_repo import (
     ComponentInterfaceCreateRequest,
     ComponentInterfaceResponse,
     ComponentImportCreateResponse,
+    ComponentImportParseRequest,
     ComponentImportParseResponse,
     ComponentImportResponse,
     ComponentPreviewResponse,
@@ -39,6 +40,7 @@ from src.component_repo.component_service import (
     first_component_preview,
     get_component,
     get_component_version,
+    library_item_preview,
     list_component_interfaces,
     list_component_versions,
     list_components,
@@ -59,6 +61,7 @@ from src.component_repo.services import (
     parse_component_import,
     read_component_artifact,
 )
+from src.component_repo.preview_model_service import materialize_preview_model
 from src.component_repo.storage import ArtifactStorageError, storage_from_config
 from src.component_repo.relation_service import (
     confirm_relation_candidate,
@@ -178,6 +181,14 @@ def create_component_repo_router(config: dict) -> APIRouter:
                 payload.sourceFile.contentType,
                 payload.exchangeFile.filename if payload.exchangeFile else None,
                 payload.exchangeFile.contentType if payload.exchangeFile else None,
+                source_file_size=payload.sourceFile.fileSize,
+                source_sha256=payload.sourceFile.sha256,
+                exchange_file_size=(
+                    payload.exchangeFile.fileSize if payload.exchangeFile else None
+                ),
+                exchange_sha256=(
+                    payload.exchangeFile.sha256 if payload.exchangeFile else None
+                ),
                 target_component_id=payload.targetComponentId,
                 base_version_id=payload.baseVersionId,
                 content_locale=payload.contentLocale,
@@ -239,11 +250,12 @@ def create_component_repo_router(config: dict) -> APIRouter:
     )
     def parse_import(
         request: Request,
-        import_id: str,
+        payload: ComponentImportParseRequest,
         current_user: CurrentUser | None = Depends(optional_current_user),
     ) -> dict:
         require_component_repo_auth_if_configured(current_user)
         storage = component_repo_storage(request, config, current_user)
+        import_id = payload.importId
         try:
             return parse_component_import(
                 request.app.state.db_engine,
@@ -251,6 +263,13 @@ def create_component_repo_router(config: dict) -> APIRouter:
                 storage,
                 import_id,
             )
+        except ArtifactStorageError as error:
+            raise domain_error_from_exception(
+                error,
+                "component_repo.storage_unavailable",
+                params={"importId": import_id},
+                http_status=502,
+            ) from error
         except ValueError as error:
             raise component_repo_operation_error(error, "import_parse", importId=import_id) from error
 
@@ -331,7 +350,7 @@ def create_component_repo_router(config: dict) -> APIRouter:
                 params={"candidateId": candidate_id},
                 http_status=404,
             )
-        return preview
+        return preview_with_model(request, config, preview)
 
     @router.post(
         config["routes"]["candidate_relations_detect"],
@@ -536,13 +555,12 @@ def create_component_repo_router(config: dict) -> APIRouter:
         response_model=ComponentPreviewResponse,
         summary="Get the first previewable Component Repo item",
         description=(
-            "Returns Component assembly instances and one indexed LDraw triangle mesh "
-            "for each unique Part reference. The Component snapshot defines placement "
-            "only; Part geometry is resolved from the configured LDraw library when the "
-            "preview is requested. Coordinates and transforms use LDraw units (LDU)."
+            "Returns Component metadata plus a signed URL for a cached meshopt-compressed "
+            "GLB. The Component snapshot defines placement; Part geometry is resolved "
+            "from the configured LDraw library on the first cache miss."
         ),
         response_description=(
-            "A render-ready Component assembly with deduplicated Part meshes."
+            "A render-ready Component assembly backed by a binary GLB model."
         ),
         responses={
             404: {"description": "No previewable Component Repo item exists."},
@@ -578,15 +596,81 @@ def create_component_repo_router(config: dict) -> APIRouter:
                 "component_repo.preview_empty",
                 http_status=404,
             )
-        return preview
+        return preview_with_model(request, config, preview)
+
+    @router.get(
+        config["routes"]["library_item_preview"],
+        response_model=ComponentPreviewResponse,
+        summary="Get a Component or Part preview by type and ID",
+        description=(
+            "Returns one explicit library resource with a cached meshopt-compressed GLB. "
+            "Component resources use their current or newest version snapshot; Part "
+            "resources use an identity transform."
+        ),
+        response_description="The requested Component assembly or standalone Part preview.",
+        responses={
+            400: {"description": "The item type or content locale is unsupported."},
+            404: {"description": "The requested Component or Part does not exist."},
+            409: {"description": "Required Part mesh geometry is unavailable."},
+        },
+    )
+    def get_library_item_preview(
+        request: Request,
+        item_type: str = Path(
+            ...,
+            description="Machine item type: component or part.",
+        ),
+        item_id: str = Path(
+            ...,
+            description="Component UUID or LDraw Part number such as 10247.dat.",
+        ),
+        contentLocale: str = Query(
+            ...,
+            description="BCP 47 locale for official item content; geometry is locale-neutral.",
+        ),
+    ) -> dict:
+        try:
+            preview = library_item_preview(
+                request.app.state.db_engine,
+                config,
+                item_type,
+                item_id,
+                contentLocale,
+            )
+        except ValueError as error:
+            error_code = str(error)
+            if error_code == "component_repo.preview_type_unsupported":
+                raise DomainError(
+                    error_code,
+                    params={"itemType": item_type},
+                    http_status=400,
+                ) from error
+            if error_code == "request.locale_unsupported":
+                raise DomainError(
+                    error_code,
+                    params={"locale": contentLocale},
+                    http_status=400,
+                ) from error
+            raise DomainError(
+                "component_repo.preview_unavailable",
+                params={"itemType": item_type, "itemId": item_id},
+                http_status=409,
+            ) from error
+        if preview is None:
+            raise DomainError(
+                "component_repo.library_item_not_found",
+                params={"itemType": item_type, "itemId": item_id},
+                http_status=404,
+            )
+        return preview_with_model(request, config, preview)
 
     @router.get(
         config["routes"]["component_version_preview"],
         response_model=ComponentPreviewResponse,
         summary="Get one Component version preview",
         description=(
-            "Returns the selected ComponentVersion as assembly transforms plus one indexed "
-            "LDraw triangle mesh per unique Part. Coordinates use LDraw units (LDU)."
+            "Returns the selected ComponentVersion plus a signed URL for its cached "
+            "meshopt-compressed GLB model."
         ),
         response_description="The render-ready assembly for the requested ComponentVersion.",
         responses={
@@ -626,7 +710,47 @@ def create_component_repo_router(config: dict) -> APIRouter:
                 params={"versionId": version_id},
                 http_status=404,
             )
-        return preview
+        return preview_with_model(request, config, preview)
+
+    @router.get(config["routes"]["component_preview_model"])
+    def get_component_preview_model(request: Request, artifact_id: str) -> Response:
+        """Local-storage fallback; Supabase previews use direct signed URLs."""
+        storage = component_repo_storage(request, config)
+        try:
+            artifact, content = read_component_artifact(
+                request.app.state.db_engine,
+                config,
+                storage,
+                artifact_id,
+            )
+        except ArtifactStorageError as error:
+            raise domain_error_from_exception(
+                error,
+                "component_repo.storage_unavailable",
+                params={"artifactId": artifact_id},
+                http_status=502,
+            ) from error
+        except ValueError as error:
+            raise domain_error_from_exception(
+                error,
+                "component_repo.artifact_not_found",
+                params={"artifactId": artifact_id},
+                http_status=404,
+            ) from error
+        if artifact["artifactType"] != config["artifacts"]["component_preview_glb"]:
+            raise DomainError(
+                "component_repo.artifact_not_found",
+                params={"artifactId": artifact_id},
+                http_status=404,
+            )
+        return Response(
+            content=content,
+            media_type=config["storage"]["content_type_glb"],
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "ETag": f'"{artifact["sha256"]}"',
+            },
+        )
 
     @router.get(
         config["routes"]["component_detail"],
@@ -865,6 +989,29 @@ def component_repo_operation_error(
 def component_repo_actor(config: dict, current_user: CurrentUser | None) -> str:
     require_component_repo_auth_if_configured(current_user)
     return audit_identity(config, current_user)
+
+
+def preview_with_model(request: Request, config: dict, preview: dict) -> dict:
+    """Materialize a binary preview while keeping public failures structured."""
+    try:
+        return materialize_preview_model(
+            request.app.state.db_engine,
+            config,
+            component_repo_storage(request, config),
+            preview,
+        )
+    except ArtifactStorageError as error:
+        raise domain_error_from_exception(
+            error,
+            "component_repo.storage_unavailable",
+            http_status=502,
+        ) from error
+    except ValueError as error:
+        raise domain_error_from_exception(
+            error,
+            "component_repo.preview_unavailable",
+            http_status=409,
+        ) from error
 
 
 def component_repo_storage(

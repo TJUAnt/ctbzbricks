@@ -1,0 +1,21 @@
+{
+  "backend": {
+    "workingDirectory": "backend",
+    "pythonExecutable": "python",
+    "pythonPath": ".",
+    "module": "src.api.main:app",
+    "host": "127.0.0.1",
+    "port": 8000
+  },
+  "frontend": {
+    "workingDirectory": "frontend",
+    "command": "npm.cmd",
+    "arguments": ["run", "dev"],
+    "url": "http://127.0.0.1:5173/"
+  },
+  "terminal": {
+    "powershellExecutable": "powershell.exe",
+    "noExitArgument": "-NoExit",
+    "fileArgument": "-File"
+  }
+}

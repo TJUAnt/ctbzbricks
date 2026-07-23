@@ -1,0 +1,14 @@
+{
+  "schema": "brickbuilder-backend-i18n-catalog-v1",
+  "default_locale": "zh-CN",
+  "product_locales": ["zh-CN", "en-US"],
+  "validation_locales": ["ja-JP"],
+  "locale_aliases": {
+    "zh": "zh-CN",
+    "zh-hans": "zh-CN",
+    "en": "en-US",
+    "ja": "ja-JP"
+  },
+  "maximum_metric_dimensions": 1000,
+  "maximum_metric_value_length": 160
+}

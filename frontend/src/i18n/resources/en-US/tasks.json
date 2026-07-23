@@ -1,0 +1,10 @@
+{
+  "terrain.progress.queued": "Terrain task queued ({{percent}}%).",
+  "terrain.progress.processing": "Processing terrain ({{percent}}%).",
+  "terrain.progress.completed": "Terrain processing complete ({{percent}}%).",
+  "terrain.progress.failed": "Terrain processing failed.",
+  "lego_design.progress.queued": "LEGO design queued ({{percent}}%).",
+  "lego_design.progress.processing": "Building LEGO design ({{percent}}%).",
+  "lego_design.progress.completed": "LEGO design complete ({{percent}}%).",
+  "lego_design.progress.failed": "LEGO design failed."
+}

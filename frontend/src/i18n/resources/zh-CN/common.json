@@ -1,0 +1,8 @@
+{
+  "appTitle": "BrickBuilder",
+  "changeLanguage": "切换语言",
+  "chinese": "中文",
+  "english": "英文",
+  "pseudoEnglish": "伪英文",
+  "supabaseSignInIsNotConfigured": "Supabase 登录尚未配置"
+}

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+from math import ceil
 from typing import Any
 
-from sqlalchemy import Engine, and_, or_, select, true
-from sqlalchemy.orm import joinedload, selectinload, sessionmaker
+from sqlalchemy import Engine, and_, func, literal, or_, select, true, union_all
+from sqlalchemy.orm import load_only, sessionmaker
 
 from src.i18n.messages import message
 from src.api.schemas.fitting_candidate_recall import (
@@ -15,15 +16,12 @@ from src.api.schemas.fitting_candidate_recall import (
     FittingCandidateRecallResponse,
 )
 from src.model.models import (
-    Component,
     FittingCandidateProfile,
     LDrawPart,
     LDrawPartGeometry,
     LDrawPartShapeProfile,
-)
-from src.services.domain_content_service import (
-    localized_component_content,
-    localized_part_content,
+    PartImage,
+    XrefPartNumber,
 )
 from src.services.fitting_candidate_search_fields import normalize_search_text
 
@@ -33,6 +31,7 @@ def recall_fitting_candidates(
     config: dict[str, Any],
     request: FittingCandidateRecallRequest,
     component_config: dict[str, Any] | None = None,
+    include_images: bool = False,
 ) -> FittingCandidateRecallResponse:
     query = normalized_recall_query(config, request)
     Session = sessionmaker(bind=engine)
@@ -40,22 +39,115 @@ def recall_fitting_candidates(
         candidates = ready_candidate_responses(session, config, query)
         if query["include_irregular"]:
             candidates.extend(irregular_candidate_responses(session, config, query))
-    candidates.sort(key=lambda candidate: (-candidate.score, candidate.candidateType, candidate.candidateId))
-    limited_candidates = candidates[: query["limit"]]
+        candidates.sort(
+            key=lambda candidate: (
+                -candidate.score,
+                candidate.candidateType,
+                candidate.candidateId,
+            )
+        )
+        page_start = (query["page"] - 1) * query["page_size"]
+        limited_candidates = candidates[page_start : page_start + query["page_size"]]
+        if include_images:
+            limited_candidates = candidates_with_images(
+                session,
+                config,
+                limited_candidates,
+            )
     return FittingCandidateRecallResponse(
         total=len(candidates),
         returned=len(limited_candidates),
+        page=query["page"],
+        pageSize=query["page_size"],
+        totalPages=ceil(len(candidates) / query["page_size"]),
         includeIrregular=query["include_irregular"],
         candidates=limited_candidates,
     )
+
+
+def candidates_with_images(
+    session: object,
+    config: dict[str, Any],
+    candidates: list[FittingCandidateRecallCandidateResponse],
+) -> list[FittingCandidateRecallCandidateResponse]:
+    image_urls = candidate_image_urls(session, config, candidates)
+    return [
+        candidate.model_copy(update={"imageUrl": image_urls.get(candidate.candidateId)})
+        for candidate in candidates
+    ]
+
+
+def candidate_image_urls(
+    session: object,
+    config: dict[str, Any],
+    candidates: list[FittingCandidateRecallCandidateResponse],
+) -> dict[str, str]:
+    image_config = config["part_images"]
+    candidate_ids = [
+        candidate.candidateId
+        for candidate in candidates
+        if candidate.candidateType == image_config["candidate_type"]
+    ]
+    if not candidate_ids:
+        return {}
+
+    suffix = image_config["ldraw_suffix"]
+    stem_to_candidate_id = {
+        candidate_id.removesuffix(suffix): candidate_id for candidate_id in candidate_ids
+    }
+    direct_images = (
+        select(
+            PartImage.part_num.label("lookup_key"),
+            PartImage.img_url.label("image_url"),
+            literal(2).label("priority"),
+            literal(1.0).label("confidence"),
+        )
+        .where(PartImage.part_num.in_(stem_to_candidate_id))
+    )
+    mapped_images = (
+        select(
+            XrefPartNumber.ldraw_part_num.label("lookup_key"),
+            PartImage.img_url.label("image_url"),
+            literal(1).label("priority"),
+            XrefPartNumber.confidence.label("confidence"),
+        )
+        .join(
+            PartImage,
+            PartImage.part_num == XrefPartNumber.rebrickable_part_num,
+        )
+        .where(XrefPartNumber.ldraw_part_num.in_(candidate_ids))
+    )
+
+    selected: dict[str, tuple[tuple[int, float], str]] = {}
+    for lookup_key, image_url, priority, confidence in session.execute(
+        union_all(direct_images, mapped_images)
+    ):
+        candidate_id = (
+            stem_to_candidate_id.get(lookup_key)
+            if priority == 2
+            else lookup_key
+        )
+        if candidate_id is None:
+            continue
+        rank = (int(priority), float(confidence or 0))
+        current = selected.get(candidate_id)
+        if current is None or rank > current[0]:
+            selected[candidate_id] = (rank, image_url)
+    return {candidate_id: value[1] for candidate_id, value in selected.items()}
 
 
 def normalized_recall_query(
     config: dict[str, Any],
     request: FittingCandidateRecallRequest,
 ) -> dict[str, Any]:
-    limit = request.limit if request.limit is not None else config["defaults"]["limit"]
-    if limit <= 0:
+    page_size = (
+        request.pageSize
+        if request.pageSize is not None
+        else request.limit
+        if request.limit is not None
+        else config["defaults"]["limit"]
+    )
+    if page_size <= 0:
         raise ValueError(config["errors"]["invalid_limit"])
     return {
         "candidate_types": checked_candidate_types(config, request.candidateTypes),
@@ -73,15 +165,15 @@ def normalized_recall_query(
         ),
         "categories": request.categories,
         "color_codes": request.colorCodes,
-        "type_query": normalize_type_text(request.typeQuery),
+        "key": normalize_search_text(request.key),
         "allow_planar_rotation": request.allowPlanarRotation,
-        "content_locale": request.contentLocale,
         "include_irregular": (
             request.includeIrregular
             if request.includeIrregular is not None
             else config["defaults"]["include_irregular"]
         ),
-        "limit": min(limit, config["limits"]["max_limit"]),
+        "page": request.page,
+        "page_size": min(page_size, config["limits"]["max_limit"]),
     }
 
 
@@ -162,6 +254,21 @@ def ready_candidate_responses(
 ) -> list[FittingCandidateRecallCandidateResponse]:
     statement = (
         select(FittingCandidateProfile)
+        .options(
+            load_only(
+                FittingCandidateProfile.candidate_type,
+                FittingCandidateProfile.candidate_id,
+                FittingCandidateProfile.profile_status,
+                FittingCandidateProfile.bbox_json,
+                FittingCandidateProfile.logical_size_json,
+                FittingCandidateProfile.appearance_tags_json,
+                FittingCandidateProfile.color_summary_json,
+                FittingCandidateProfile.connector_summary_json,
+                FittingCandidateProfile.source_metadata_json,
+                FittingCandidateProfile.profile_error_code,
+                FittingCandidateProfile.profile_error_params_json,
+            )
+        )
         .where(FittingCandidateProfile.candidate_type.in_(query["candidate_types"]))
         .where(FittingCandidateProfile.profile_status.in_(query["profile_statuses"]))
     )
@@ -174,12 +281,9 @@ def ready_candidate_responses(
         )
     if query["logical_size"] is not None:
         statement = statement.where(persisted_logical_size_filter(config, query))
+    if query["key"] is not None:
+        statement = statement.where(persisted_name_filter(config, query["key"]))
     profiles = session.scalars(statement).all()
-    contents = profile_contents(
-        session,
-        profiles,
-        query["content_locale"],
-    )
     responses = []
     for profile in profiles:
         candidate = ready_candidate_response(
@@ -187,11 +291,20 @@ def ready_candidate_responses(
             config,
             query,
             profile,
-            contents.get((profile.candidate_type, profile.candidate_id)),
         )
         if candidate is not None:
             responses.append(candidate)
     return responses
+
+
+def persisted_name_filter(config: dict[str, Any], key: str):
+    """Match every normalized key token against the persisted source name."""
+    name = FittingCandidateProfile.appearance_tags_json[
+        config["json_keys"]["name"]
+    ].as_string()
+    return and_(
+        *(func.lower(name).contains(token, autoescape=True) for token in key.split())
+    )
 
 
 def persisted_logical_size_filter(
@@ -271,21 +384,20 @@ def persisted_dimension_filter(
 
 
 def ready_candidate_response(
-    session: object,
+    _session: object,
     config: dict[str, Any],
     query: dict[str, Any],
     profile: FittingCandidateProfile,
-    content: dict[str, Any] | None = None,
 ) -> FittingCandidateRecallCandidateResponse | None:
     payload = candidate_payload(config, profile)
     if profile.candidate_type == "part" and is_sticker_part_payload(config, payload):
         return None
-    type_match = fuzzy_type_match(config, query, payload)
-    reasons = filter_reasons(config, query, payload, type_match)
+    key_match = fuzzy_name_match(config, query, payload)
+    reasons = filter_reasons(config, query, payload, key_match)
     if reasons is None:
         return None
-    score = candidate_score(config, query, profile, reasons, type_match)
-    content = content or profile_content(session, profile, query["content_locale"])
+    score = candidate_score(config, query, profile, reasons, key_match)
+    content = profile_source_content(profile)
     return FittingCandidateRecallCandidateResponse(
         candidateType=profile.candidate_type,
         candidateId=profile.candidate_id,
@@ -297,8 +409,8 @@ def ready_candidate_response(
         description=content["description"],
         contentLocale=content["contentLocale"],
         translationStatus=content["translationStatus"],
-        matchedType=type_match["value"] if type_match is not None else None,
-        typeScore=type_match["score"] if type_match is not None else None,
+        matchedName=key_match["value"] if key_match is not None else None,
+        keyScore=key_match["score"] if key_match is not None else None,
         bbox=profile.bbox_json,
         logicalSize=profile.logical_size_json,
         appearanceTags=profile.appearance_tags_json,
@@ -321,7 +433,7 @@ def irregular_candidate_responses(
 ) -> list[FittingCandidateRecallCandidateResponse]:
     if config["irregular"]["candidate_type"] not in query["candidate_types"]:
         return []
-    rows = session.execute(
+    statement = (
         select(LDrawPart, LDrawPartGeometry, LDrawPartShapeProfile)
         .join(LDrawPartGeometry, LDrawPartGeometry.ldraw_part_id == LDrawPart.id)
         .join(LDrawPartShapeProfile, LDrawPartShapeProfile.ldraw_part_id == LDrawPart.id)
@@ -335,6 +447,16 @@ def irregular_candidate_responses(
             )
         )
     )
+    if query["key"] is not None:
+        statement = statement.where(
+            and_(
+                *(
+                    func.lower(LDrawPart.name).contains(token, autoescape=True)
+                    for token in query["key"].split()
+                )
+            )
+        )
+    rows = session.execute(statement)
     responses = []
     for part, geometry, profile in rows:
         candidate = irregular_candidate_response(session, config, query, part, geometry, profile)
@@ -344,7 +466,7 @@ def irregular_candidate_responses(
 
 
 def irregular_candidate_response(
-    session: object,
+    _session: object,
     config: dict[str, Any],
     query: dict[str, Any],
     part: LDrawPart,
@@ -354,8 +476,8 @@ def irregular_candidate_response(
     payload = irregular_candidate_payload(config, part, geometry)
     if is_sticker_part_payload(config, payload):
         return None
-    type_match = fuzzy_type_match(config, query, payload)
-    reasons = filter_reasons(config, query, payload, type_match)
+    key_match = fuzzy_name_match(config, query, payload)
+    reasons = filter_reasons(config, query, payload, key_match)
     if reasons is None:
         return None
     reasons.append(config["response"]["irregular_reason"])
@@ -366,9 +488,9 @@ def irregular_candidate_response(
         - logical_size_distance(config, query, payload)
         * config["scoring"]["logical_size_weight"]
         - config["scoring"]["irregular_penalty"]
-        + type_match_score(config, type_match)
+        + key_match_score(config, key_match)
     )
-    content = localized_part_content(session, part, query["content_locale"])
+    content = part_source_content(part)
     return FittingCandidateRecallCandidateResponse(
         candidateType=config["irregular"]["candidate_type"],
         candidateId=part.ldraw_part_num,
@@ -380,8 +502,8 @@ def irregular_candidate_response(
         description=content["description"],
         contentLocale=content["contentLocale"],
         translationStatus=content["translationStatus"],
-        matchedType=type_match["value"] if type_match is not None else None,
-        typeScore=type_match["score"] if type_match is not None else None,
+        matchedName=key_match["value"] if key_match is not None else None,
+        keyScore=key_match["score"] if key_match is not None else None,
         bbox=payload["bbox"],
         logicalSize=payload["logical_size"],
         appearanceTags=payload["appearance_tags"],
@@ -399,112 +521,11 @@ def irregular_candidate_response(
     )
 
 
-def profile_content(
-    session: object,
-    profile: FittingCandidateProfile,
-    content_locale: str,
-) -> dict[str, Any]:
-    if profile.candidate_type == "part":
-        part = session.scalar(
-            select(LDrawPart)
-            .options(selectinload(LDrawPart.translations))
-            .where(LDrawPart.ldraw_part_num == profile.candidate_id)
-        )
-        if part is not None:
-            return localized_part_content(session, part, content_locale)
-    if profile.candidate_type == "component":
-        component = session.scalar(
-            select(Component)
-            .options(selectinload(Component.translations))
-            .where(Component.id == profile.candidate_id)
-        )
-        if component is not None:
-            return localized_component_content(session, component, content_locale)
-    appearance = profile.appearance_tags_json or {}
-    return {
-        "name": appearance.get("name") or profile.candidate_id,
-        "description": appearance.get("remarks"),
-        "contentLocale": "en-US",
-        "translationStatus": "source",
-    }
-
-
-def profile_contents(
-    session: object,
-    profiles: list[FittingCandidateProfile],
-    content_locale: str,
-) -> dict[tuple[str, str], dict[str, Any]]:
-    contents: dict[tuple[str, str], dict[str, Any]] = {}
-    unresolved_profiles = []
-    for profile in profiles:
-        source_content = profile_source_content(profile, content_locale)
-        if source_content is None:
-            unresolved_profiles.append(profile)
-            continue
-        contents[(profile.candidate_type, profile.candidate_id)] = source_content
-    part_ids = [
-        profile.candidate_id
-        for profile in unresolved_profiles
-        if profile.candidate_type == "part"
-    ]
-    component_ids = [
-        profile.candidate_id
-        for profile in unresolved_profiles
-        if profile.candidate_type == "component"
-    ]
-    use_joined_translations = session.get_bind().dialect.name == "postgresql"
-    if part_ids:
-        part_query = select(LDrawPart).where(LDrawPart.ldraw_part_num.in_(part_ids))
-        if use_joined_translations:
-            part_query = part_query.options(joinedload(LDrawPart.translations))
-        parts = session.scalars(part_query).unique().all()
-        contents.update(
-            {
-                ("part", part.ldraw_part_num): localized_part_content(
-                    session,
-                    part,
-                    content_locale,
-                )
-                for part in parts
-            }
-        )
-    if component_ids:
-        component_query = select(Component).where(Component.id.in_(component_ids))
-        if use_joined_translations:
-            component_query = component_query.options(joinedload(Component.translations))
-        components = session.scalars(component_query).unique().all()
-        contents.update(
-            {
-                ("component", component.id): localized_component_content(
-                    session,
-                    component,
-                    content_locale,
-                )
-                for component in components
-            }
-        )
-    for profile in profiles:
-        key = (profile.candidate_type, profile.candidate_id)
-        if key in contents:
-            continue
-        appearance = profile.appearance_tags_json or {}
-        contents[key] = {
-            "name": appearance.get("name") or profile.candidate_id,
-            "description": appearance.get("remarks"),
-            "contentLocale": "en-US",
-            "translationStatus": "source",
-        }
-    return contents
-
-
 def profile_source_content(
     profile: FittingCandidateProfile,
-    content_locale: str,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     metadata = profile.source_metadata_json or {}
-    source_locale = metadata.get("contentLocale")
-    if source_locale is None or source_locale != content_locale:
-        return None
+    source_locale = metadata.get("contentLocale") or "en-US"
     appearance = profile.appearance_tags_json or {}
     content = {
         "name": appearance.get("name") or profile.candidate_id,
@@ -519,6 +540,15 @@ def profile_source_content(
     if profile.candidate_type == "component":
         content["tags"] = appearance.get("tags") or []
     return content
+
+
+def part_source_content(part: LDrawPart) -> dict[str, Any]:
+    return {
+        "name": part.name,
+        "description": None,
+        "contentLocale": part.content_locale,
+        "translationStatus": "source",
+    }
 
 
 def normalize_type_text(value: str | None) -> str | None:
@@ -546,55 +576,26 @@ def is_sticker_part_payload(
     )
 
 
-def fuzzy_type_match(
+def fuzzy_name_match(
     config: dict[str, Any],
     query: dict[str, Any],
     payload: dict[str, Any],
 ) -> dict[str, Any] | None:
-    type_query = query["type_query"]
-    if type_query is None:
+    key = query["key"]
+    if key is None:
         return None
-    matches = [
-        (type_similarity(type_query, value), value)
-        for value in candidate_type_values(config, payload)
-        if normalize_type_text(value) is not None
-    ]
-    if not matches:
+    appearance = payload.get("appearance_tags") or {}
+    value = appearance.get(config["json_keys"]["name"])
+    if not isinstance(value, str) or normalize_search_text(value) is None:
         return None
-    score, value = max(matches, key=lambda item: item[0])
-    if score < config["fuzzy_type"]["minimum_score"]:
+    score = name_similarity(key, value)
+    if score < config["fuzzy_key"]["minimum_score"]:
         return None
     return {"value": value, "score": round(score, 4)}
 
 
-def candidate_type_values(
-    config: dict[str, Any],
-    payload: dict[str, Any],
-) -> list[str]:
-    keys = config["json_keys"]
-    values: list[str] = []
-    appearance = payload.get("appearance_tags") or {}
-    for key in (keys["category"], keys["name"], "remarks"):
-        value = appearance.get(key)
-        if isinstance(value, str) and value.strip():
-            values.append(value)
-    for value in appearance.get("tags", []):
-        if isinstance(value, str) and value.strip():
-            values.append(value)
-    normalized_type = payload.get("normalized_type")
-    if isinstance(normalized_type, str) and normalized_type.strip():
-        values.append(normalized_type)
-    source_metadata = payload.get("source_metadata") or {}
-    part_summary = source_metadata.get(keys["part_summary"]) or {}
-    for row in part_summary.get(keys["by_category"], []):
-        value = row.get(keys["category"])
-        if isinstance(value, str) and value.strip():
-            values.append(value)
-    return list(dict.fromkeys(values))
-
-
-def type_similarity(query: str, candidate: str) -> float:
-    normalized_candidate = normalize_type_text(candidate)
+def name_similarity(query: str, candidate: str) -> float:
+    normalized_candidate = normalize_search_text(candidate)
     if normalized_candidate is None:
         return 0.0
     if query == normalized_candidate:
@@ -609,6 +610,8 @@ def type_similarity(query: str, candidate: str) -> float:
     )
     if all(query_token in candidate_tokens for query_token in query_tokens):
         scores.append(0.98)
+    elif all(query_token in normalized_candidate for query_token in query_tokens):
+        scores.append(0.9)
     if any(
         candidate_token.startswith(query) or candidate_token.endswith(query)
         for candidate_token in candidate_tokens
@@ -624,7 +627,6 @@ def candidate_payload(
     return {
         "bbox": profile.bbox_json,
         "logical_size": profile.logical_size_json,
-        "normalized_type": profile.normalized_type,
         "appearance_tags": profile.appearance_tags_json,
         "color_summary": profile.color_summary_json,
         "connector_summary": profile.connector_summary_json,
@@ -637,7 +639,7 @@ def payload_candidate_score(
     query: dict[str, Any],
     payload: dict[str, Any],
     reasons: list[str],
-    type_match: dict[str, Any] | None,
+    key_match: dict[str, Any] | None,
 ) -> float:
     return (
         config["scoring"]["base_score"]
@@ -647,7 +649,7 @@ def payload_candidate_score(
         + connector_score(config, query)
         + category_score(config, query)
         + color_score(config, query)
-        + type_match_score(config, type_match)
+        + key_match_score(config, key_match)
         + len(reasons)
     )
 
@@ -687,7 +689,7 @@ def filter_reasons(
     config: dict[str, Any],
     query: dict[str, Any],
     payload: dict[str, Any],
-    type_match: dict[str, Any] | None = None,
+    key_match: dict[str, Any] | None = None,
 ) -> list[str] | None:
     reasons = []
     if not bbox_matches(config, query, payload):
@@ -710,10 +712,10 @@ def filter_reasons(
         return None
     if query["color_codes"] is not None:
         reasons.append(config["response"]["color_filter_reason"])
-    if query["type_query"] is not None:
-        if type_match is None:
+    if query["key"] is not None:
+        if key_match is None:
             return None
-        reasons.append(config["response"]["type_filter_reason"])
+        reasons.append(config["response"]["key_filter_reason"])
     return reasons
 
 
@@ -868,10 +870,10 @@ def candidate_score(
     query: dict[str, Any],
     profile: FittingCandidateProfile,
     reasons: list[str],
-    type_match: dict[str, Any] | None = None,
+    key_match: dict[str, Any] | None = None,
 ) -> float:
     payload = candidate_payload(config, profile)
-    return payload_candidate_score(config, query, payload, reasons, type_match)
+    return payload_candidate_score(config, query, payload, reasons, key_match)
 
 
 def bbox_distance(
@@ -919,13 +921,13 @@ def logical_size_distance(
     return direct_distance - planar_direct + min(planar_direct, planar_rotated)
 
 
-def type_match_score(
+def key_match_score(
     config: dict[str, Any],
-    type_match: dict[str, Any] | None,
+    key_match: dict[str, Any] | None,
 ) -> float:
-    if type_match is None:
+    if key_match is None:
         return 0.0
-    return type_match["score"] * config["scoring"]["type_match_weight"]
+    return key_match["score"] * config["scoring"]["key_match_weight"]
 
 
 def connector_score(config: dict[str, Any], query: dict[str, Any]) -> float:

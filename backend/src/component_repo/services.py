@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from zipfile import BadZipFile, ZipFile
 
 from sqlalchemy import Engine, inspect, select, text, update
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.i18n.domain_content import USER_CONTENT, normalize_content_locale
 from src.i18n.messages import error_from_exception, locale_catalog, message
@@ -56,6 +58,14 @@ def ensure_component_repo_tables(engine: Engine) -> None:
 def ensure_component_repo_schema_columns(engine: Engine) -> None:
     """Upgrade Component Repo tables created by pre-i18n/error-contract releases."""
     default_locale = str(locale_catalog()["default_locale"])
+    ensure_table_columns(
+        engine,
+        ComponentUploadSession.__tablename__,
+        {
+            "failure_code": "VARCHAR(160) NULL",
+            "failure_params_json": "JSON NULL",
+        },
+    )
     ensure_table_columns(
         engine,
         ComponentImport.__tablename__,
@@ -187,7 +197,13 @@ def create_component_artifact(
         immutable=True,
         uploaded_by=uploaded_by or config["audit"]["system_user"],
         uploaded_at=now,
-        metadata_json=metadata or {},
+        metadata_json={
+            **(metadata or {}),
+            "verification": {
+                "status": "verified",
+                "verifiedAt": now.isoformat(),
+            },
+        },
     )
     Session = sessionmaker(bind=engine)
     with Session() as session:
@@ -247,6 +263,10 @@ def create_component_upload_session(
     source_content_type: str | None = None,
     exchange_filename: str | None = None,
     exchange_content_type: str | None = None,
+    source_file_size: int | None = None,
+    source_sha256: str | None = None,
+    exchange_file_size: int | None = None,
+    exchange_sha256: str | None = None,
     target_component_id: str | None = None,
     base_version_id: str | None = None,
     content_locale: str | None = None,
@@ -266,6 +286,8 @@ def create_component_upload_session(
             "source",
             source_filename,
             source_content_type,
+            source_file_size,
+            source_sha256,
         )
     ]
     if exchange_filename:
@@ -277,6 +299,8 @@ def create_component_upload_session(
                 "exchange",
                 exchange_filename,
                 exchange_content_type,
+                exchange_file_size,
+                exchange_sha256,
             )
         )
     upload_session = ComponentUploadSession(
@@ -343,12 +367,15 @@ def complete_component_upload_session(
         now = datetime.now(timezone.utc)
         try:
             for upload in upload_session.expected_uploads_json:
-                content = storage.read_bytes(upload["objectPath"])
+                object_metadata = storage.head(upload["objectPath"])
+                expected_size = upload["fileSize"]
+                if object_metadata.content_length != expected_size:
+                    raise ValueError("component_repo.upload_session_complete_failed")
                 artifact = create_component_artifact_row_from_storage(
                     config,
                     storage,
                     {**upload, "uploadSessionId": upload_session.id},
-                    content,
+                    object_metadata.content_length,
                     completed_by,
                     now,
                 )
@@ -467,23 +494,20 @@ def parse_component_import(
                 "component": draft["component"],
                 "version": draft["version"],
             }
-        if import_row.exchange_artifact_id is None:
-            raise ValueError(f"Component import has no exchange artifact: {import_id}")
-        exchange_artifact = session.get(ComponentArtifact, import_row.exchange_artifact_id)
-        if exchange_artifact is None:
-            raise ValueError(
-                config["errors"]["artifact_not_found"].format(
-                    artifact_id=import_row.exchange_artifact_id,
-                )
-            )
         import_row.status = config["imports"]["status"]["parsing"]
         session.flush()
         try:
-            content = storage.read_bytes(exchange_artifact.storage_key)
+            exchange_artifact, content = resolve_exchange_artifact(
+                session,
+                config,
+                storage,
+                import_row,
+            )
             if sha256_bytes(content) != exchange_artifact.sha256:
                 import_row.failure_code = config["errors"]["hash_mismatch"]
                 import_row.failure_params_json = {"artifactId": exchange_artifact.id}
                 raise ValueError(import_row.failure_code)
+            mark_artifact_verified(exchange_artifact, len(content))
             document = deserialize_ldraw_document(
                 content.decode("utf-8-sig"),
                 config,
@@ -551,6 +575,98 @@ def parse_component_import(
             "component": draft["component"],
             "version": draft["version"],
         }
+
+
+def resolve_exchange_artifact(
+    session: Session,
+    config: dict[str, Any],
+    storage: ArtifactStorage,
+    import_row: ComponentImport,
+) -> tuple[ComponentArtifact, bytes]:
+    """Load an explicit LDraw artifact or derive model.ldr from a Studio archive."""
+    if import_row.exchange_artifact_id is not None:
+        exchange_artifact = session.get(
+            ComponentArtifact,
+            import_row.exchange_artifact_id,
+        )
+        if exchange_artifact is None:
+            raise ValueError(config["errors"]["artifact_not_found"])
+        return exchange_artifact, storage.read_bytes(exchange_artifact.storage_key)
+
+    source_artifact = session.get(ComponentArtifact, import_row.source_artifact_id)
+    if (
+        source_artifact is None
+        or source_artifact.artifact_type != config["artifacts"]["studio_io"]
+    ):
+        raise ValueError("component_repo.import_parse_failed")
+    source_content = storage.read_bytes(source_artifact.storage_key)
+    if sha256_bytes(source_content) != source_artifact.sha256:
+        import_row.failure_code = config["errors"]["hash_mismatch"]
+        import_row.failure_params_json = {"artifactId": source_artifact.id}
+        raise ValueError(import_row.failure_code)
+    mark_artifact_verified(source_artifact, len(source_content))
+
+    ldraw_content = extract_studio_ldraw(source_content)
+    artifact_id = str(uuid4())
+    filename = f"{Path(source_artifact.original_filename).stem}.ldr"
+    storage_key = derived_exchange_storage_key(
+        source_artifact.storage_key,
+        artifact_id,
+        filename,
+    )
+    storage_uri = storage.write_bytes(
+        storage_key,
+        ldraw_content,
+        config["storage"]["content_type_ldraw"],
+    )
+    exchange_artifact = ComponentArtifact(
+        id=artifact_id,
+        artifact_type=config["artifacts"]["ldraw_ldr"],
+        original_filename=filename,
+        storage_provider=storage.provider,
+        storage_bucket=storage.bucket,
+        storage_key=storage_key,
+        storage_uri=storage_uri,
+        sha256=sha256_bytes(ldraw_content),
+        file_size=len(ldraw_content),
+        mime_type=config["storage"]["content_type_ldraw"],
+        immutable=True,
+        uploaded_by=import_row.created_by,
+        uploaded_at=datetime.now(timezone.utc),
+        metadata_json={
+            "derivedFromArtifactId": source_artifact.id,
+            "archiveEntry": "model.ldr",
+            "verification": {
+                "status": "verified",
+                "verifiedAt": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+    )
+    session.add(exchange_artifact)
+    session.flush()
+    import_row.exchange_artifact_id = exchange_artifact.id
+    return exchange_artifact, ldraw_content
+
+
+def extract_studio_ldraw(content: bytes) -> bytes:
+    """Extract Studio's canonical LDraw exchange member with a size guard."""
+    try:
+        with ZipFile(BytesIO(content)) as archive:
+            member = archive.getinfo("model.ldr")
+            if member.file_size > 100 * 1024 * 1024:
+                raise ValueError("component_repo.import_parse_failed")
+            return archive.read(member)
+    except (BadZipFile, KeyError) as error:
+        raise ValueError("component_repo.import_parse_failed") from error
+
+
+def derived_exchange_storage_key(
+    source_storage_key: str,
+    artifact_id: str,
+    filename: str,
+) -> str:
+    source_directory = source_storage_key.rsplit("/", 1)[0]
+    return f"{source_directory}/derived/{artifact_id}/{Path(filename).name}"
 
 
 def get_component_candidate_for_import(
@@ -691,7 +807,13 @@ def expected_upload(
     role: str,
     filename: str,
     content_type: str | None,
+    file_size: int | None,
+    expected_sha256: str | None,
 ) -> dict[str, Any]:
+    if file_size is None or file_size < 0:
+        raise ValueError("component_repo.upload_session_create_failed")
+    if expected_sha256 is None or not is_sha256(expected_sha256):
+        raise ValueError("component_repo.upload_session_create_failed")
     artifact_type = artifact_type_for_filename(config, filename)
     artifact_id = str(uuid4())
     return {
@@ -710,6 +832,8 @@ def expected_upload(
             filename,
         ),
         "contentType": content_type or default_mime_type(config, artifact_type),
+        "fileSize": file_size,
+        "expectedSha256": expected_sha256.casefold(),
     }
 
 
@@ -717,7 +841,7 @@ def create_component_artifact_row_from_storage(
     config: dict[str, Any],
     storage: ArtifactStorage,
     upload: dict[str, Any],
-    content: bytes,
+    file_size: int,
     uploaded_by: str | None,
     uploaded_at: datetime,
 ) -> ComponentArtifact:
@@ -730,8 +854,8 @@ def create_component_artifact_row_from_storage(
         storage_bucket=storage.bucket,
         storage_key=upload["objectPath"],
         storage_uri=f"{storage.provider}://{storage.bucket}/{upload['objectPath']}",
-        sha256=sha256_bytes(content),
-        file_size=len(content),
+        sha256=upload["expectedSha256"],
+        file_size=file_size,
         mime_type=upload["contentType"],
         immutable=True,
         uploaded_by=uploaded_by or config["audit"]["system_user"],
@@ -740,6 +864,10 @@ def create_component_artifact_row_from_storage(
             "uploadSessionId": upload.get("uploadSessionId"),
             "uploadRole": upload["role"],
             "uploadMethod": "direct_storage",
+            "verification": {
+                "status": "pending",
+                "expectedSha256": upload["expectedSha256"],
+            },
         },
     )
 
@@ -755,6 +883,22 @@ def default_mime_type(config: dict[str, Any], artifact_type: str) -> str:
 
 def sha256_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdefABCDEF" for character in value)
+
+
+def mark_artifact_verified(artifact: ComponentArtifact, file_size: int) -> None:
+    """Persist authoritative verification after the server's single parse read."""
+    artifact.file_size = file_size
+    artifact.metadata_json = {
+        **(artifact.metadata_json or {}),
+        "verification": {
+            "status": "verified",
+            "verifiedAt": datetime.now(timezone.utc).isoformat(),
+        },
+    }
 
 
 def artifact_response(artifact: ComponentArtifact) -> dict[str, Any]:
@@ -773,6 +917,10 @@ def artifact_response(artifact: ComponentArtifact) -> dict[str, Any]:
         "uploadedBy": artifact.uploaded_by,
         "uploadedAt": artifact.uploaded_at.isoformat(),
         "metadata": artifact.metadata_json or {},
+        "verificationStatus": (
+            ((artifact.metadata_json or {}).get("verification") or {}).get("status")
+            or "verified"
+        ),
     }
 
 

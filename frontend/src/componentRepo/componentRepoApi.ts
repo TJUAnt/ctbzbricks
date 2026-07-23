@@ -48,23 +48,9 @@ export type ComponentPreviewPart = {
   };
 };
 
-/** Indexed local-space Part geometry shared by every instance with the same partRef. */
-export type ComponentPreviewMesh = {
-  partRef: string;
-  /** Flat xyz vertex coordinates in LDraw units (LDU). */
-  positions: number[];
-  /** Zero-based vertex indices, with each consecutive three defining a triangle. */
-  indices: number[];
-  triangleCount: number;
-};
-
-/**
- * Render contract: `parts` defines how the Component is assembled and `meshes`
- * supplies one reusable surface mesh for each unique Part reference.
- */
 export type ComponentPreviewResponse = {
   source: {
-    kind: 'component' | 'import';
+    kind: 'component' | 'part' | 'import';
     id: string;
     name: string;
     status: string;
@@ -78,7 +64,15 @@ export type ComponentPreviewResponse = {
     heightPlate: number;
   };
   parts: ComponentPreviewPart[];
-  meshes: ComponentPreviewMesh[];
+  model: {
+    artifactId: string;
+    format: 'glb';
+    compression: 'meshopt';
+    url: string;
+    sha256: string;
+    byteLength: number;
+    cacheKey: string;
+  };
 };
 
 export type ComponentVersionResponse = {
@@ -118,6 +112,7 @@ export type ComponentArtifactResponse = {
   uploadedBy: string;
   uploadedAt: string;
   metadata: Record<string, unknown>;
+  verificationStatus: 'pending' | 'verified';
 };
 
 export type ComponentImportResponse = {
@@ -168,6 +163,8 @@ export type ComponentUploadTargetResponse = {
   bucket: string;
   objectPath: string;
   contentType: string;
+  fileSize: number;
+  expectedSha256: string;
   uploadSessionId: string;
 };
 
@@ -299,6 +296,19 @@ export async function loadFirstComponentPreview(): Promise<ComponentPreviewRespo
   return requestJson<ComponentPreviewResponse>(url.toString());
 }
 
+/** Load one explicit Component or Part resource; locale affects content, not geometry. */
+export async function loadLibraryItemPreview(
+  itemType: 'component' | 'part',
+  itemId: string,
+): Promise<ComponentPreviewResponse> {
+  const url = new URL(
+    pathFor('libraryItemPreview', { itemType, itemId }),
+    window.location.origin,
+  );
+  url.searchParams.set('contentLocale', currentTaskContext().locale);
+  return requestJson<ComponentPreviewResponse>(url.toString());
+}
+
 export async function listComponentImports(): Promise<ComponentImportResponse[]> {
   return requestJson<ComponentImportResponse[]>(appConfig.componentRepoApi.componentImports);
 }
@@ -380,12 +390,16 @@ export async function createComponentUploadSession(
   exchangeFile: File | null,
   target: ComponentImportTarget = {},
 ): Promise<ComponentUploadSessionResponse> {
+  const [sourceSpec, exchangeSpec] = await Promise.all([
+    fileSpec(sourceFile),
+    exchangeFile ? fileSpec(exchangeFile) : Promise.resolve(null),
+  ]);
   return requestJson<ComponentUploadSessionResponse>(appConfig.componentRepoApi.componentImportUploadSession, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      sourceFile: fileSpec(sourceFile),
-      exchangeFile: exchangeFile ? fileSpec(exchangeFile) : null,
+      sourceFile: sourceSpec,
+      exchangeFile: exchangeSpec,
       targetComponentId: target.targetComponentId ?? null,
       baseVersionId: target.baseVersionId ?? null,
       contentLocale: currentTaskContext().locale,
@@ -436,8 +450,10 @@ export async function completeComponentUploadSession(uploadSessionId: string): P
 }
 
 export async function parseComponentImport(importId: string): Promise<ComponentImportParseResponse> {
-  return requestJson<ComponentImportParseResponse>(pathFor('componentImportParse', { importId }), {
+  return requestJson<ComponentImportParseResponse>(appConfig.componentRepoApi.componentImportParse, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ importId }),
   });
 }
 
@@ -559,12 +575,23 @@ function pathFor(key: keyof ComponentRepoApiConfig, params: Record<string, strin
   return path;
 }
 
-function fileSpec(file: File): { filename: string; contentType: string | null; fileSize: number } {
+async function fileSpec(file: File): Promise<{
+  filename: string;
+  contentType: string | null;
+  fileSize: number;
+  sha256: string;
+}> {
   return {
     filename: file.name,
     contentType: file.type || null,
     fileSize: file.size,
+    sha256: await fileSha256(file),
   };
+}
+
+async function fileSha256(file: File): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 async function uploadComponentImportWithXhr(

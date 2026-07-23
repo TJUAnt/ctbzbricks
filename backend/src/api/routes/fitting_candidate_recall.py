@@ -30,6 +30,7 @@ def create_fitting_candidate_recall_router(
                 config,
                 request_body,
                 component_config,
+                include_images=True,
             )
         except ValueError as error:
             raise domain_error_from_exception(

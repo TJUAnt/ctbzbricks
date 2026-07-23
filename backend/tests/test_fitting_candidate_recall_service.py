@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
 from src.api.schemas.fitting_candidate_recall import (
@@ -29,7 +29,9 @@ from src.model.models import (
     LDrawPart,
     LDrawPartGeometry,
     LDrawPartShapeProfile,
+    PartImage,
     PartTranslation,
+    XrefPartNumber,
 )
 from src.services.fitting_candidate_profile_service import (
     ensure_fitting_candidate_profile_table,
@@ -63,7 +65,7 @@ class FittingCandidateRecallServiceTest(unittest.TestCase):
                         heightPlate=1,
                         tolerance=0,
                     ),
-                    typeQuery="plate",
+                    key="plate",
                 ),
             )
 
@@ -91,7 +93,6 @@ class FittingCandidateRecallServiceTest(unittest.TestCase):
                     heightPlate=1,
                     tolerance=0,
                 ),
-                typeQuery="plate",
             ),
             component_config,
         )
@@ -102,7 +103,7 @@ class FittingCandidateRecallServiceTest(unittest.TestCase):
             {"component", "part"},
         )
 
-    def test_recall_fuzzy_matches_type_query(self) -> None:
+    def test_recall_fuzzy_matches_name_key(self) -> None:
         config = recall_config()
         engine = test_engine()
         seed_ready_part_candidate(engine, config)
@@ -118,13 +119,13 @@ class FittingCandidateRecallServiceTest(unittest.TestCase):
                     heightPlate=1,
                     tolerance=0,
                 ),
-                typeQuery="plte",
+                key="plat",
             ),
         )
 
         self.assertEqual(response.total, 1)
-        self.assertEqual(response.candidates[0].matchedType, "Plate")
-        self.assertGreater(response.candidates[0].typeScore, 0.8)
+        self.assertEqual(response.candidates[0].matchedName, "Plate 1 x 1")
+        self.assertGreater(response.candidates[0].keyScore, 0.8)
 
     def test_recall_allows_planar_dimension_rotation(self) -> None:
         config = recall_config()
@@ -151,7 +152,7 @@ class FittingCandidateRecallServiceTest(unittest.TestCase):
                     heightPlate=1,
                     tolerance=0,
                 ),
-                typeQuery="plate",
+                key="plate",
                 allowPlanarRotation=True,
             ),
         )
@@ -169,6 +170,12 @@ class FittingCandidateRecallServiceTest(unittest.TestCase):
             width_stud=8,
             depth_stud=8,
         )
+        seed_ready_part_candidate(
+            engine,
+            config,
+            candidate_id="same-size-brick.dat",
+            name="Brick 1 x 1",
+        )
 
         with patch(
             "src.services.fitting_candidate_recall_service.ready_candidate_response",
@@ -185,12 +192,123 @@ class FittingCandidateRecallServiceTest(unittest.TestCase):
                         heightPlate=1,
                         tolerance=0,
                     ),
-                    typeQuery="plate",
+                    key="plate",
                 ),
             )
 
         self.assertEqual(response.total, 1)
         self.assertEqual(candidate_builder.call_count, 1)
+
+    def test_recall_uses_one_projected_profile_query_without_content_lookup(self) -> None:
+        config = recall_config()
+        engine = test_engine()
+        seed_ready_part_candidate(engine, config)
+        statements: list[str] = []
+
+        def record_statement(_connection, _cursor, statement, _parameters, _context, _many):
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record_statement)
+        try:
+            response = recall_fitting_candidates(
+                engine,
+                config,
+                FittingCandidateRecallRequest(
+                    candidateTypes=["part"],
+                    logicalSize=FittingCandidateRecallLogicalSizeRequest(
+                        widthStud=1,
+                        depthStud=1,
+                        heightPlate=1,
+                        tolerance=0,
+                    ),
+                    key="plate",
+                ),
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", record_statement)
+
+        self.assertEqual(response.total, 1)
+        self.assertEqual(len(statements), 1)
+        self.assertNotIn("fitting_candidate_profiles.profile_key", statements[0])
+        self.assertNotIn("fitting_candidate_profiles.shape_profile_json", statements[0])
+        self.assertNotIn("ldraw_parts", statements[0])
+
+    def test_recall_loads_direct_and_mapped_part_images_in_one_batch(self) -> None:
+        config = recall_config()
+        engine = test_engine()
+        seed_ready_part_candidate(engine, config)
+        seed_ready_part_candidate(
+            engine,
+            config,
+            candidate_id="mapped-plate.dat",
+        )
+        Session = sessionmaker(bind=engine)
+        with Session() as session:
+            session.add_all(
+                [
+                    PartImage(part_num="3024", img_url="https://images.example/3024.png"),
+                    PartImage(
+                        part_num="rb-mapped-plate",
+                        img_url="https://images.example/mapped.png",
+                    ),
+                    XrefPartNumber(
+                        id=1,
+                        rebrickable_part_num="rb-mapped-plate",
+                        ldraw_part_num="mapped-plate.dat",
+                        relation_type="exact",
+                        source="test",
+                        confidence=1,
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = recall_fitting_candidates(
+            engine,
+            config,
+            FittingCandidateRecallRequest(candidateTypes=["part"], key="plate"),
+            include_images=True,
+        )
+
+        self.assertEqual(
+            {candidate.candidateId: candidate.imageUrl for candidate in response.candidates},
+            {
+                "3024.dat": "https://images.example/3024.png",
+                "mapped-plate.dat": "https://images.example/mapped.png",
+            },
+        )
+
+    def test_recall_paginates_sorted_candidates(self) -> None:
+        config = recall_config()
+        engine = test_engine()
+        seed_ready_part_candidate(engine, config)
+        for index in range(1, 6):
+            seed_ready_part_candidate(
+                engine,
+                config,
+                candidate_id=f"page-{index}.dat",
+            )
+
+        response = recall_fitting_candidates(
+            engine,
+            config,
+            FittingCandidateRecallRequest(
+                candidateTypes=["part"],
+                key="plate",
+                page=2,
+                pageSize=2,
+            ),
+        )
+
+        self.assertEqual(response.total, 6)
+        self.assertEqual(response.returned, 2)
+        self.assertEqual(response.page, 2)
+        self.assertEqual(response.pageSize, 2)
+        self.assertEqual(response.totalPages, 3)
+        self.assertEqual(
+            [candidate.candidateId for candidate in response.candidates],
+            ["page-2.dat", "page-3.dat"],
+        )
 
     def test_recall_filters_ready_candidate_by_bbox_connector_and_category(self) -> None:
         config = recall_config()
@@ -325,6 +443,8 @@ def test_engine():
     LDrawPartGeometry.__table__.create(bind=engine)
     ensure_part_shape_profile_table(engine)
     ensure_fitting_candidate_profile_table(engine)
+    PartImage.__table__.create(bind=engine)
+    XrefPartNumber.__table__.create(bind=engine)
     return engine
 
 
@@ -334,6 +454,7 @@ def seed_ready_part_candidate(
     candidate_id: str = "3024.dat",
     width_stud: float = 1,
     depth_stud: float = 1,
+    name: str = "Plate 1 x 1",
 ) -> None:
     Session = sessionmaker(bind=engine)
     with Session() as session:
@@ -367,7 +488,7 @@ def seed_ready_part_candidate(
                 shape_profile_json={},
                 appearance_tags_json={
                     "category": "Plate",
-                    "name": "Plate 1 x 1",
+                    "name": name,
                 },
                 color_summary_json=None,
                 connector_summary_json={

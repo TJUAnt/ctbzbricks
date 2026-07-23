@@ -1,0 +1,10 @@
+{
+  "terrain.progress.queued": "地形任务已排队（{{percent}}%）。",
+  "terrain.progress.processing": "正在处理地形（{{percent}}%）。",
+  "terrain.progress.completed": "地形处理完成（{{percent}}%）。",
+  "terrain.progress.failed": "地形处理失败。",
+  "lego_design.progress.queued": "LEGO 设计任务已排队（{{percent}}%）。",
+  "lego_design.progress.processing": "正在构建 LEGO 设计（{{percent}}%）。",
+  "lego_design.progress.completed": "LEGO 设计完成（{{percent}}%）。",
+  "lego_design.progress.failed": "LEGO 设计失败。"
+}

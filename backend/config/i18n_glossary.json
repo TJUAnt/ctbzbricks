@@ -1,0 +1,17 @@
+{
+  "schema": "brickbuilder-i18n-glossary-v1",
+  "translationStatuses": ["draft", "reviewed", "rejected"],
+  "terms": [
+    {"term": "LEGO", "zh-CN": "乐高", "en-US": "LEGO", "note": "品牌名；英文保持全大写"},
+    {"term": "Brick", "zh-CN": "积木砖", "en-US": "Brick", "note": "与 Plate 区分"},
+    {"term": "Plate", "zh-CN": "薄板", "en-US": "Plate", "note": "高度通常为 1 plate"},
+    {"term": "Stud", "zh-CN": "颗粒", "en-US": "Stud", "note": "用于水平网格尺寸"},
+    {"term": "LDraw", "zh-CN": "LDraw", "en-US": "LDraw", "note": "技术标准名不翻译"},
+    {"term": "DEM", "zh-CN": "数字高程模型", "en-US": "DEM", "note": "首次出现可展开全称"},
+    {"term": "Component", "zh-CN": "组件", "en-US": "Component", "note": "可复用装配单元"},
+    {"term": "Connector", "zh-CN": "连接点", "en-US": "Connector", "note": "几何连接定义"},
+    {"term": "Interface", "zh-CN": "接口", "en-US": "Interface", "note": "组件对外暴露的连接能力"},
+    {"term": "Draft", "zh-CN": "草稿", "en-US": "Draft", "note": "尚未发布"},
+    {"term": "Publish", "zh-CN": "发布", "en-US": "Publish", "note": "通过审核后对外可用"}
+  ]
+}

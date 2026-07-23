@@ -77,10 +77,11 @@
   "componentRepoApi": {
     "components": "/api/components",
     "componentPreviewFirst": "/api/component-previews/first",
+    "libraryItemPreview": "/api/library-items/{itemType}/{itemId}/preview",
     "componentImports": "/api/component-imports",
     "componentImportUploadSession": "/api/component-imports/upload-session",
     "componentImportUploadComplete": "/api/component-imports/{uploadSessionId}/upload-complete",
-    "componentImportParse": "/api/component-imports/{importId}/parse",
+    "componentImportParse": "/api/component-imports/parse",
     "componentImportCandidate": "/api/component-imports/{importId}/candidate",
     "candidateDetail": "/api/component-candidates/{candidateId}",
     "candidatePreview": "/api/component-candidates/{candidateId}/preview",
@@ -160,7 +161,7 @@
     "pixelArt": "/pixel-art",
     "pixelArtProjects": "/pixel-art-projects",
     "partSearch": "/part-search",
-    "partViewer": "/part-viewer",
+    "partViewer": "/library/:itemType/:itemId",
     "componentRepo": "/component-repo",
     "componentRepoImport": "/component-repo/import",
     "componentRepoCandidate": "/component-repo/candidates/:candidateId",
@@ -259,12 +260,6 @@
           "label": "app:menuGroups.partLookup.items.partSearch.label",
           "icon": "search",
           "page": "partSearch"
-        },
-        {
-          "id": "partViewer",
-          "label": "app:menuGroups.partLookup.items.partViewer.label",
-          "icon": "cube",
-          "page": "partViewer"
         }
       ]
     }

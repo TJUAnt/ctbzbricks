@@ -1,0 +1,66 @@
+{
+  "catalogVersion": "brickbuilder-export-2026.07.18.1",
+  "documents": {
+    "legoDesignPlan": {
+      "title": "LEGO Design Plan",
+      "description": "Deterministic construction plan and bill of materials."
+    },
+    "demDesignReport": {
+      "title": "DEM LEGO Design Report",
+      "description": "Terrain construction plan, bill of materials, and validation report."
+    }
+  },
+  "sections": {
+    "layers": "Layers",
+    "steps": "Build steps",
+    "dimensions": "Model dimensions",
+    "bom": "Bill of materials",
+    "colorMappings": "Color mappings",
+    "validation": "Validation report"
+  },
+  "fields": {
+    "partId": "Part ID",
+    "partName": "Part name",
+    "color": "Color",
+    "quantity": "Quantity",
+    "width": "Width",
+    "height": "Height",
+    "depth": "Depth",
+    "role": "Role",
+    "stage": "Stage",
+    "status": "Status",
+    "metric": "Metric",
+    "value": "Value"
+  },
+  "layers": {
+    "terrainAssembly": "Terrain assembly",
+    "blackSupport": "Black support connectors and border",
+    "whiteBase": "White support base",
+    "topDesign": "Top pixel design"
+  },
+  "steps": {
+    "pixelBase": "Base {index}",
+    "pixelTop": "Top rows {start}-{end}",
+    "supportBase": "Support base {index}",
+    "structure": "Base layer {basePlate}",
+    "surfaceConnected": "Connected slope replacement {basePlate}",
+    "surfaceFinished": "Finished slope decoration {basePlate}",
+    "surfaceSupplement": "Colored replacement supplement {basePlate}",
+    "surfaceFill": "Surface fill {basePlate}",
+    "terrainModule": "Module {moduleId}: {stage}"
+  },
+  "terrainStages": {
+    "wall": "walls",
+    "support": "supports",
+    "cover": "cover",
+    "solid": "solid fill",
+    "surface": "colored surface",
+    "slope": "terrain slopes"
+  },
+  "filenames": {
+    "legoLdraw": "lego-design-{jobId}.ldr",
+    "legoPlan": "lego-design-{jobId}-plan.json",
+    "demLdraw": "dem-lego-design-{modelId}.ldr",
+    "demReport": "dem-lego-design-{modelId}-report.json"
+  }
+}

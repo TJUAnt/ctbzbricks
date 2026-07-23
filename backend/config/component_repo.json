@@ -14,14 +14,15 @@
     "supabase_storage_key_env": "SUPABASE_STORAGE_KEY",
     "supabase_legacy_key_envs": ["SUPABASE_KEY"],
     "content_type_binary": "application/octet-stream",
-    "content_type_ldraw": "text/plain; charset=utf-8"
+    "content_type_ldraw": "text/plain; charset=utf-8",
+    "content_type_glb": "model/gltf-binary"
   },
   "routes": {
     "component_imports": "/api/component-imports",
     "component_import_upload_session": "/api/component-imports/upload-session",
     "component_import_upload_complete": "/api/component-imports/{upload_session_id}/upload-complete",
     "component_import": "/api/component-imports/{import_id}",
-    "component_import_parse": "/api/component-imports/{import_id}/parse",
+    "component_import_parse": "/api/component-imports/parse",
     "component_import_candidate": "/api/component-imports/{import_id}/candidate",
     "candidate_detail": "/api/component-candidates/{candidate_id}",
     "candidate_preview": "/api/component-candidates/{candidate_id}/preview",
@@ -34,6 +35,8 @@
     "candidate_validate": "/api/component-candidates/{candidate_id}/validate",
     "components": "/api/components",
     "component_preview_first": "/api/component-previews/first",
+    "component_preview_model": "/api/component-preview-models/{artifact_id}",
+    "library_item_preview": "/api/library-items/{item_type}/{item_id}/preview",
     "component_detail": "/api/components/{component_id}",
     "component_translation": "/api/components/{component_id}/translations/{locale}",
     "part_translation": "/api/parts/{part_number}/translations/{locale}",
@@ -52,7 +55,8 @@
     "studio_io": "studio_io",
     "ldraw_ldr": "ldraw_ldr",
     "ldraw_mpd": "ldraw_mpd",
-    "allowed_types": ["studio_io", "ldraw_ldr", "ldraw_mpd"]
+    "component_preview_glb": "component_preview_glb",
+    "allowed_types": ["studio_io", "ldraw_ldr", "ldraw_mpd", "component_preview_glb"]
   },
   "ldraw": {
     "parser_version": "component-repo-ldraw-parser-v1",
@@ -79,6 +83,12 @@
     }
   },
   "preview": {
+    "generator_version": "component-preview-glb-v1",
+    "node_binary": "node",
+    "meshopt_script": "backend/scripts/meshopt_glb.mjs",
+    "meshopt_encoder_module": "frontend/node_modules/meshoptimizer/meshopt_encoder.js",
+    "meshopt_timeout_seconds": 30,
+    "signed_url_ttl_seconds": 900,
     "ldraw_root_env": "LDRAW_ROOT",
     "ldraw_root_candidates": [
       "/Applications/Studio 2.0/ldraw",

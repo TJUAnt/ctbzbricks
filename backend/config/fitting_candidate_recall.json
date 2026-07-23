@@ -19,18 +19,22 @@
     "base_score": 1000.0,
     "bbox_weight": 1.0,
     "logical_size_weight": 10.0,
-    "type_match_weight": 100.0,
+    "key_match_weight": 100.0,
     "connector_bonus": 25.0,
     "category_bonus": 20.0,
     "color_bonus": 10.0,
     "irregular_penalty": 200.0
   },
-  "fuzzy_type": {
+  "fuzzy_key": {
     "minimum_score": 0.72
   },
   "part_filters": {
     "exclude_stickers": true,
     "sticker_term_roots": ["sticker", "decal"]
+  },
+  "part_images": {
+    "candidate_type": "part",
+    "ldraw_suffix": ".dat"
   },
   "irregular": {
     "candidate_type": "part",
@@ -68,7 +72,7 @@
     "connector_filter_reason": "connector",
     "category_filter_reason": "category",
     "color_filter_reason": "color",
-    "type_filter_reason": "fuzzy_type",
+    "key_filter_reason": "fuzzy_name",
     "status_filter_reason": "status",
     "candidate_type_filter_reason": "candidate_type"
   },

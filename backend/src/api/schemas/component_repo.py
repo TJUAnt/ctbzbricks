@@ -28,6 +28,7 @@ class ComponentArtifactResponse(BaseModel):
     uploadedBy: str
     uploadedAt: str
     metadata: dict[str, Any]
+    verificationStatus: str
 
 
 class ComponentImportResponse(BaseModel):
@@ -80,7 +81,8 @@ class ComponentImportCreateResponse(BaseModel):
 class ComponentUploadFileSpec(BaseModel):
     filename: str
     contentType: str | None = None
-    fileSize: int | None = None
+    fileSize: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
 
 
 class ComponentUploadSessionCreateRequest(BaseModel):
@@ -99,6 +101,8 @@ class ComponentUploadTargetResponse(BaseModel):
     bucket: str
     objectPath: str
     contentType: str
+    fileSize: int
+    expectedSha256: str
     uploadSessionId: str
 
 
@@ -113,6 +117,10 @@ class ComponentUploadSessionResponse(BaseModel):
     completedAt: str | None
     failure: StructuredMessageResponse | None
     metadata: dict[str, Any]
+
+
+class ComponentImportParseRequest(BaseModel):
+    importId: str
 
 
 class ComponentImportParseResponse(BaseModel):
@@ -250,11 +258,11 @@ class ComponentPreviewPartResponse(BaseModel):
 
 
 class ComponentPreviewSourceResponse(BaseModel):
-    """Repository record from which the preview assembly was selected."""
+    """Repository record from which the preview geometry was selected."""
 
-    kind: str = Field(description="Source kind: component or import.")
-    id: str = Field(description="Stable Component Repo source ID.")
-    name: str = Field(description="Localized Component name or imported artifact filename.")
+    kind: str = Field(description="Source kind: component, part, or import.")
+    id: str = Field(description="Stable Component UUID, LDraw Part number, or import ID.")
+    name: str = Field(description="Localized official name or imported artifact filename.")
     status: str = Field(description="Machine-readable workflow status of the source record.")
 
 
@@ -271,27 +279,39 @@ class ComponentPreviewMeshResponse(BaseModel):
     triangleCount: int = Field(description="Number of triangles represented by indices.")
 
 
+class ComponentPreviewModelResponse(BaseModel):
+    """Immutable binary model cached in artifact storage."""
+
+    artifactId: str
+    format: str = Field(description="Binary model format; currently glb.")
+    compression: str = Field(description="Geometry compression; currently meshopt.")
+    url: str = Field(description="Direct signed URL or local API fallback URL.")
+    sha256: str
+    byteLength: int
+    cacheKey: str
+
+
 class ComponentPreviewResponse(BaseModel):
-    """Render contract combining Component placement data with reusable Part geometry."""
+    """Render contract for a Component assembly or one standalone Part."""
 
     source: ComponentPreviewSourceResponse = Field(
         description="Repository record selected for this preview."
     )
     component: ComponentResponse | None = Field(
-        description="Component metadata, or null when previewing an unbound import."
+        description="Component metadata, or null for a standalone Part or unbound import."
     )
     versionId: str | None = Field(
         description="Component version ID, or null before an import becomes a version."
     )
     partCount: int = Field(description="Number of Part instances in the assembly.")
     logicalSize: dict[str, float] = Field(
-        description="Overall assembly size in studs for width/depth and plates for height."
+        description="Item size in studs for width/depth and plates for height."
     )
     parts: list[ComponentPreviewPartResponse] = Field(
         description="Assembly instances and their world transforms."
     )
-    meshes: list[ComponentPreviewMeshResponse] = Field(
-        description="One reusable local-space mesh for each unique partRef."
+    model: ComponentPreviewModelResponse = Field(
+        description="Cached meshopt-compressed GLB loaded directly by the renderer."
     )
 
 

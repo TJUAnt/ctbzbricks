@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 from src.api.errors import install_error_handlers
 from src.api.routes.component_repo import create_component_repo_router
 from src.component_repo.services import ensure_component_repo_tables
-from src.component_repo.storage import LocalArtifactStorage
+from src.component_repo.storage import ArtifactStorageError, LocalArtifactStorage
 from src.config.app_settings import load_json_config
 from src.config.component_repo_config import REQUIRED_COMPONENT_REPO_CONFIG_KEYS
 from src.model.models import (
@@ -20,6 +20,7 @@ from src.model.models import (
     LDrawFile,
     LDrawPart,
     LDrawPartGeometry,
+    PartTranslation,
 )
 from src.services.fitting_candidate_profile_service import (
     ensure_fitting_candidate_profile_table,
@@ -27,6 +28,63 @@ from src.services.fitting_candidate_profile_service import (
 
 
 class ComponentRepoApiTest(unittest.TestCase):
+    def test_parse_import_maps_missing_storage_object_to_stable_error(self) -> None:
+        config = component_repo_config()
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        ConnectorInstance.__table__.create(bind=engine)
+        ensure_component_repo_tables(engine)
+        ensure_fitting_candidate_profile_table(engine)
+        with tempfile.TemporaryDirectory() as directory:
+            app = FastAPI()
+            install_error_handlers(app)
+            app.state.db_engine = engine
+            storage = LocalArtifactStorage(
+                root_path=Path(directory),
+                bucket=config["storage"]["bucket"],
+                provider=config["storage"]["local_provider"],
+            )
+            app.state.component_repo_storage = storage
+            app.include_router(create_component_repo_router(config))
+            client = TestClient(app)
+
+            create_response = client.post(
+                config["routes"]["component_imports"],
+                data={"content_locale": "en-US"},
+                files={
+                    "source_file": (
+                        "car_seat.ldr",
+                        fixture_path("repo/8cars/car_seat.ldr").read_bytes(),
+                        "text/plain",
+                    ),
+                },
+            )
+            self.assertEqual(create_response.status_code, 200)
+            payload = create_response.json()
+
+            def missing_read(_storage_key: str) -> bytes:
+                raise ArtifactStorageError("Object not found")
+
+            storage.read_bytes = missing_read
+
+            parse_response = client.post(
+                config["routes"]["component_import_parse"],
+                json={"importId": payload["importJob"]["id"]},
+            )
+
+            self.assertEqual(parse_response.status_code, 502)
+            self.assertEqual(
+                parse_response.json()["error"]["code"],
+                "component_repo.storage_unavailable",
+            )
+            self.assertEqual(
+                parse_response.json()["error"]["params"],
+                {"importId": payload["importJob"]["id"]},
+            )
+
     def test_create_import_accepts_single_ldraw_source_as_exchange(self) -> None:
         config = component_repo_config()
         engine = create_engine(
@@ -62,15 +120,23 @@ class ComponentRepoApiTest(unittest.TestCase):
                 if parameter["name"] == "contentLocale"
             )
             self.assertIn("locale-neutral", locale_parameter["description"])
-            mesh_schema = openapi["components"]["schemas"]["ComponentPreviewMeshResponse"]
-            self.assertIn(
-                "LDU",
-                mesh_schema["properties"]["positions"]["description"],
-            )
+            model_schema = openapi["components"]["schemas"]["ComponentPreviewModelResponse"]
+            self.assertIn("Binary model format", model_schema["properties"]["format"]["description"])
             version_preview_operation = openapi["paths"][
                 config["routes"]["component_version_preview"]
             ]["get"]
             self.assertEqual(version_preview_operation["summary"], "Get one Component version preview")
+            item_preview_operation = openapi["paths"][
+                config["routes"]["library_item_preview"]
+            ]["get"]
+            self.assertEqual(
+                item_preview_operation["summary"],
+                "Get a Component or Part preview by type and ID",
+            )
+            self.assertEqual(
+                {parameter["name"] for parameter in item_preview_operation["parameters"]},
+                {"item_type", "item_id", "contentLocale"},
+            )
             client = TestClient(app)
 
             empty_preview_response = client.get(
@@ -109,9 +175,8 @@ class ComponentRepoApiTest(unittest.TestCase):
             )
 
             parse_response = client.post(
-                config["routes"]["component_import_parse"].format(
-                    import_id=payload["importJob"]["id"],
-                )
+                config["routes"]["component_import_parse"],
+                json={"importId": payload["importJob"]["id"]},
             )
 
             self.assertEqual(parse_response.status_code, 200)
@@ -143,6 +208,52 @@ class ComponentRepoApiTest(unittest.TestCase):
             )
             app.include_router(create_component_repo_router(config))
             client = TestClient(app)
+
+            part_preview_response = client.get(
+                config["routes"]["library_item_preview"].format(
+                    item_type="part",
+                    item_id="male.dat",
+                ),
+                params={"contentLocale": "en-US"},
+            )
+            self.assertEqual(part_preview_response.status_code, 200)
+            self.assertEqual(part_preview_response.json()["source"]["kind"], "part")
+            self.assertEqual(part_preview_response.json()["source"]["id"], "male.dat")
+            self.assertEqual(part_preview_response.json()["partCount"], 1)
+            self.assertEqual(part_preview_response.json()["parts"][0]["partRef"], "male.dat")
+            self.assertEqual(part_preview_response.json()["model"]["format"], "glb")
+            self.assertEqual(part_preview_response.json()["model"]["compression"], "meshopt")
+            self.assertNotIn("meshes", part_preview_response.json())
+            part_model_response = client.get(part_preview_response.json()["model"]["url"])
+            self.assertEqual(part_model_response.status_code, 200)
+            self.assertEqual(part_model_response.content[:4], b"glTF")
+            self.assertIn(b"EXT_meshopt_compression", part_model_response.content)
+
+            missing_item_response = client.get(
+                config["routes"]["library_item_preview"].format(
+                    item_type="part",
+                    item_id="missing.dat",
+                ),
+                params={"contentLocale": "en-US"},
+            )
+            self.assertEqual(missing_item_response.status_code, 404)
+            self.assertEqual(
+                missing_item_response.json()["error"]["code"],
+                "component_repo.library_item_not_found",
+            )
+
+            unsupported_item_response = client.get(
+                config["routes"]["library_item_preview"].format(
+                    item_type="submodel",
+                    item_id="demo",
+                ),
+                params={"contentLocale": "en-US"},
+            )
+            self.assertEqual(unsupported_item_response.status_code, 400)
+            self.assertEqual(
+                unsupported_item_response.json()["error"]["code"],
+                "component_repo.preview_type_unsupported",
+            )
 
             response = client.post(
                 config["routes"]["component_imports"],
@@ -185,9 +296,8 @@ class ComponentRepoApiTest(unittest.TestCase):
             self.assertEqual(imports_response.json()[0]["sourceFileSize"], len(b"io-bytes"))
 
             parse_response = client.post(
-                config["routes"]["component_import_parse"].format(
-                    import_id=payload["importJob"]["id"],
-                )
+                config["routes"]["component_import_parse"],
+                json={"importId": payload["importJob"]["id"]},
             )
 
             self.assertEqual(parse_response.status_code, 200)
@@ -232,6 +342,23 @@ class ComponentRepoApiTest(unittest.TestCase):
                 2,
             )
 
+            component_item_preview_response = client.get(
+                config["routes"]["library_item_preview"].format(
+                    item_type="component",
+                    item_id=parse_payload["component"]["id"],
+                ),
+                params={"contentLocale": "zh-CN"},
+            )
+            self.assertEqual(component_item_preview_response.status_code, 200)
+            self.assertEqual(
+                component_item_preview_response.json()["source"]["id"],
+                parse_payload["component"]["id"],
+            )
+            self.assertEqual(
+                component_item_preview_response.json()["versionId"],
+                parse_payload["version"]["id"],
+            )
+
             candidate_preview_response = client.get(
                 config["routes"]["component_preview_first"],
                 params={"contentLocale": "zh-CN"},
@@ -260,15 +387,9 @@ class ComponentRepoApiTest(unittest.TestCase):
                 parse_payload["version"]["id"],
             )
             self.assertEqual(candidate_preview_response.json()["partCount"], 2)
-            meshes_by_ref = {
-                mesh["partRef"]: mesh
-                for mesh in candidate_preview_response.json()["meshes"]
-            }
-            self.assertEqual(set(meshes_by_ref), {"male.dat", "female.dat"})
-            self.assertEqual(meshes_by_ref["male.dat"]["triangleCount"], 2)
-            self.assertEqual(meshes_by_ref["female.dat"]["triangleCount"], 1)
-            self.assertEqual(len(meshes_by_ref["male.dat"]["positions"]), 12)
-            self.assertEqual(len(meshes_by_ref["male.dat"]["indices"]), 6)
+            self.assertEqual(candidate_preview_response.json()["model"]["format"], "glb")
+            self.assertEqual(candidate_preview_response.json()["model"]["compression"], "meshopt")
+            self.assertNotIn("meshes", candidate_preview_response.json())
 
             unavailable_free_response = client.get(
                 config["routes"]["candidate_free_connectors"].format(
@@ -475,6 +596,7 @@ def seed_connector_pair(engine) -> None:
     LDrawFile.__table__.create(bind=engine, checkfirst=True)
     LDrawPart.__table__.create(bind=engine, checkfirst=True)
     LDrawPartGeometry.__table__.create(bind=engine, checkfirst=True)
+    PartTranslation.__table__.create(bind=engine, checkfirst=True)
     Session = sessionmaker(bind=engine)
     with Session() as session:
         for row_id, part_num in ((1, "male.dat"), (2, "female.dat")):

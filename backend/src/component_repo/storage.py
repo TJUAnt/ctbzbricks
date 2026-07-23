@@ -24,9 +24,24 @@ class ArtifactStorage(Protocol):
     def read_bytes(self, storage_key: str) -> bytes:
         """Read bytes from storage."""
 
+    def head(self, storage_key: str) -> "ArtifactObjectMetadata":
+        """Read object metadata without downloading the object body."""
+
+    def create_download_url(self, storage_key: str, expires_in: int) -> str | None:
+        """Return a direct temporary download URL when supported."""
+
 
 class ArtifactStorageError(RuntimeError):
     """Raised when an artifact storage provider rejects an operation."""
+
+
+@dataclass(frozen=True)
+class ArtifactObjectMetadata:
+    """Storage metadata available without reading an object's body."""
+
+    content_length: int
+    content_type: str | None = None
+    etag: str | None = None
 
 
 @dataclass
@@ -44,7 +59,25 @@ class LocalArtifactStorage:
         return f"local://{self.bucket}/{storage_key}"
 
     def read_bytes(self, storage_key: str) -> bytes:
-        return self._target_path(storage_key).read_bytes()
+        try:
+            return self._target_path(storage_key).read_bytes()
+        except OSError as error:
+            raise ArtifactStorageError(
+                f"Local artifact download failed for bucket={self.bucket}, key={storage_key}"
+            ) from error
+
+    def head(self, storage_key: str) -> ArtifactObjectMetadata:
+        try:
+            target_path = self._target_path(storage_key)
+            return ArtifactObjectMetadata(content_length=target_path.stat().st_size)
+        except OSError as error:
+            raise ArtifactStorageError(
+                f"Local artifact head failed for bucket={self.bucket}, key={storage_key}"
+            ) from error
+
+    def create_download_url(self, storage_key: str, expires_in: int) -> str | None:
+        del storage_key, expires_in
+        return None
 
     def _target_path(self, storage_key: str) -> Path:
         clean_parts = [part for part in storage_key.split("/") if part not in ("", ".", "..")]
@@ -84,9 +117,60 @@ class SupabaseArtifactStorage:
         raise_for_storage_status("download", self.bucket, storage_key, response)
         return response.content
 
+    def head(self, storage_key: str) -> ArtifactObjectMetadata:
+        # Supabase's ordinary object URL rejects HTTP HEAD. Its object-info endpoint
+        # provides the same metadata-only semantics without transferring the body.
+        response = httpx.get(
+            self._info_url(storage_key),
+            headers=self._auth_headers(),
+            timeout=30,
+        )
+        raise_for_storage_status("head", self.bucket, storage_key, response)
+        payload = response.json()
+        content_length = payload.get("size")
+        if content_length is None and isinstance(payload.get("metadata"), dict):
+            content_length = payload["metadata"].get("size")
+        if content_length is None:
+            raise ArtifactStorageError(
+                f"Supabase Storage head response omitted object size for "
+                f"bucket={self.bucket}, key={storage_key}"
+            )
+        return ArtifactObjectMetadata(
+            content_length=int(content_length),
+            content_type=payload.get("content_type") or payload.get("contentType"),
+            etag=payload.get("etag"),
+        )
+
+    def create_download_url(self, storage_key: str, expires_in: int) -> str | None:
+        response = httpx.post(
+            self._sign_url(storage_key),
+            json={"expiresIn": expires_in},
+            headers=self._auth_headers(),
+            timeout=30,
+        )
+        raise_for_storage_status("sign", self.bucket, storage_key, response)
+        payload = response.json()
+        signed_url = payload.get("signedURL") or payload.get("signedUrl")
+        if not isinstance(signed_url, str) or not signed_url:
+            raise ArtifactStorageError(
+                f"Supabase Storage sign response omitted signed URL for "
+                f"bucket={self.bucket}, key={storage_key}"
+            )
+        if signed_url.startswith("http://") or signed_url.startswith("https://"):
+            return signed_url
+        return f"{self.supabase_url.rstrip('/')}/{signed_url.lstrip('/')}"
+
     def _object_url(self, storage_key: str) -> str:
         base_url = self.supabase_url.rstrip("/")
         return f"{base_url}/storage/v1/object/{self.bucket}/{storage_key}"
+
+    def _sign_url(self, storage_key: str) -> str:
+        base_url = self.supabase_url.rstrip("/")
+        return f"{base_url}/storage/v1/object/sign/{self.bucket}/{storage_key}"
+
+    def _info_url(self, storage_key: str) -> str:
+        base_url = self.supabase_url.rstrip("/")
+        return f"{base_url}/storage/v1/object/info/{self.bucket}/{storage_key}"
 
     def with_authorization_token(self, authorization_token: str | None) -> "SupabaseArtifactStorage":
         return SupabaseArtifactStorage(
