@@ -74,7 +74,7 @@ def ensure_component_repo_schema_columns(engine: Engine) -> None:
             "failure_params_json": "JSON NULL",
         },
     )
-    ensure_table_columns(
+    added_component_columns = ensure_table_columns(
         engine,
         Component.__tablename__,
         {
@@ -105,7 +105,15 @@ def ensure_component_repo_schema_columns(engine: Engine) -> None:
         for index in Component.__table__.indexes:
             if index.name == "idx_components_logical_size":
                 index.create(bind=engine, checkfirst=True)
-    if {"current_version_id", *logical_index_columns}.issubset(component_columns):
+    added_logical_columns = {
+        "logical_width_stud",
+        "logical_depth_stud",
+        "logical_height_plate",
+    }
+    if (
+        added_logical_columns.intersection(added_component_columns)
+        and {"current_version_id", *logical_index_columns}.issubset(component_columns)
+    ):
         backfill_component_logical_sizes(engine)
     migrate_legacy_component_import_failures(engine)
 
@@ -114,13 +122,14 @@ def ensure_table_columns(
     engine: Engine,
     table_name: str,
     column_definitions: dict[str, str],
-) -> None:
+) -> set[str]:
     inspector = inspect(engine)
     if not inspector.has_table(table_name):
-        return
+        return set()
     existing = {column["name"] for column in inspector.get_columns(table_name)}
     preparer = engine.dialect.identifier_preparer
     quoted_table = preparer.quote(table_name)
+    added: set[str] = set()
     for column_name, definition in column_definitions.items():
         if column_name in existing:
             continue
@@ -132,6 +141,8 @@ def ensure_table_columns(
                     f"{quoted_column} {definition}"
                 )
             )
+        added.add(column_name)
+    return added
 
 
 def migrate_legacy_component_import_failures(engine: Engine) -> None:

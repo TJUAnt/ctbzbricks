@@ -22,16 +22,19 @@ def materialize_preview_model(
     config: dict[str, Any],
     storage: ArtifactStorage,
     preview: dict[str, Any],
+    *,
+    owner_id: str,
+    uploaded_by: str,
 ) -> dict[str, Any]:
     """Replace large JSON meshes with one cached, directly loadable GLB descriptor."""
     cache_key = preview_cache_key(preview, config)
-    artifact_id = str(uuid5(NAMESPACE_URL, f"brickbuilder:component-preview:{cache_key}"))
+    artifact_id = preview_artifact_id(storage, owner_id, cache_key)
     Session = sessionmaker(bind=engine)
     with Session() as session:
         artifact = session.get(ComponentArtifact, artifact_id)
         if artifact is None:
             content = build_meshopt_glb(preview, config)
-            storage_key = preview_storage_key(config, cache_key)
+            storage_key = preview_storage_key(config, owner_id, cache_key)
             content_type = config["storage"]["content_type_glb"]
             storage_uri = storage.write_bytes(storage_key, content, content_type)
             now = datetime.now(timezone.utc)
@@ -47,10 +50,11 @@ def materialize_preview_model(
                 file_size=len(content),
                 mime_type=content_type,
                 immutable=True,
-                uploaded_by=config["audit"]["system_user"],
+                uploaded_by=uploaded_by,
                 uploaded_at=now,
                 metadata_json={
                     "cacheKey": cache_key,
+                    "ownerId": owner_id,
                     "generatorVersion": config["preview"]["generator_version"],
                     "compression": "EXT_meshopt_compression",
                     "verification": {
@@ -62,26 +66,26 @@ def materialize_preview_model(
             session.add(artifact)
             session.commit()
             session.refresh(artifact)
-        model_url = storage.create_download_url(
-            artifact.storage_key,
-            int(config["preview"]["signed_url_ttl_seconds"]),
-        )
-        if model_url is None:
-            model_url = config["routes"]["component_preview_model"].format(
-                artifact_id=artifact.id
-            )
-        return {
-            **{key: value for key, value in preview.items() if key != "meshes"},
-            "model": {
-                "artifactId": artifact.id,
-                "format": "glb",
-                "compression": "meshopt",
-                "url": model_url,
-                "sha256": artifact.sha256,
-                "byteLength": artifact.file_size,
-                "cacheKey": cache_key,
-            },
-        }
+        return preview_with_artifact(preview, artifact, storage, config, cache_key)
+
+
+def cached_preview_model(
+    engine: Engine,
+    config: dict[str, Any],
+    storage: ArtifactStorage,
+    preview: dict[str, Any],
+    *,
+    owner_id: str,
+) -> dict[str, Any] | None:
+    """Return an existing preview cache without creating storage or database state."""
+    cache_key = preview_cache_key(preview, config)
+    artifact_id = preview_artifact_id(storage, owner_id, cache_key)
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        artifact = session.get(ComponentArtifact, artifact_id)
+        if artifact is None:
+            return None
+        return preview_with_artifact(preview, artifact, storage, config, cache_key)
 
 
 def preview_cache_key(preview: dict[str, Any], config: dict[str, Any]) -> str:
@@ -100,10 +104,60 @@ def preview_cache_key(preview: dict[str, Any], config: dict[str, Any]) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
-def preview_storage_key(config: dict[str, Any], cache_key: str) -> str:
+def preview_artifact_id(
+    storage: ArtifactStorage,
+    owner_id: str,
+    cache_key: str,
+) -> str:
     return str(
-        Path(config["storage"]["object_prefix"])
+        uuid5(
+            NAMESPACE_URL,
+            (
+                "brickbuilder:component-preview:"
+                f"{storage.provider}:{storage.bucket}:{owner_id}:{cache_key}"
+            ),
+        )
+    )
+
+
+def preview_storage_key(
+    config: dict[str, Any],
+    owner_id: str,
+    cache_key: str,
+) -> str:
+    return str(
+        Path(owner_id)
+        / config["storage"]["object_prefix"]
         / "previews"
         / cache_key[:2]
         / f"{cache_key}.glb"
     )
+
+
+def preview_with_artifact(
+    preview: dict[str, Any],
+    artifact: ComponentArtifact,
+    storage: ArtifactStorage,
+    config: dict[str, Any],
+    cache_key: str,
+) -> dict[str, Any]:
+    model_url = storage.create_download_url(
+        artifact.storage_key,
+        int(config["preview"]["signed_url_ttl_seconds"]),
+    )
+    if model_url is None:
+        model_url = config["routes"]["component_preview_model"].format(
+            artifact_id=artifact.id
+        )
+    return {
+        **{key: value for key, value in preview.items() if key != "meshes"},
+        "model": {
+            "artifactId": artifact.id,
+            "format": "glb",
+            "compression": "meshopt",
+            "url": model_url,
+            "sha256": artifact.sha256,
+            "byteLength": artifact.file_size,
+            "cacheKey": cache_key,
+        },
+    }

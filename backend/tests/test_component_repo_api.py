@@ -209,7 +209,7 @@ class ComponentRepoApiTest(unittest.TestCase):
             app.include_router(create_component_repo_router(config))
             client = TestClient(app)
 
-            part_preview_response = client.get(
+            part_preview_response = client.post(
                 config["routes"]["library_item_preview"].format(
                     item_type="part",
                     item_id="male.dat",
@@ -224,6 +224,18 @@ class ComponentRepoApiTest(unittest.TestCase):
             self.assertEqual(part_preview_response.json()["model"]["format"], "glb")
             self.assertEqual(part_preview_response.json()["model"]["compression"], "meshopt")
             self.assertNotIn("meshes", part_preview_response.json())
+            cached_part_preview_response = client.get(
+                config["routes"]["library_item_preview"].format(
+                    item_type="part",
+                    item_id="male.dat",
+                ),
+                params={"contentLocale": "en-US"},
+            )
+            self.assertEqual(cached_part_preview_response.status_code, 200)
+            self.assertEqual(
+                cached_part_preview_response.json()["model"]["artifactId"],
+                part_preview_response.json()["model"]["artifactId"],
+            )
             part_model_response = client.get(part_preview_response.json()["model"]["url"])
             self.assertEqual(part_model_response.status_code, 200)
             self.assertEqual(part_model_response.content[:4], b"glTF")

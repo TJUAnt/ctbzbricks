@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, UploadFile
 from fastapi.responses import Response
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.api.errors import DomainError, domain_error_from_exception
 from src.api.schemas.component_repo import (
@@ -61,8 +64,14 @@ from src.component_repo.services import (
     parse_component_import,
     read_component_artifact,
 )
-from src.component_repo.preview_model_service import materialize_preview_model
-from src.component_repo.storage import ArtifactStorageError, storage_from_config
+from src.component_repo.preview_model_service import (
+    cached_preview_model,
+    materialize_preview_model,
+)
+from src.component_repo.storage import (
+    ArtifactStorageError,
+    storage_from_config,
+)
 from src.component_repo.relation_service import (
     confirm_relation_candidate,
     detect_relation_candidates,
@@ -71,6 +80,9 @@ from src.component_repo.relation_service import (
     reject_relation_candidate,
 )
 from src.config.app_settings import BACKEND_ROOT
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_component_repo_router(config: dict) -> APIRouter:
@@ -257,12 +269,35 @@ def create_component_repo_router(config: dict) -> APIRouter:
         storage = component_repo_storage(request, config, current_user)
         import_id = payload.importId
         try:
-            return parse_component_import(
+            result = parse_component_import(
                 request.app.state.db_engine,
                 config,
                 storage,
                 import_id,
             )
+            try:
+                preview = component_version_preview(
+                    request.app.state.db_engine,
+                    config,
+                    result["version"]["id"],
+                    str(result["importJob"]["metadata"].get("contentLocale") or "zh-CN"),
+                )
+                if preview is None:
+                    raise ValueError("component_repo.preview_unavailable")
+                preview_with_model(
+                    request,
+                    config,
+                    preview,
+                    current_user,
+                    materialize=True,
+                )
+            except (ArtifactStorageError, SQLAlchemyError, ValueError) as error:
+                logger.warning(
+                    "Component preview cache prewarm deferred for import_id=%s: %s",
+                    import_id,
+                    type(error).__name__,
+                )
+            return result
         except ArtifactStorageError as error:
             raise domain_error_from_exception(
                 error,
@@ -318,6 +353,15 @@ def create_component_repo_router(config: dict) -> APIRouter:
             409: {"description": "Required Part mesh geometry is unavailable."},
         },
     )
+    @router.post(
+        config["routes"]["candidate_preview"],
+        response_model=ComponentPreviewResponse,
+        summary="Materialize one Component candidate preview",
+        description=(
+            "Idempotently creates the current user's GLB cache when missing, then "
+            "returns the same preview contract as GET."
+        ),
+    )
     def get_candidate_preview(
         request: Request,
         candidate_id: str,
@@ -325,6 +369,7 @@ def create_component_repo_router(config: dict) -> APIRouter:
             ...,
             description="BCP 47 locale for Component content; geometry is locale-neutral.",
         ),
+        current_user: CurrentUser | None = Depends(optional_current_user),
     ) -> dict:
         try:
             preview = component_candidate_preview(
@@ -350,7 +395,13 @@ def create_component_repo_router(config: dict) -> APIRouter:
                 params={"candidateId": candidate_id},
                 http_status=404,
             )
-        return preview_with_model(request, config, preview)
+        return preview_with_model(
+            request,
+            config,
+            preview,
+            current_user,
+            materialize=request.method == "POST",
+        )
 
     @router.post(
         config["routes"]["candidate_relations_detect"],
@@ -557,7 +608,7 @@ def create_component_repo_router(config: dict) -> APIRouter:
         description=(
             "Returns Component metadata plus a signed URL for a cached meshopt-compressed "
             "GLB. The Component snapshot defines placement; Part geometry is resolved "
-            "from the configured LDraw library on the first cache miss."
+            "from the configured LDraw library when the matching POST materializes the cache."
         ),
         response_description=(
             "A render-ready Component assembly backed by a binary GLB model."
@@ -566,6 +617,15 @@ def create_component_repo_router(config: dict) -> APIRouter:
             404: {"description": "No previewable Component Repo item exists."},
             409: {"description": "Required Part mesh geometry is unavailable."},
         },
+    )
+    @router.post(
+        config["routes"]["component_preview_first"],
+        response_model=ComponentPreviewResponse,
+        summary="Materialize the first previewable Component Repo item",
+        description=(
+            "Idempotently creates the current user's GLB cache when missing, then "
+            "returns the same preview contract as GET."
+        ),
     )
     def get_first_component_preview(
         request: Request,
@@ -576,6 +636,7 @@ def create_component_repo_router(config: dict) -> APIRouter:
                 "is locale-neutral."
             ),
         ),
+        current_user: CurrentUser | None = Depends(optional_current_user),
     ) -> dict:
         try:
             preview = first_component_preview(
@@ -596,7 +657,13 @@ def create_component_repo_router(config: dict) -> APIRouter:
                 "component_repo.preview_empty",
                 http_status=404,
             )
-        return preview_with_model(request, config, preview)
+        return preview_with_model(
+            request,
+            config,
+            preview,
+            current_user,
+            materialize=request.method == "POST",
+        )
 
     @router.get(
         config["routes"]["library_item_preview"],
@@ -605,7 +672,7 @@ def create_component_repo_router(config: dict) -> APIRouter:
         description=(
             "Returns one explicit library resource with a cached meshopt-compressed GLB. "
             "Component resources use their current or newest version snapshot; Part "
-            "resources use an identity transform."
+            "resources use an identity transform. Use POST to materialize a missing cache."
         ),
         response_description="The requested Component assembly or standalone Part preview.",
         responses={
@@ -613,6 +680,15 @@ def create_component_repo_router(config: dict) -> APIRouter:
             404: {"description": "The requested Component or Part does not exist."},
             409: {"description": "Required Part mesh geometry is unavailable."},
         },
+    )
+    @router.post(
+        config["routes"]["library_item_preview"],
+        response_model=ComponentPreviewResponse,
+        summary="Materialize a Component or Part preview by type and ID",
+        description=(
+            "Idempotently creates the current user's GLB cache when missing, then "
+            "returns the same preview contract as GET."
+        ),
     )
     def get_library_item_preview(
         request: Request,
@@ -628,6 +704,7 @@ def create_component_repo_router(config: dict) -> APIRouter:
             ...,
             description="BCP 47 locale for official item content; geometry is locale-neutral.",
         ),
+        current_user: CurrentUser | None = Depends(optional_current_user),
     ) -> dict:
         try:
             preview = library_item_preview(
@@ -662,7 +739,13 @@ def create_component_repo_router(config: dict) -> APIRouter:
                 params={"itemType": item_type, "itemId": item_id},
                 http_status=404,
             )
-        return preview_with_model(request, config, preview)
+        return preview_with_model(
+            request,
+            config,
+            preview,
+            current_user,
+            materialize=request.method == "POST",
+        )
 
     @router.get(
         config["routes"]["component_version_preview"],
@@ -670,13 +753,22 @@ def create_component_repo_router(config: dict) -> APIRouter:
         summary="Get one Component version preview",
         description=(
             "Returns the selected ComponentVersion plus a signed URL for its cached "
-            "meshopt-compressed GLB model."
+            "meshopt-compressed GLB model. Use POST to materialize a missing cache."
         ),
         response_description="The render-ready assembly for the requested ComponentVersion.",
         responses={
             404: {"description": "The ComponentVersion does not exist."},
             409: {"description": "Required Part mesh geometry is unavailable."},
         },
+    )
+    @router.post(
+        config["routes"]["component_version_preview"],
+        response_model=ComponentPreviewResponse,
+        summary="Materialize one Component version preview",
+        description=(
+            "Idempotently creates the current user's GLB cache when missing, then "
+            "returns the same preview contract as GET."
+        ),
     )
     def get_component_version_preview(
         request: Request,
@@ -685,6 +777,7 @@ def create_component_repo_router(config: dict) -> APIRouter:
             ...,
             description="BCP 47 locale for Component content; geometry is locale-neutral.",
         ),
+        current_user: CurrentUser | None = Depends(optional_current_user),
     ) -> dict:
         try:
             preview = component_version_preview(
@@ -710,12 +803,22 @@ def create_component_repo_router(config: dict) -> APIRouter:
                 params={"versionId": version_id},
                 http_status=404,
             )
-        return preview_with_model(request, config, preview)
+        return preview_with_model(
+            request,
+            config,
+            preview,
+            current_user,
+            materialize=request.method == "POST",
+        )
 
     @router.get(config["routes"]["component_preview_model"])
-    def get_component_preview_model(request: Request, artifact_id: str) -> Response:
+    def get_component_preview_model(
+        request: Request,
+        artifact_id: str,
+        current_user: CurrentUser | None = Depends(optional_current_user),
+    ) -> Response:
         """Local-storage fallback; Supabase previews use direct signed URLs."""
-        storage = component_repo_storage(request, config)
+        storage = component_repo_storage(request, config, current_user)
         try:
             artifact, content = read_component_artifact(
                 request.app.state.db_engine,
@@ -991,16 +1094,42 @@ def component_repo_actor(config: dict, current_user: CurrentUser | None) -> str:
     return audit_identity(config, current_user)
 
 
-def preview_with_model(request: Request, config: dict, preview: dict) -> dict:
-    """Materialize a binary preview while keeping public failures structured."""
+def preview_with_model(
+    request: Request,
+    config: dict,
+    preview: dict,
+    current_user: CurrentUser | None,
+    *,
+    materialize: bool,
+) -> dict:
+    """Read or explicitly materialize a user-scoped binary preview cache."""
+    storage = component_repo_storage(request, config, current_user)
+    owner_id = preview_cache_owner(config, storage, current_user)
     try:
-        return materialize_preview_model(
+        if materialize:
+            return materialize_preview_model(
+                request.app.state.db_engine,
+                config,
+                storage,
+                preview,
+                owner_id=owner_id,
+                uploaded_by=audit_identity(config, current_user),
+            )
+        cached = cached_preview_model(
             request.app.state.db_engine,
             config,
-            component_repo_storage(request, config),
+            storage,
             preview,
+            owner_id=owner_id,
         )
+        if cached is None:
+            raise ValueError("component_repo.preview_unavailable")
+        return cached
     except ArtifactStorageError as error:
+        logger.warning(
+            "Component preview storage operation failed: %s",
+            error,
+        )
         raise domain_error_from_exception(
             error,
             "component_repo.storage_unavailable",
@@ -1026,3 +1155,15 @@ def component_repo_storage(
     if current_user is not None and hasattr(storage, "with_authorization_token"):
         return storage.with_authorization_token(current_user.access_token)
     return storage
+
+
+def preview_cache_owner(
+    config: dict,
+    storage: object,
+    current_user: CurrentUser | None,
+) -> str:
+    if getattr(storage, "provider", None) == config["storage"]["supabase_provider"]:
+        return require_current_user(current_user).user_id
+    if current_user is not None:
+        return current_user.user_id
+    return config["audit"]["system_user"]

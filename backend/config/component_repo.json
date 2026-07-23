@@ -56,7 +56,8 @@
     "ldraw_ldr": "ldraw_ldr",
     "ldraw_mpd": "ldraw_mpd",
     "component_preview_glb": "component_preview_glb",
-    "allowed_types": ["studio_io", "ldraw_ldr", "ldraw_mpd", "component_preview_glb"]
+    "allowed_types": ["studio_io", "ldraw_ldr", "ldraw_mpd"],
+    "derived_types": ["component_preview_glb"]
   },
   "ldraw": {
     "parser_version": "component-repo-ldraw-parser-v1",

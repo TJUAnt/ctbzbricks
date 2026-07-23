@@ -158,7 +158,10 @@ class SupabaseArtifactStorage:
             )
         if signed_url.startswith("http://") or signed_url.startswith("https://"):
             return signed_url
-        return f"{self.supabase_url.rstrip('/')}/{signed_url.lstrip('/')}"
+        base_url = self.supabase_url.rstrip("/")
+        if signed_url.startswith("/storage/v1/"):
+            return f"{base_url}{signed_url}"
+        return f"{base_url}/storage/v1/{signed_url.lstrip('/')}"
 
     def _object_url(self, storage_key: str) -> str:
         base_url = self.supabase_url.rstrip("/")
@@ -205,17 +208,17 @@ def storage_from_config(config: dict, backend_root: Path) -> ArtifactStorage:
         )
     if provider == storage_config["supabase_provider"]:
         supabase_url = env_value(storage_config["supabase_url_env"], env_values)
-        service_key = env_value(storage_config["supabase_storage_key_env"], env_values)
-        if not service_key:
-            service_key = first_env_value(
+        api_key = env_value(storage_config["supabase_storage_key_env"], env_values)
+        if not api_key:
+            api_key = first_env_value(
                 storage_config.get("supabase_legacy_key_envs", []),
                 env_values,
             )
-        if not supabase_url or not service_key:
+        if not supabase_url or not api_key:
             raise RuntimeError(config["errors"]["missing_supabase_config"])
         return SupabaseArtifactStorage(
             supabase_url=supabase_url,
-            api_key=service_key,
+            api_key=api_key,
             bucket=storage_config["bucket"],
             provider=storage_config["supabase_provider"],
         )

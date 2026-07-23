@@ -293,7 +293,7 @@ export async function listComponents(status?: string): Promise<ComponentResponse
 export async function loadFirstComponentPreview(): Promise<ComponentPreviewResponse> {
   const url = new URL(appConfig.componentRepoApi.componentPreviewFirst, window.location.origin);
   url.searchParams.set('contentLocale', currentTaskContext().locale);
-  return requestJson<ComponentPreviewResponse>(url.toString());
+  return requestJson<ComponentPreviewResponse>(url.toString(), { method: 'POST' });
 }
 
 /** Load one explicit Component or Part resource; locale affects content, not geometry. */
@@ -306,7 +306,7 @@ export async function loadLibraryItemPreview(
     window.location.origin,
   );
   url.searchParams.set('contentLocale', currentTaskContext().locale);
-  return requestJson<ComponentPreviewResponse>(url.toString());
+  return requestJson<ComponentPreviewResponse>(url.toString(), { method: 'POST' });
 }
 
 export async function listComponentImports(): Promise<ComponentImportResponse[]> {
@@ -327,7 +327,7 @@ export async function getComponentVersion(versionId: string): Promise<ComponentV
 export async function loadComponentVersionPreview(versionId: string): Promise<ComponentPreviewResponse> {
   const url = new URL(pathFor('componentVersionPreview', { versionId }), window.location.origin);
   url.searchParams.set('contentLocale', currentTaskContext().locale);
-  return requestJson<ComponentPreviewResponse>(url.toString());
+  return requestJson<ComponentPreviewResponse>(url.toString(), { method: 'POST' });
 }
 
 export async function listComponentVersions(componentId: string, status?: string): Promise<ComponentVersionResponse[]> {
@@ -369,20 +369,18 @@ export async function createComponentImportWithProgress(
   onProgress?: (progress: ComponentUploadProgress) => void,
   target: ComponentImportTarget = {},
 ): Promise<ComponentImportCreateResponse> {
-  try {
-    onProgress?.({ percent: 4, message: tr('componentRepo:creatingASecureUploadChannel') });
-    const uploadSession = await createComponentUploadSession(sourceFile, exchangeFile, target);
-    onProgress?.({ percent: 12, message: tr('componentRepo:uploadChannelReadyUploadingFiles') });
-    await uploadComponentSessionFiles(uploadSession, sourceFile, exchangeFile, onProgress);
-    onProgress?.({ percent: 92, message: tr('componentRepo:filesUploadedVerifyingIntegrity') });
-    const result = await completeComponentUploadSession(uploadSession.id);
-    onProgress?.({ percent: 100, message: tr('componentRepo:uploadComplete') });
-    return result;
-  } catch (directUploadError) {
-    console.warn('Component Repo direct upload failed, falling back to multipart upload.', directUploadError);
+  if (!supabase) {
     onProgress?.({ percent: 2, message: tr('componentRepo:switchingToACompatibleUploadMethod') });
     return uploadComponentImportWithXhr(sourceFile, exchangeFile, onProgress, target);
   }
+  onProgress?.({ percent: 4, message: tr('componentRepo:creatingASecureUploadChannel') });
+  const uploadSession = await createComponentUploadSession(sourceFile, exchangeFile, target);
+  onProgress?.({ percent: 12, message: tr('componentRepo:uploadChannelReadyUploadingFiles') });
+  await uploadComponentSessionFiles(uploadSession, sourceFile, exchangeFile, onProgress);
+  onProgress?.({ percent: 92, message: tr('componentRepo:filesUploadedVerifyingIntegrity') });
+  const result = await completeComponentUploadSession(uploadSession.id);
+  onProgress?.({ percent: 100, message: tr('componentRepo:uploadComplete') });
+  return result;
 }
 
 export async function createComponentUploadSession(
@@ -469,7 +467,7 @@ export async function getCandidate(candidateId: string): Promise<ComponentCandid
 export async function loadCandidatePreview(candidateId: string): Promise<ComponentPreviewResponse> {
   const url = new URL(pathFor('candidatePreview', { candidateId }), window.location.origin);
   url.searchParams.set('contentLocale', currentTaskContext().locale);
-  return requestJson<ComponentPreviewResponse>(url.toString());
+  return requestJson<ComponentPreviewResponse>(url.toString(), { method: 'POST' });
 }
 
 export async function listRelations(candidateId: string): Promise<ComponentRelationCandidateResponse[]> {
