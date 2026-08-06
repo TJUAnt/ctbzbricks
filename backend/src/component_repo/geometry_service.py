@@ -8,20 +8,25 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import sessionmaker
 
 from src.ldraw.mesh import collect_ldraw_mesh
+from src.i18n.domain_content import TRANSLATION_REVIEWED, normalize_content_locale
 from src.component_repo.relation_service import (
     expanded_world_parts,
     transform_point,
 )
+from src.services.domain_content_service import localized_part_content_from_translation
 from src.model.models import (
     Component,
     ComponentSceneSnapshot,
     ComponentVersion,
     LDrawPart,
     LDrawPartGeometry,
+    PartImage,
+    PartTranslation,
+    XrefPartNumber,
 )
 
 
@@ -44,12 +49,21 @@ def component_geometry(session: object, document: dict[str, Any]) -> dict[str, A
         part.ldraw_part_num.casefold(): (part, geometry)
         for part, geometry in rows
     }
+    return _component_geometry_from_rows(world_parts, geometries)
+
+
+def _component_geometry_from_rows(
+    world_parts: list[dict[str, Any]],
+    geometries: dict[str, tuple[LDrawPart, LDrawPartGeometry]],
+) -> dict[str, Any] | None:
+    """Calculate dimensions from the subset with complete Part geometry."""
     points: list[tuple[float, float, float]] = []
     category_counts: dict[str, int] = {}
+    included_part_count = 0
     for world_part in world_parts:
         part_row = geometries.get(world_part["referenceName"].casefold())
         if part_row is None:
-            return None
+            continue
         part, geometry = part_row
         bounds = (
             geometry.bbox_min_x,
@@ -60,7 +74,7 @@ def component_geometry(session: object, document: dict[str, Any]) -> dict[str, A
             geometry.bbox_max_z,
         )
         if any(value is None for value in bounds):
-            return None
+            continue
         min_x, min_y, min_z, max_x, max_y, max_z = bounds
         points.extend(
             transform_point(world_part["worldTransform"], (x, y, z))
@@ -68,8 +82,11 @@ def component_geometry(session: object, document: dict[str, Any]) -> dict[str, A
             for y in (min_y, max_y)
             for z in (min_z, max_z)
         )
+        included_part_count += 1
         if part.category:
             category_counts[part.category] = category_counts.get(part.category, 0) + 1
+    if not points:
+        return None
     xs = [point[0] for point in points]
     ys = [point[1] for point in points]
     zs = [point[2] for point in points]
@@ -80,7 +97,7 @@ def component_geometry(session: object, document: dict[str, Any]) -> dict[str, A
         "widthStud": (max(xs) - min(xs)) / 20.0,
         "depthStud": (max(zs) - min(zs)) / 20.0,
         "heightPlate": (max(ys) - min(ys)) / 8.0,
-        "partCount": len(world_parts),
+        "partCount": included_part_count,
         "categoryCounts": category_counts,
     }
 
@@ -104,15 +121,24 @@ def component_preview_parts(
         .where(LDrawPart.ldraw_part_num.in_(part_numbers))
     ).all()
     geometries = {
-        part.ldraw_part_num.casefold(): geometry
+        part.ldraw_part_num.casefold(): (part, geometry)
         for part, geometry in rows
     }
+    return _component_preview_parts_from_rows(world_parts, geometries)
+
+
+def _component_preview_parts_from_rows(
+    world_parts: list[dict[str, Any]],
+    geometries: dict[str, tuple[LDrawPart, LDrawPartGeometry]],
+) -> list[dict[str, Any]] | None:
+    """Build preview instances for Parts with complete geometry rows."""
     preview_parts: list[dict[str, Any]] = []
     for world_part in world_parts:
         part_ref = world_part["referenceName"].casefold()
-        geometry = geometries.get(part_ref)
-        if geometry is None:
-            return None
+        part_row = geometries.get(part_ref)
+        if part_row is None:
+            continue
+        _part, geometry = part_row
         bounds = (
             geometry.bbox_min_x,
             geometry.bbox_min_y,
@@ -122,7 +148,7 @@ def component_preview_parts(
             geometry.bbox_max_z,
         )
         if any(value is None for value in bounds):
-            return None
+            continue
         min_x, min_y, min_z, max_x, max_y, max_z = bounds
         preview_parts.append(
             {
@@ -151,8 +177,8 @@ def component_preview_meshes(
     """Build one reusable LDraw triangle mesh for every unique assembly Part.
 
     Component snapshots own instance placement while Part files own surface geometry.
-    Consequently, repeated instances share the same local-space mesh. The operation is
-    all-or-nothing so a viewer never presents a plausible but incomplete assembly.
+    Consequently, repeated instances share the same local-space mesh. Parts that cannot
+    be resolved are omitted so callers can still render the available subset.
     """
     world_parts = expanded_world_parts(document)
     if not world_parts:
@@ -167,19 +193,314 @@ def component_preview_meshes(
         part_num.casefold(): relative_path.casefold()
         for part_num, relative_path in rows
     }
-    if set(relative_paths) != set(part_refs):
-        return None
+    return _component_preview_meshes_from_paths(part_refs, relative_paths, config)
+
+
+def _component_preview_meshes_from_paths(
+    part_refs: list[str],
+    relative_paths: dict[str, str],
+    config: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """Build reusable meshes for the subset with resolvable Part paths."""
     meshes: list[dict[str, Any]] = []
     for part_ref in part_refs:
+        relative_path = relative_paths.get(part_ref)
+        if relative_path is None:
+            continue
         mesh = part_preview_mesh(
             part_ref,
-            relative_paths[part_ref],
+            relative_path,
             config,
         )
         if mesh is None:
-            return None
+            continue
         meshes.append(mesh)
-    return meshes
+    return meshes or None
+
+
+def component_preview_data(
+    session: object,
+    document: dict[str, Any],
+    config: dict[str, Any],
+    content_locale: str,
+) -> dict[str, Any] | None:
+    """Load Part rows once and build a preview plus complete availability inventory."""
+    world_parts = expanded_world_parts(document)
+    if not world_parts:
+        return None
+    normalized_locale = normalize_content_locale(content_locale)
+    part_refs = sorted({part["referenceName"].casefold() for part in world_parts})
+    part_stem = func.substr(
+        LDrawPart.ldraw_part_num,
+        1,
+        func.length(LDrawPart.ldraw_part_num) - 4,
+    )
+    direct_image_url = (
+        select(PartImage.img_url)
+        .where(PartImage.part_num == part_stem)
+        .limit(1)
+        .correlate(LDrawPart)
+        .scalar_subquery()
+    )
+    mapped_image_url = (
+        select(PartImage.img_url)
+        .select_from(XrefPartNumber)
+        .join(PartImage, PartImage.part_num == XrefPartNumber.rebrickable_part_num)
+        .where(XrefPartNumber.ldraw_part_num == LDrawPart.ldraw_part_num)
+        .order_by(XrefPartNumber.confidence.desc())
+        .limit(1)
+        .correlate(LDrawPart)
+        .scalar_subquery()
+    )
+    rows = session.execute(
+        select(
+            LDrawPart,
+            LDrawPartGeometry,
+            PartTranslation,
+            func.coalesce(direct_image_url, mapped_image_url).label("image_url"),
+        )
+        .outerjoin(LDrawPartGeometry, LDrawPartGeometry.ldraw_part_id == LDrawPart.id)
+        .outerjoin(
+            PartTranslation,
+            and_(
+                PartTranslation.ldraw_part_id == LDrawPart.id,
+                PartTranslation.locale == normalized_locale,
+                PartTranslation.translation_status == TRANSLATION_REVIEWED,
+            ),
+        )
+        .where(LDrawPart.ldraw_part_num.in_(part_refs))
+    ).all()
+    row_by_part_ref = {
+        part.ldraw_part_num.casefold(): (part, geometry, translation, image_url)
+        for part, geometry, translation, image_url in rows
+    }
+    geometries = {
+        part.ldraw_part_num.casefold(): (part, geometry)
+        for part, geometry, _translation, _image_url in rows
+        if geometry is not None
+    }
+    meshes = _component_preview_meshes_from_paths(
+        part_refs,
+        {
+            part_ref: part.relative_path.casefold()
+            for part_ref, (part, geometry) in geometries.items()
+            if complete_geometry_bounds(geometry)
+        },
+        config,
+    )
+    renderable_part_refs = {
+        str(mesh["partRef"]).casefold()
+        for mesh in (meshes or [])
+    }
+    availability_by_part_ref = {
+        part_ref: component_preview_part_availability(
+            part_ref,
+            geometries,
+            renderable_part_refs,
+        )
+        for part_ref in part_refs
+    }
+    renderable_world_parts = [
+        world_part
+        for world_part in world_parts
+        if world_part["referenceName"].casefold() in renderable_part_refs
+    ]
+    renderable_geometries = {
+        part_ref: part_row
+        for part_ref, part_row in geometries.items()
+        if part_ref in renderable_part_refs
+    }
+    geometry = _component_geometry_from_rows(
+        renderable_world_parts,
+        renderable_geometries,
+    )
+    parts = _component_preview_parts_from_rows(
+        renderable_world_parts,
+        renderable_geometries,
+    )
+    if geometry is None or not parts or not meshes:
+        return None
+
+    part_catalog = []
+    for part_ref in part_refs:
+        part_row = row_by_part_ref.get(part_ref)
+        if part_row is None:
+            name = part_ref
+            content_locale = None
+            translation_status = None
+            image_url = None
+        else:
+            part, _geometry, translation, image_url = part_row
+            content = localized_part_content_from_translation(
+                part,
+                translation,
+                normalized_locale,
+            )
+            name = content["name"] or part.ldraw_part_num
+            content_locale = content["contentLocale"]
+            translation_status = content["translationStatus"]
+        part_catalog.append(
+            {
+                "partRef": part_ref,
+                "name": name,
+                "contentLocale": content_locale,
+                "translationStatus": translation_status,
+                "imageUrl": image_url,
+                "availability": availability_by_part_ref[part_ref],
+            }
+        )
+    return {
+        "geometry": geometry,
+        "parts": parts,
+        "partInventory": [
+            {
+                "instanceId": world_part["instanceId"],
+                "partRef": world_part["referenceName"].casefold(),
+                "colorCode": world_part["colorCode"],
+                "availability": availability_by_part_ref[
+                    world_part["referenceName"].casefold()
+                ],
+            }
+            for world_part in world_parts
+        ],
+        "partCatalog": sorted(part_catalog, key=lambda item: item["partRef"]),
+        "meshes": meshes,
+    }
+
+
+def component_part_summaries(
+    session: object,
+    bom: dict[str, int],
+    content_locale: str,
+    availability_by_part_ref: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return locale-aware BOM cards without loading a scene document or Part meshes."""
+    normalized_locale = normalize_content_locale(content_locale)
+    quantities = {
+        str(part_ref).casefold(): int(quantity)
+        for part_ref, quantity in bom.items()
+        if int(quantity) > 0
+    }
+    part_refs = sorted(quantities)
+    if not part_refs:
+        return []
+    part_stem = func.substr(
+        LDrawPart.ldraw_part_num,
+        1,
+        func.length(LDrawPart.ldraw_part_num) - 4,
+    )
+    direct_image_url = (
+        select(PartImage.img_url)
+        .where(PartImage.part_num == part_stem)
+        .limit(1)
+        .correlate(LDrawPart)
+        .scalar_subquery()
+    )
+    mapped_image_url = (
+        select(PartImage.img_url)
+        .select_from(XrefPartNumber)
+        .join(PartImage, PartImage.part_num == XrefPartNumber.rebrickable_part_num)
+        .where(XrefPartNumber.ldraw_part_num == LDrawPart.ldraw_part_num)
+        .order_by(XrefPartNumber.confidence.desc())
+        .limit(1)
+        .correlate(LDrawPart)
+        .scalar_subquery()
+    )
+    rows = session.execute(
+        select(
+            LDrawPart,
+            LDrawPartGeometry,
+            PartTranslation,
+            func.coalesce(direct_image_url, mapped_image_url).label("image_url"),
+        )
+        .outerjoin(LDrawPartGeometry, LDrawPartGeometry.ldraw_part_id == LDrawPart.id)
+        .outerjoin(
+            PartTranslation,
+            and_(
+                PartTranslation.ldraw_part_id == LDrawPart.id,
+                PartTranslation.locale == normalized_locale,
+                PartTranslation.translation_status == TRANSLATION_REVIEWED,
+            ),
+        )
+        .where(LDrawPart.ldraw_part_num.in_(part_refs))
+    ).all()
+    row_by_part_ref = {
+        part.ldraw_part_num.casefold(): (part, geometry, translation, image_url)
+        for part, geometry, translation, image_url in rows
+    }
+    persisted_availability = {
+        str(part_ref).casefold(): str(status)
+        for part_ref, status in (availability_by_part_ref or {}).items()
+    }
+    result: list[dict[str, Any]] = []
+    for part_ref in part_refs:
+        row = row_by_part_ref.get(part_ref)
+        if row is None:
+            result.append(
+                {
+                    "partRef": part_ref,
+                    "name": part_ref,
+                    "contentLocale": None,
+                    "translationStatus": None,
+                    "imageUrl": None,
+                    "quantity": quantities[part_ref],
+                    "availability": persisted_availability.get(
+                        part_ref,
+                        "missing_geometry",
+                    ),
+                }
+            )
+            continue
+        part, geometry, translation, image_url = row
+        content = localized_part_content_from_translation(
+            part,
+            translation,
+            normalized_locale,
+        )
+        result.append(
+            {
+                "partRef": part_ref,
+                "name": content["name"] or part.ldraw_part_num,
+                "contentLocale": content["contentLocale"],
+                "translationStatus": content["translationStatus"],
+                "imageUrl": image_url,
+                "quantity": quantities[part_ref],
+                "availability": persisted_availability.get(
+                    part_ref,
+                    "ready"
+                    if geometry is not None and complete_geometry_bounds(geometry)
+                    else "missing_geometry",
+                ),
+            }
+        )
+    return result
+
+
+def complete_geometry_bounds(geometry: LDrawPartGeometry) -> bool:
+    return all(
+        value is not None
+        for value in (
+            geometry.bbox_min_x,
+            geometry.bbox_min_y,
+            geometry.bbox_min_z,
+            geometry.bbox_max_x,
+            geometry.bbox_max_y,
+            geometry.bbox_max_z,
+        )
+    )
+
+
+def component_preview_part_availability(
+    part_ref: str,
+    geometries: dict[str, tuple[LDrawPart, LDrawPartGeometry]],
+    renderable_part_refs: set[str],
+) -> str:
+    part_row = geometries.get(part_ref)
+    if part_row is None or not complete_geometry_bounds(part_row[1]):
+        return "missing_geometry"
+    if part_ref not in renderable_part_refs:
+        return "missing_mesh"
+    return "ready"
 
 
 def part_preview_mesh(
@@ -321,6 +642,7 @@ def backfill_component_logical_sizes(engine) -> None:
     with Session() as session:
         components = session.scalars(
             select(Component).where(
+                Component.deleted_at.is_(None),
                 Component.current_version_id.is_not(None),
                 or_(
                     Component.logical_width_stud.is_(None),
@@ -331,7 +653,7 @@ def backfill_component_logical_sizes(engine) -> None:
         ).all()
         for component in components:
             version = session.get(ComponentVersion, component.current_version_id)
-            if version is None:
+            if version is None or version.deleted_at is not None:
                 continue
             snapshot = session.get(ComponentSceneSnapshot, version.scene_snapshot_id)
             if snapshot is None:

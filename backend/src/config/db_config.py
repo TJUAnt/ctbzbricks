@@ -7,6 +7,12 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE_PATH = BACKEND_ROOT / ".env"
 LEGACY_ENV_FILE_PATH = Path(__file__).resolve().parents[1] / ".env"
 DATABASE_URL_ENV_KEY = "DATABASE_URL"
+DATABASE_POOL_ENV_DEFAULTS = {
+    "DATABASE_POOL_SIZE": 10,
+    "DATABASE_MAX_OVERFLOW": 10,
+    "DATABASE_POOL_TIMEOUT_SECONDS": 30,
+    "DATABASE_POOL_RECYCLE_SECONDS": 1800,
+}
 MYSQL_ENV_KEYS = (
     "MYSQL_HOST",
     "MYSQL_PORT",
@@ -15,6 +21,32 @@ MYSQL_ENV_KEYS = (
     "MYSQL_DATABASE",
     "MYSQL_CHARSET",
 )
+
+
+def get_db_engine_options(env_file_path: Path = ENV_FILE_PATH) -> dict[str, int | bool]:
+    """Return explicit, bounded SQLAlchemy connection-pool settings."""
+    env_file_path = resolve_env_file_path(env_file_path)
+    file_values = read_env_file(env_file_path)
+    return {
+        "pool_pre_ping": True,
+        "pool_size": positive_int_setting(
+            "DATABASE_POOL_SIZE",
+            file_values,
+        ),
+        "max_overflow": non_negative_int_setting(
+            "DATABASE_MAX_OVERFLOW",
+            file_values,
+        ),
+        "pool_timeout": positive_int_setting(
+            "DATABASE_POOL_TIMEOUT_SECONDS",
+            file_values,
+        ),
+        "pool_recycle": positive_int_setting(
+            "DATABASE_POOL_RECYCLE_SECONDS",
+            file_values,
+        ),
+        "pool_use_lifo": True,
+    }
 
 
 def get_db_url(env_file_path: Path = ENV_FILE_PATH) -> str:
@@ -108,3 +140,28 @@ def unquoted_env_value(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
         return value[1:-1]
     return value
+
+
+def positive_int_setting(key: str, file_values: dict[str, str]) -> int:
+    value = integer_setting(key, file_values)
+    if value <= 0:
+        raise RuntimeError(f"Invalid database configuration: {key}")
+    return value
+
+
+def non_negative_int_setting(key: str, file_values: dict[str, str]) -> int:
+    value = integer_setting(key, file_values)
+    if value < 0:
+        raise RuntimeError(f"Invalid database configuration: {key}")
+    return value
+
+
+def integer_setting(key: str, file_values: dict[str, str]) -> int:
+    raw_value = os.environ.get(
+        key,
+        file_values.get(key, str(DATABASE_POOL_ENV_DEFAULTS[key])),
+    )
+    try:
+        return int(raw_value)
+    except ValueError as error:
+        raise RuntimeError(f"Invalid database configuration: {key}") from error

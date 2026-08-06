@@ -16,28 +16,26 @@ import appConfig from '../app/appConfig';
 import { useAppTranslation } from '../i18n';
 import {
   confirmRelation,
-  createInterface,
   detectRelations,
+  getConnectorAnalysis,
   getCandidate,
   getComponent,
   getComponentVersion,
   listComponentVersions,
-  listFreeConnectors,
-  listInterfaces,
   listRelations,
   loadCandidatePreview,
   loadComponentVersionPreview,
-  parseComponentImport,
   publishVersion,
   rejectRelation,
   validateCandidate,
   type ComponentCandidateResponse,
   type ComponentPreviewResponse,
   type ComponentResponse,
-  type ComponentFreeConnectorResponse,
+  type ComponentConnectorResponse,
   type ComponentInterfaceResponse,
   type ComponentRelationCandidateResponse,
   type ComponentValidationReportResponse,
+  type ComponentVersionPreviewModelResponse,
   type ComponentVersionResponse,
 } from './componentRepoApi';
 import { ComponentUploadDialog, routeFor, StatusPill } from './ComponentRepoPage';
@@ -45,12 +43,12 @@ import { ComponentScene } from '../parts/PartViewerPage';
 
 type CandidateWorkbenchState = {
   relations: ComponentRelationCandidateResponse[];
-  freeConnectors: ComponentFreeConnectorResponse[];
+  freeConnectors: ComponentConnectorResponse[];
   interfaces: ComponentInterfaceResponse[];
   candidate: ComponentCandidateResponse | null;
   component: ComponentResponse | null;
   currentVersion: ComponentVersionResponse | null;
-  preview: ComponentPreviewResponse | null;
+  preview: ComponentPreviewResponse | ComponentVersionPreviewModelResponse | null;
   previewStatus: 'idle' | 'loading' | 'error';
   validationReport: ComponentValidationReportResponse | null;
   publishedVersion: ComponentVersionResponse | null;
@@ -86,8 +84,6 @@ export function ComponentCandidateWorkbenchPage() {
     error: null,
     message: null,
   });
-  const [interfaceName, setInterfaceName] = React.useState('');
-  const [selectedConnectorId, setSelectedConnectorId] = React.useState('');
   const [componentName, setComponentName] = React.useState('');
   const [componentCategory, setComponentCategory] = React.useState('');
   const [version, setVersion] = React.useState('0.1.0');
@@ -117,26 +113,21 @@ export function ComponentCandidateWorkbenchPage() {
   );
 
   const refreshReviewData = React.useCallback(async () => {
-    const [candidate, relations, interfaces] = await Promise.all([
+    const [candidate, relations, connectorAnalysis] = await Promise.all([
       getCandidate(candidateId),
       listRelations(candidateId),
-      listInterfaces(candidateId),
+      getConnectorAnalysis(candidateId),
     ]);
-    const freeConnectors: ComponentFreeConnectorResponse[] = candidate.reviewDecisions.relationDetectionCompleted
-      ? await listFreeConnectors(candidateId)
-      : [];
+    const freeConnectors = connectorAnalysis.connectors.filter(
+      (connector) => connector.state === 'external',
+    );
     setState((current) => ({
       ...current,
       candidate,
       relations,
       freeConnectors,
-      interfaces,
+      interfaces: connectorAnalysis.externalInterfaces,
     }));
-    setSelectedConnectorId((current) => (
-      freeConnectors.some((connector) => connector.worldConnectorId === current)
-        ? current
-        : freeConnectors[0]?.worldConnectorId || ''
-    ));
   }, [candidateId]);
 
   React.useEffect(() => {
@@ -147,7 +138,7 @@ export function ComponentCandidateWorkbenchPage() {
         let component: ComponentResponse | null = null;
         let currentVersion: ComponentVersionResponse | null = null;
         let candidate: ComponentCandidateResponse;
-        let preview: ComponentPreviewResponse;
+        let preview: ComponentPreviewResponse | ComponentVersionPreviewModelResponse;
         if (componentId) {
           const [loadedComponent, versions] = await Promise.all([
             getComponent(componentId),
@@ -216,14 +207,17 @@ export function ComponentCandidateWorkbenchPage() {
   const detect = () =>
     runTask(async () => {
       const relations = await detectRelations(candidateId);
-      const freeConnectors = await listFreeConnectors(candidateId);
       const candidate = await getCandidate(candidateId);
-      setState((current) => ({ ...current, candidate, relations, freeConnectors }));
-      setSelectedConnectorId((current) => (
-        freeConnectors.some((connector) => connector.worldConnectorId === current)
-          ? current
-          : freeConnectors[0]?.worldConnectorId || ''
-      ));
+      const connectorAnalysis = await getConnectorAnalysis(candidateId);
+      setState((current) => ({
+        ...current,
+        candidate,
+        relations,
+        freeConnectors: connectorAnalysis.connectors.filter(
+          (connector) => connector.state === 'external',
+        ),
+        interfaces: connectorAnalysis.externalInterfaces,
+      }));
     }, tr('componentRepo:connectionDetectionComplete'));
 
   const confirm = (relationId: string) =>
@@ -237,16 +231,6 @@ export function ComponentCandidateWorkbenchPage() {
       await rejectRelation(candidateId, relationId);
       await refreshReviewData();
     }, tr('componentRepo:connectionRejected'));
-
-  const addInterface = () =>
-    runTask(async () => {
-      if (!selectedConnectorId || !interfaceName.trim()) {
-        throw new Error(tr('componentRepo:selectAConnectorAndEnterAnInterfaceName'));
-      }
-      const created = await createInterface(candidateId, selectedConnectorId, interfaceName.trim());
-      await refreshReviewData();
-      setInterfaceName(created.name);
-    }, tr('componentRepo:externalInterfaceMarked'));
 
   const validate = () =>
     runTask(async () => {
@@ -312,19 +296,19 @@ export function ComponentCandidateWorkbenchPage() {
 
       <section className="component-detail-preview">
         <div className="component-detail-preview-stage">
-          {state.preview ? (
+          {state.preview?.model ? (
             <ComponentScene
-              preview={state.preview}
+              preview={{ model: state.preview.model }}
               registerReset={registerPreviewReset}
             />
           ) : null}
-          {!state.preview && state.previewStatus !== 'error' ? (
+          {!state.preview?.model && state.previewStatus !== 'error' ? (
             <div className="asset-loading">{tr('componentRepo:loadingPreview')}</div>
           ) : null}
           {state.previewStatus === 'error' ? (
             <div className="asset-error">{tr('componentRepo:previewUnavailable')}</div>
           ) : null}
-          {state.preview ? (
+          {state.preview?.model ? (
             <button className="component-detail-preview-reset" onClick={() => resetViewRef.current?.()} type="button">
               <RefreshCw aria-hidden="true" />{tr('componentRepo:resetPreview')}
             </button>
@@ -416,44 +400,17 @@ export function ComponentCandidateWorkbenchPage() {
             <Plug aria-hidden="true" />
             <span>{tr('componentRepo:externalInterface')}</span>
           </div>
-
-          <label className="component-repo-control-field">
-            <span>{tr('componentRepo:freeConnector')}</span>
-            <select disabled={!isEditable} value={selectedConnectorId} onChange={(event) => setSelectedConnectorId(event.target.value)}>
-              {state.freeConnectors.map((connector) => (
-                <option key={connector.worldConnectorId} value={connector.worldConnectorId}>
-                  {connector.partRef} · {connector.connectorType ?? connector.connectorKind}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="component-repo-control-field">
-            <span>{appConfig.texts.componentRepoInterfaceName}</span>
-            <input
-              disabled={!isEditable}
-              onChange={(event) => setInterfaceName(event.target.value)}
-              placeholder={appConfig.texts.componentRepoInterfaceNamePlaceholder}
-              value={interfaceName}
-            />
-          </label>
-          <button
-            className="component-repo-primary-button"
-            disabled={!isEditable || !selectedConnectorId || state.loading}
-            onClick={() => void addInterface()}
-            type="button"
-          >
-            {appConfig.texts.componentRepoCreateInterface}
-          </button>
+          <p>{tr('componentRepo:automaticInterfaceDescription')}</p>
 
           {state.interfaces.length > 0 ? (
             <div className="component-repo-card-list">
               {state.interfaces.map((componentInterface) => (
                 <article className="component-repo-card" key={componentInterface.id}>
                   <div>
-                    <strong>{componentInterface.name}</strong>
+                    <strong>{String(componentInterface.sourceConnector.connectorType ?? componentInterface.sourceConnector.connectorKind)}</strong>
                     <StatusPill status={componentInterface.reviewStatus} />
                   </div>
-                  <span>{componentInterface.worldConnectorId}</span>
+                  <span>{String(componentInterface.sourceConnector.partRef)} · {componentInterface.worldConnectorId}</span>
                 </article>
               ))}
             </div>
@@ -521,10 +478,10 @@ export function ComponentCandidateWorkbenchPage() {
           onClose={() => setIsUploadOpen(false)}
           onUploaded={(result) => {
             setIsUploadOpen(false);
-            void runTask(async () => {
-              const parsed = await parseComponentImport(result.importJob.id);
-              navigate(routeFor('componentRepoCandidate').replace(':candidateId', encodeURIComponent(parsed.candidate.id)));
-            });
+            navigate(routeFor('componentRepoCandidate').replace(
+              ':candidateId',
+              encodeURIComponent(result.id),
+            ));
           }}
           targetComponentId={state.component.id}
         />

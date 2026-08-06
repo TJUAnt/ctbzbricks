@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Boxes, Ruler, Search, Shapes } from 'lucide-react';
+import { Box, Boxes, Search } from 'lucide-react';
 import { create } from 'zustand';
 import { Link } from 'react-router-dom';
 import { errorMessage, requestJson } from '../api/client';
@@ -26,47 +26,25 @@ type RecallResponse = {
 };
 
 type RecallState = {
-  lengthStud: string;
-  widthStud: string;
-  heightPlate: string;
-  key: string;
-  columnsPerRow: RecallColumnCount;
+  query: string;
   page: number;
-  allowPlanarRotation: boolean;
   loading: boolean;
   error: string | null;
   response: RecallResponse | null;
-  setLengthStud: (value: string) => void;
-  setWidthStud: (value: string) => void;
-  setHeightPlate: (value: string) => void;
-  setKey: (value: string) => void;
-  setColumnsPerRow: (value: RecallColumnCount) => void;
-  setAllowPlanarRotation: (value: boolean) => void;
+  setQuery: (value: string) => void;
   recall: (page?: number) => Promise<void>;
 };
 
 const rowsPerPage = 4;
+const columnsPerRow: RecallColumnCount = 5;
 
 const useRecallStore = create<RecallState>((set, get) => ({
-  lengthStud: '4',
-  widthStud: '2',
-  heightPlate: '1',
-  key: 'plate',
-  columnsPerRow: 5,
+  query: '',
   page: 1,
-  allowPlanarRotation: true,
   loading: false,
   error: null,
   response: null,
-  setLengthStud: (lengthStud) => set({ lengthStud }),
-  setWidthStud: (widthStud) => set({ widthStud }),
-  setHeightPlate: (heightPlate) => set({ heightPlate }),
-  setKey: (key) => set({ key }),
-  setColumnsPerRow: (columnsPerRow) => {
-    set({ columnsPerRow, page: 1 });
-    void get().recall(1);
-  },
-  setAllowPlanarRotation: (allowPlanarRotation) => set({ allowPlanarRotation }),
+  setQuery: (query) => set({ query }),
   recall: async (requestedPage) => {
     const state = get();
     const page = requestedPage ?? state.page;
@@ -76,18 +54,11 @@ const useRecallStore = create<RecallState>((set, get) => ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          candidateTypes: ['component', 'part'],
-          logicalSize: {
-            widthStud: Number(state.lengthStud),
-            depthStud: Number(state.widthStud),
-            heightPlate: Number(state.heightPlate),
-            tolerance: 0,
-          },
-          key: state.key.trim() || undefined,
-          allowPlanarRotation: state.allowPlanarRotation,
+          candidateTypes: ['part'],
+          query: state.query,
           includeIrregular: false,
           page,
-          pageSize: state.columnsPerRow * rowsPerPage,
+          pageSize: columnsPerRow * rowsPerPage,
         }),
       });
       set({ response: result, page: result.page, loading: false });
@@ -131,45 +102,15 @@ export function PartSearchPage() {
               void state.recall(1);
             }}
           >
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)_auto] lg:items-end">
-              <div>
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-zinc-700">
-                  <Ruler className="h-4 w-4" />
-                  {tr('partSearch:dimensions')}
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <DimensionInput
-                    label={tr('partSearch:length')}
-                    onChange={state.setLengthStud}
-                    unit={tr('partSearch:stud')}
-                    value={state.lengthStud}
-                  />
-                  <DimensionInput
-                    label={tr('partSearch:width')}
-                    onChange={state.setWidthStud}
-                    unit={tr('partSearch:stud')}
-                    value={state.widthStud}
-                  />
-                  <DimensionInput
-                    label={tr('partSearch:height')}
-                    onChange={state.setHeightPlate}
-                    unit={tr('partSearch:plateUnit')}
-                    value={state.heightPlate}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-zinc-700">
-                  <Shapes className="h-4 w-4" />
-                  {tr('partSearch:nameKey')}
-                </div>
+            <div className="flex gap-3">
+              <div className="min-w-0 flex-1">
                 <input
                   className="h-11 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-950 focus:ring-1 focus:ring-zinc-950"
-                  onChange={(event) => state.setKey(event.target.value)}
-                  placeholder={tr('partSearch:nameKeyPlaceholder')}
+                  aria-label={tr('partSearch:search')}
+                  onChange={(event) => state.setQuery(event.target.value)}
+                  placeholder={tr('partSearch:searchPlaceholder')}
                   type="search"
-                  value={state.key}
+                  value={state.query}
                 />
               </div>
 
@@ -182,33 +123,6 @@ export function PartSearchPage() {
                 {state.loading ? tr('partSearch:recalling') : tr('partSearch:recall')}
               </button>
             </div>
-
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 pt-3 text-sm">
-              <label className="inline-flex items-center gap-2 text-zinc-600">
-                <input
-                  checked={state.allowPlanarRotation}
-                  className="h-4 w-4 accent-zinc-950"
-                  onChange={(event) => state.setAllowPlanarRotation(event.target.checked)}
-                  type="checkbox"
-                />
-                {tr('partSearch:allowRotation')}
-              </label>
-              <div className="flex flex-wrap items-center gap-4">
-                <span className="text-zinc-400">{tr('partSearch:exactDimensions')}</span>
-                <label className="inline-flex items-center gap-2 text-zinc-600">
-                  <span>{tr('partSearch:itemsPerRow')}</span>
-                  <select
-                    className="h-9 rounded-lg border border-zinc-300 bg-white px-3 font-medium text-zinc-800 outline-none focus:border-zinc-950 focus:ring-1 focus:ring-zinc-950"
-                    onChange={(event) => state.setColumnsPerRow(Number(event.target.value) as RecallColumnCount)}
-                    value={state.columnsPerRow}
-                  >
-                    {[2, 3, 4, 5, 6].map((count) => (
-                      <option key={count} value={count}>{count}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </div>
           </form>
 
           {state.error ? (
@@ -220,7 +134,7 @@ export function PartSearchPage() {
       </section>
 
       <section className="mx-auto max-w-7xl px-5 py-6">
-        {state.loading && !state.response ? <RecallSkeleton columns={state.columnsPerRow} /> : null}
+        {state.loading && !state.response ? <RecallSkeleton columns={columnsPerRow} /> : null}
         {!state.loading && state.response?.total === 0 ? (
           <div className="rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-16 text-center">
             <Search className="mx-auto h-8 w-8 text-zinc-300" />
@@ -228,7 +142,7 @@ export function PartSearchPage() {
             <p className="mt-1 text-sm text-zinc-500">{tr('partSearch:noMatchesHint')}</p>
           </div>
         ) : null}
-        <div className={`grid gap-3 sm:grid-cols-2 ${recallGridColumns[state.columnsPerRow]}`}>
+        <div className={`grid gap-3 sm:grid-cols-2 ${recallGridColumns[columnsPerRow]}`}>
           {(state.response?.candidates ?? []).map((candidate) => (
             <CandidateCard candidate={candidate} key={`${candidate.candidateType}:${candidate.candidateId}`} />
           ))}
@@ -258,36 +172,6 @@ export function PartSearchPage() {
         ) : null}
       </section>
     </main>
-  );
-}
-
-function DimensionInput({
-  label,
-  unit,
-  value,
-  onChange,
-}: {
-  label: string;
-  unit: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="rounded-lg border border-zinc-300 bg-white px-3 py-2 focus-within:border-zinc-950 focus-within:ring-1 focus-within:ring-zinc-950">
-      <span className="block text-[11px] font-medium text-zinc-400">{label}</span>
-      <span className="flex items-baseline gap-1">
-        <input
-          className="min-w-0 flex-1 bg-transparent text-lg font-semibold outline-none"
-          min="0.01"
-          onChange={(event) => onChange(event.target.value)}
-          required
-          step="0.01"
-          type="number"
-          value={value}
-        />
-        <span className="text-xs text-zinc-400">{unit}</span>
-      </span>
-    </label>
   );
 }
 

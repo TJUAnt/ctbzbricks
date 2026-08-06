@@ -2,6 +2,31 @@
 
 These instructions apply to the entire repository.
 
+## Mandatory Go migration preflight
+
+BrickBuilder is migrating from a Python/FastAPI backend to a Go system backend, beginning with Component Repo. Before changing Go backend code, Component Repo APIs, Component Repo persistence, artifact storage, or the shared task system, read:
+
+1. `docs/go_backend_migration_principles.md` — approved target architecture and non-negotiable migration rules.
+2. `docs/go_component_migration_plan.md` — phase boundaries, dependencies, API direction, and acceptance gates.
+3. `docs/go_migration_progress.md` — completed facts, current phase, and next work.
+
+At the beginning of implementation, identify the migration phase being changed. At completion, update `docs/go_migration_progress.md` with evidence and validation results. Do not mark a phase complete because scaffolding or planning exists.
+
+### Non-negotiable Go migration rules
+
+- Go is the system backend; Python remains only for explicit algorithm-worker responsibilities after a domain migrates.
+- Build a modular monolith first: Gin API plus independently runnable Workers. Do not introduce a business gateway or Component Repo microservice without a new approved decision.
+- New Go persistence is PostgreSQL-only and uses `sqlc` with `pgx/v5`/`pgxpool`. Do not add MySQL compatibility or an ORM alongside sqlc.
+- `sqlc` generates data-access code but does not own migrations. Before the G2 handoff, Alembic remains the current schema authority. After the documented G2 handoff, Goose is the only authority. Never let Alembic and Goose concurrently evolve the same database.
+- API and Worker startup must not run DDL, schema repair, or data backfills.
+- Gin handlers perform bounded HTTP work. File parsing, geometry, search, dynamic programming, validation, and derived-asset generation run as persistent tasks when they can be long-running.
+- Task state is durable in PostgreSQL. In-memory goroutines, process-local queues, and request background callbacks are not authoritative task systems.
+- PostgreSQL stores business and task metadata; object storage stores uploaded source files and large derived artifacts. Preserve source/derived and owner boundaries.
+- New Component Repo APIs use `/api/v1` and may replace the development FastAPI contract directly. Do not add dual-write, compatibility proxy, or shadow-traffic infrastructure unless the user explicitly changes the migration strategy.
+- Destructive development database reset/reseed is allowed by the target plan but still requires explicit confirmation of the exact database before execution.
+- Generated sqlc files are never manually edited. Business SQL lives in versioned query files and multi-step writes use explicit pgx transactions.
+- Preserve the approved i18n, content, API-error, ownership, immutable-version, and storage-security invariants during the rewrite.
+
 ## Mandatory i18n preflight
 
 BrickBuilder uses an approved end-to-end multilingual architecture. Before changing any UI, API, background task, validation result, persisted content, configuration label, or export, read:

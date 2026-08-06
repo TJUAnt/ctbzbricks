@@ -11,8 +11,8 @@
     "object_prefix": "component-repo",
     "local_root_path": "data/component_repo_artifacts",
     "supabase_url_env": "SUPABASE_URL",
-    "supabase_storage_key_env": "SUPABASE_STORAGE_KEY",
-    "supabase_legacy_key_envs": ["SUPABASE_KEY"],
+    "supabase_publishable_key_env": "SUPABASE_PUBLISHABLE_KEY",
+    "supabase_legacy_key_envs": ["SUPABASE_STORAGE_KEY", "SUPABASE_KEY"],
     "content_type_binary": "application/octet-stream",
     "content_type_ldraw": "text/plain; charset=utf-8",
     "content_type_glb": "model/gltf-binary"
@@ -30,10 +30,20 @@
     "candidate_relations_detect": "/api/component-candidates/{candidate_id}/relations/detect",
     "candidate_relation_confirm": "/api/component-candidates/{candidate_id}/relations/{relation_id}/confirm",
     "candidate_relation_reject": "/api/component-candidates/{candidate_id}/relations/{relation_id}/reject",
+    "candidate_connectors": "/api/component-candidates/{candidate_id}/connectors",
+    "candidate_connector_summary": "/api/component-candidates/{candidate_id}/connector-summary",
     "candidate_free_connectors": "/api/component-candidates/{candidate_id}/connectors/free",
     "candidate_interfaces": "/api/component-candidates/{candidate_id}/interfaces",
     "candidate_validate": "/api/component-candidates/{candidate_id}/validate",
     "components": "/api/components",
+    "component_groups": "/api/component-groups",
+    "component_group": "/api/component-groups/{group_id}",
+    "component_group_move": "/api/component-groups/{group_id}/move",
+    "component_group_components": "/api/component-groups/{group_id}/components",
+    "component_group_component_search": "/api/component-groups/{group_id}/components/search",
+    "component_group_component": "/api/component-groups/{group_id}/components/{component_id}",
+    "component_groups_for_component": "/api/components/{component_id}/groups",
+    "component_subscription": "/api/components/{component_id}/subscription",
     "component_preview_first": "/api/component-previews/first",
     "component_preview_model": "/api/component-preview-models/{artifact_id}",
     "library_item_preview": "/api/library-items/{item_type}/{item_id}/preview",
@@ -44,7 +54,9 @@
     "i18n_events": "/api/i18n/events",
     "component_versions": "/api/components/{component_id}/versions",
     "component_version": "/api/component-versions/{version_id}",
+    "component_version_delete": "/api/component-versions/{version_id}",
     "component_version_preview": "/api/component-versions/{version_id}/preview",
+    "component_version_parts": "/api/component-versions/{version_id}/parts",
     "component_version_publish": "/api/component-versions/{version_id}/publish",
     "component_version_deprecate": "/api/component-versions/{version_id}/deprecate",
     "component_version_archive": "/api/component-versions/{version_id}/archive",
@@ -127,6 +139,7 @@
     }
   },
   "imports": {
+    "background_worker_count": 2,
     "upload_session_status": {
       "pending": "pending",
       "completed": "completed",
@@ -246,6 +259,15 @@
       "free": "free"
     }
   },
+  "interface_recognition": {
+    "version": "component-interface-recognizer-v1",
+    "supported_connector_types": [],
+    "minimum_outward_score": 0.0,
+    "clearance_start_ldu": 2.0,
+    "clearance_length_ldu": 16.0,
+    "minimum_clearance_radius_ldu": 2.0,
+    "connector_length_start_ratio": 0.5
+  },
   "validation": {
     "level": {
       "draft": "draft",
@@ -314,6 +336,8 @@
       "component_category": "idx_components_category",
       "component_version_component": "idx_component_versions_component",
       "component_version_status": "idx_component_versions_status",
+      "component_version_preview_artifact": "idx_component_versions_preview_artifact",
+      "component_version_preview_status": "idx_component_versions_preview_status",
       "component_interface_candidate": "idx_component_interfaces_candidate",
       "component_interface_status": "idx_component_interfaces_status",
       "validation_report_candidate": "idx_component_validation_reports_candidate",

@@ -21,7 +21,7 @@ const pages = [
   { component: <LegoTerrainBuilderPage />, english: 'Terrain to LEGO Heightmap', chinese: '地形转 LEGO 高度图' },
   { component: <LegoDesignPage />, english: 'LEGO Design', chinese: 'LEGO 设计图' },
   { component: <ComponentRepoPage />, english: 'Component Library', chinese: '组件仓库' },
-  { component: <PartSearchPage />, english: 'Mixed candidate recall', chinese: '混合候选召回' },
+  { component: <PartSearchPage />, english: 'Part search', chinese: '零件搜索' },
   { component: <PartViewerPage />, english: '3D Component Viewer', chinese: '组件 3D 查看器' },
 ];
 
@@ -52,6 +52,14 @@ describe('localized page shells', () => {
 
     expect(markup).toContain('3D Part Viewer');
     expect(markup).toContain('Loading item');
+  });
+
+  it('localizes the Component list occupied-size heading', async () => {
+    await i18n.changeLanguage('zh-CN');
+    expect(renderPage(<ComponentRepoPage />)).toContain('占用尺寸');
+
+    await i18n.changeLanguage('en-US');
+    expect(renderPage(<ComponentRepoPage />)).toContain('Occupied size');
   });
 });
 

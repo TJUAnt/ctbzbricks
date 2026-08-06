@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.api.schemas.task import (
     StructuredCheckResponse,
     StructuredIssueResponse,
     StructuredMessageResponse,
 )
+from src.i18n.domain_content import normalize_content_locale
 
 
 class ComponentArtifactResponse(BaseModel):
@@ -72,12 +73,6 @@ class ComponentCandidateResponse(BaseModel):
     updatedAt: str | None
 
 
-class ComponentImportCreateResponse(BaseModel):
-    importJob: ComponentImportResponse
-    sourceArtifact: ComponentArtifactResponse
-    exchangeArtifact: ComponentArtifactResponse | None
-
-
 class ComponentUploadFileSpec(BaseModel):
     filename: str
     contentType: str | None = None
@@ -91,6 +86,7 @@ class ComponentUploadSessionCreateRequest(BaseModel):
     targetComponentId: str | None = None
     baseVersionId: str | None = None
     contentLocale: str
+    timezone: str
 
 
 class ComponentUploadTargetResponse(BaseModel):
@@ -123,8 +119,16 @@ class ComponentImportParseRequest(BaseModel):
     importId: str
 
 
+class ComponentImportUploadCompleteResponse(BaseModel):
+    importJob: ComponentImportResponse
+    sourceArtifact: ComponentArtifactResponse
+    exchangeArtifact: ComponentArtifactResponse | None
+
+
 class ComponentImportParseResponse(BaseModel):
     importJob: ComponentImportResponse
+    sourceArtifact: ComponentArtifactResponse
+    exchangeArtifact: ComponentArtifactResponse | None
     sceneSnapshot: ComponentSceneSnapshotResponse
     candidate: ComponentCandidateResponse
     component: "ComponentResponse"
@@ -181,14 +185,25 @@ class ComponentFreeConnectorResponse(BaseModel):
     metadata: dict[str, Any]
 
 
-class ComponentInterfaceCreateRequest(BaseModel):
+class ComponentConnectorResponse(ComponentFreeConnectorResponse):
+    state: str
+    occupiedByRelationIds: list[str]
+    accessAxis: dict[str, float]
+    externalInterfaceId: str | None
+    recognition: dict[str, Any]
+
+
+class ComponentConnectorSummaryResponse(BaseModel):
     worldConnectorId: str
-    name: str
-    exposure: str | None = None
-    defaultBehavior: str | None = None
-    mechanicalRoles: list[str] = []
-    businessRoles: list[str] = []
-    requirements: dict[str, Any] = {}
+    partInstanceId: str
+    partRef: str
+    connectorId: str
+    connectorType: str | None
+    connectorKind: str
+    state: str
+    position: dict[str, float]
+    accessAxis: dict[str, float]
+    externalInterfaceId: str | None
 
 
 class ComponentInterfaceResponse(BaseModel):
@@ -206,6 +221,27 @@ class ComponentInterfaceResponse(BaseModel):
     createdBy: str
     createdAt: str
     updatedAt: str | None
+    recognitionMethod: str
+    recognitionVersion: str
+    interfaceGroupId: str
+
+
+class ComponentConnectorAnalysisResponse(BaseModel):
+    componentCandidateId: str
+    partLibraryVersionId: str
+    recognitionMethod: str
+    recognitionVersion: str
+    connectors: list[ComponentConnectorResponse]
+    externalInterfaces: list[ComponentInterfaceResponse]
+
+
+class ComponentConnectorSummaryAnalysisResponse(BaseModel):
+    componentCandidateId: str
+    partLibraryVersionId: str
+    recognitionMethod: str
+    recognitionVersion: str
+    connectors: list[ComponentConnectorSummaryResponse]
+    externalInterfaces: list[ComponentInterfaceResponse]
 
 
 class ComponentValidationReportResponse(BaseModel):
@@ -220,6 +256,12 @@ class ComponentValidationReportResponse(BaseModel):
     createdAt: str
 
 
+class ComponentLogicalSizeResponse(BaseModel):
+    widthStud: float
+    depthStud: float
+    heightPlate: float
+
+
 class ComponentResponse(BaseModel):
     id: str
     name: str
@@ -229,12 +271,77 @@ class ComponentResponse(BaseModel):
     category: str | None
     status: str
     currentVersionId: str | None
+    logicalSize: ComponentLogicalSizeResponse | None
     description: str | None
     tags: list[str]
     metadata: dict[str, Any]
     createdBy: str
     createdAt: str
     updatedAt: str | None
+
+
+class ComponentGroupResponse(BaseModel):
+    id: str
+    parentGroupId: str | None
+    groupType: str
+    name: str | None
+    contentLocale: str | None
+    sortOrder: int
+    directComponentCount: int
+    createdAt: str
+    updatedAt: str
+
+
+class ComponentGroupTreeResponse(BaseModel):
+    root: ComponentGroupResponse
+    groups: list[ComponentGroupResponse]
+
+
+class ComponentGroupCreateRequest(BaseModel):
+    parentGroupId: str
+    name: str = Field(min_length=1, max_length=100)
+    contentLocale: str
+
+
+class ComponentGroupUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    contentLocale: str | None = None
+    parentGroupId: str | None = None
+    sortOrder: int | None = Field(default=None, ge=0)
+
+
+class ComponentGroupMoveRequest(BaseModel):
+    parentGroupId: str
+    position: int = Field(ge=0)
+
+
+class ComponentGroupMembershipsResponse(BaseModel):
+    componentId: str
+    groupIds: list[str]
+
+
+class ComponentGroupSearchRequest(BaseModel):
+    contentLocale: str
+    query: str = Field(default="", max_length=200)
+    statuses: list[str] | None = Field(default=None, max_length=20)
+    allowPlanarRotation: bool = True
+    sizeTolerance: float = Field(default=0, ge=0)
+    page: int = Field(default=1, ge=1)
+    pageSize: int = Field(default=20, ge=1, le=100)
+
+    @field_validator("contentLocale")
+    @classmethod
+    def validate_content_locale(cls, value: str) -> str:
+        return normalize_content_locale(value)
+
+
+class ComponentGroupSearchResponse(BaseModel):
+    items: list[ComponentResponse]
+    total: int
+    page: int
+    pageSize: int
+    totalPages: int
+    statusCounts: dict[str, int]
 
 
 class ComponentPreviewPartResponse(BaseModel):
@@ -257,6 +364,17 @@ class ComponentPreviewPartResponse(BaseModel):
     )
 
 
+class ComponentPreviewInventoryPartResponse(BaseModel):
+    """One assembly instance, including Parts excluded from preview calculations."""
+
+    instanceId: str
+    partRef: str
+    colorCode: str
+    availability: str = Field(
+        description="Machine status: ready, missing_geometry, or missing_mesh."
+    )
+
+
 class ComponentPreviewSourceResponse(BaseModel):
     """Repository record from which the preview geometry was selected."""
 
@@ -264,6 +382,19 @@ class ComponentPreviewSourceResponse(BaseModel):
     id: str = Field(description="Stable Component UUID, LDraw Part number, or import ID.")
     name: str = Field(description="Localized official name or imported artifact filename.")
     status: str = Field(description="Machine-readable workflow status of the source record.")
+
+
+class ComponentPreviewPartCatalogResponse(BaseModel):
+    """Localized display metadata for one unique Part used by the assembly."""
+
+    partRef: str
+    name: str
+    contentLocale: str | None
+    translationStatus: str | None
+    imageUrl: str | None
+    availability: str = Field(
+        description="Machine status: ready, missing_geometry, or missing_mesh."
+    )
 
 
 class ComponentPreviewMeshResponse(BaseModel):
@@ -291,6 +422,42 @@ class ComponentPreviewModelResponse(BaseModel):
     cacheKey: str
 
 
+class ComponentVersionPreviewArtifactResponse(BaseModel):
+    artifactId: str
+    format: str
+    compression: str
+    url: str
+    sha256: str
+    byteLength: int
+
+
+class ComponentVersionPreviewModelResponse(BaseModel):
+    """Version-addressed GLB state without scene or mesh JSON."""
+
+    versionId: str
+    status: str
+    model: ComponentVersionPreviewArtifactResponse | None
+    failure: StructuredMessageResponse | None
+
+
+class ComponentVersionPartSummaryResponse(BaseModel):
+    partRef: str
+    name: str
+    contentLocale: str | None
+    translationStatus: str | None
+    imageUrl: str | None
+    quantity: int
+    availability: str
+
+
+class ComponentVersionPartsResponse(BaseModel):
+    versionId: str
+    partCount: int
+    renderablePartCount: int
+    logicalSize: dict[str, float]
+    parts: list[ComponentVersionPartSummaryResponse]
+
+
 class ComponentPreviewResponse(BaseModel):
     """Render contract for a Component assembly or one standalone Part."""
 
@@ -304,11 +471,21 @@ class ComponentPreviewResponse(BaseModel):
         description="Component version ID, or null before an import becomes a version."
     )
     partCount: int = Field(description="Number of Part instances in the assembly.")
+    renderablePartCount: int = Field(
+        description="Number of Part instances included in geometry and GLB calculations."
+    )
     logicalSize: dict[str, float] = Field(
         description="Item size in studs for width/depth and plates for height."
     )
     parts: list[ComponentPreviewPartResponse] = Field(
-        description="Assembly instances and their world transforms."
+        description="Renderable assembly instances and their world transforms."
+    )
+    partInventory: list[ComponentPreviewInventoryPartResponse] = Field(
+        description="All assembly instances with their preview availability status."
+    )
+    partCatalog: list[ComponentPreviewPartCatalogResponse] = Field(
+        default_factory=list,
+        description="Unique Part display metadata selected for the requested locale.",
     )
     model: ComponentPreviewModelResponse = Field(
         description="Cached meshopt-compressed GLB loaded directly by the renderer."
@@ -331,10 +508,27 @@ class ComponentVersionResponse(BaseModel):
     interfaceSignature: str
     structureHash: str
     geometryHash: str
+    previewArtifactId: str | None
+    previewStatus: str
+    previewGeneratorVersion: str | None
+    previewFailure: StructuredMessageResponse | None
     metadata: dict[str, Any]
     createdBy: str
     createdAt: str
     publishedAt: str | None
+    deletion: "ComponentVersionDeletionCapabilityResponse | None" = None
+
+
+class ComponentVersionDeletionCapabilityResponse(BaseModel):
+    allowed: bool
+    reason: str | None = None
+
+
+class ComponentVersionDeleteResponse(BaseModel):
+    versionId: str
+    componentId: str
+    componentDeleted: bool
+    nextVersionId: str | None
 
 
 class ComponentVersionPublishRequest(BaseModel):

@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import type { Root as ReactRoot } from 'react-dom/client';
 import {
   Bell,
   Box,
@@ -27,6 +28,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ComponentCandidateWorkbenchPage } from './componentRepo/ComponentCandidateWorkbenchPage';
 import { ComponentImportPage } from './componentRepo/ComponentImportPage';
 import { ComponentRepoPage } from './componentRepo/ComponentRepoPage';
+import { ComponentDetailPage } from './componentRepo/ComponentDetailPage';
 import { LegoDesignPage } from './legoDesign/LegoDesignPage';
 import { LegoTerrainBuilderPage } from './legoTerrain/LegoTerrainBuilderPage';
 import { DirectModelImportPage } from './modelImport/DirectModelImportPage';
@@ -352,7 +354,7 @@ function WorkbenchRoutes({
         path={routePathFor(appConfig.pages.componentRepoCandidate as PageKey)}
       />
       <Route
-        element={<ComponentCandidateWorkbenchPage />}
+        element={<ComponentDetailPage />}
         path={routePathFor(appConfig.pages.componentRepoDetail as PageKey)}
       />
       <Route
@@ -519,6 +521,11 @@ function authUserLabel(email: string | null, isConfigured: boolean, isLoading: b
 if (typeof document !== 'undefined') {
   const rootElement = document.getElementById('root');
   if (rootElement) {
-    ReactDOM.createRoot(rootElement).render(<Root />);
+    const root = (import.meta.hot?.data.brickBuilderRoot as ReactRoot | undefined)
+      ?? ReactDOM.createRoot(rootElement);
+    if (import.meta.hot) {
+      import.meta.hot.data.brickBuilderRoot = root;
+    }
+    root.render(<Root />);
   }
 }

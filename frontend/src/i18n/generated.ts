@@ -156,25 +156,40 @@ export type TranslationKey =
   | "common:pseudoEnglish"
   | "common:supabaseSignInIsNotConfigured"
   | "componentRepo:actions"
+  | "componentRepo:addComponentsToGroup"
+  | "componentRepo:addComponentsToGroupTitle"
+  | "componentRepo:addToGroup"
   | "componentRepo:all"
   | "componentRepo:allComponents"
   | "componentRepo:allUploadedComponentsAndTheirCurrentStatus"
   | "componentRepo:archived"
+  | "componentRepo:automaticInterfaceDescription"
   | "componentRepo:blocked"
   | "componentRepo:cancel"
   | "componentRepo:candidate"
   | "componentRepo:candidateId"
   | "componentRepo:candidateIdIsMissing"
   | "componentRepo:checkTheNetworkOrFileAndTryAgain"
+  | "componentRepo:chooseComponentsForGroup"
+  | "componentRepo:clearConnectionPointSelection"
   | "componentRepo:close"
+  | "componentRepo:closeGroupDialog"
   | "componentRepo:closeUploadDialog"
   | "componentRepo:closeVersionsDialog"
+  | "componentRepo:collapseGroup"
+  | "componentRepo:color"
   | "componentRepo:comingSoon"
   | "componentRepo:communityLibrary"
   | "componentRepo:component"
+  | "componentRepo:componentDetails"
+  | "componentRepo:componentDetailsDescription"
+  | "componentRepo:componentGroups"
   | "componentRepo:componentImport"
   | "componentRepo:componentLibrary"
   | "componentRepo:componentLibrarySections"
+  | "componentRepo:componentOverview"
+  | "componentRepo:componentReadyForReview"
+  | "componentRepo:componentSearchPagination"
   | "componentRepo:componentSourceUploaded"
   | "componentRepo:componentStatusOverview"
   | "componentRepo:componentUploadCanceled"
@@ -186,11 +201,35 @@ export type TranslationKey =
   | "componentRepo:confirmed"
   | "componentRepo:connectionConfirmed"
   | "componentRepo:connectionDetectionComplete"
+  | "componentRepo:connectionPointCount"
+  | "componentRepo:connectionPoints"
   | "componentRepo:connectionRejected"
+  | "componentRepo:connectorGroupBlocked"
+  | "componentRepo:connectorGroupExternal"
+  | "componentRepo:connectorGroupInternal"
+  | "componentRepo:connectorGroupUnresolved"
+  | "componentRepo:connectorGroupUnsupported"
+  | "componentRepo:connectorStateBlocked"
+  | "componentRepo:connectorStateExternal"
+  | "componentRepo:connectorStateInternal"
+  | "componentRepo:connectorStateUnresolved"
+  | "componentRepo:connectorStateUnsupported"
   | "componentRepo:continueReview"
   | "componentRepo:createADraftVersionFirst"
+  | "componentRepo:createChildGroup"
   | "componentRepo:createdComponentVersions"
+  | "componentRepo:createGroupTitle"
   | "componentRepo:creatingASecureUploadChannel"
+  | "componentRepo:currentVersionCannotDelete"
+  | "componentRepo:customGroupDescription"
+  | "componentRepo:deleteGroup"
+  | "componentRepo:deleteGroupConfirmation"
+  | "componentRepo:deleteOnlyVersionDescription"
+  | "componentRepo:deleteOnlyVersionTitle"
+  | "componentRepo:deleteVersion"
+  | "componentRepo:deleteVersionDescription"
+  | "componentRepo:deleteVersionTitle"
+  | "componentRepo:deletingVersion"
   | "componentRepo:details"
   | "componentRepo:detect"
   | "componentRepo:done"
@@ -200,20 +239,33 @@ export type TranslationKey =
   | "componentRepo:draftPublish"
   | "componentRepo:draftVersionCreated"
   | "componentRepo:draftVersionUnavailable"
+  | "componentRepo:dragGroupHint"
   | "componentRepo:dropAComponentFileHereOrClickToSelect"
+  | "componentRepo:editGroup"
+  | "componentRepo:editGroupTitle"
   | "componentRepo:editingVersion"
   | "componentRepo:enterAComponentName"
   | "componentRepo:exchange"
   | "componentRepo:exchangeFile"
   | "componentRepo:exchangeFileUploaded"
+  | "componentRepo:expandGroup"
   | "componentRepo:externalInterface"
+  | "componentRepo:externalInterfaceCount"
   | "componentRepo:externalInterfaceMarked"
+  | "componentRepo:externalInterfaces"
   | "componentRepo:failed"
   | "componentRepo:failedToLoadVersions"
+  | "componentRepo:filesUploadedProcessingComponent"
   | "componentRepo:filesUploadedVerifyingIntegrity"
   | "componentRepo:filterByStatus"
   | "componentRepo:freeConnector"
   | "componentRepo:freeConnectors"
+  | "componentRepo:groupMembershipsSaved"
+  | "componentRepo:groupName"
+  | "componentRepo:groupNamePlaceholder"
+  | "componentRepo:groupNameRequired"
+  | "componentRepo:groupRootName"
+  | "componentRepo:groups"
   | "componentRepo:importId"
   | "componentRepo:importResult"
   | "componentRepo:inReview"
@@ -221,30 +273,51 @@ export type TranslationKey =
   | "componentRepo:interfaces"
   | "componentRepo:keepThisPageOpenUntilTheUploadIsComplete"
   | "componentRepo:loadingComponents"
+  | "componentRepo:loadingGroups"
   | "componentRepo:loadingPreview"
   | "componentRepo:loadingVersions"
+  | "componentRepo:manageComponentGroups"
+  | "componentRepo:manageComponentGroupsDescription"
+  | "componentRepo:manageGroups"
   | "componentRepo:manageReviewAndPublishReusableLegoComponents"
   | "componentRepo:myComponentLibrary"
   | "componentRepo:myComponentList"
   | "componentRepo:networkErrorComponentUploadFailed"
+  | "componentRepo:nextPage"
   | "componentRepo:noComponentsUploaded"
   | "componentRepo:noComponentVersions"
+  | "componentRepo:noConnectionPoints"
+  | "componentRepo:noCustomGroups"
+  | "componentRepo:noExternalInterfaces"
+  | "componentRepo:noManagedComponents"
   | "componentRepo:noMatchingComponents"
+  | "componentRepo:noParts"
+  | "componentRepo:notInCustomGroup"
+  | "componentRepo:occupiedSize"
   | "componentRepo:openWorkbench"
   | "componentRepo:optionalOnlyNeededForIoSourceFiles"
+  | "componentRepo:pageOf"
+  | "componentRepo:parentGroup"
   | "componentRepo:parseAndReview"
   | "componentRepo:parsing"
+  | "componentRepo:partCount"
+  | "componentRepo:partExcludedFromCalculation"
+  | "componentRepo:partNumber"
+  | "componentRepo:partsList"
   | "componentRepo:passed"
   | "componentRepo:pending"
   | "componentRepo:pendingReview"
   | "componentRepo:position"
   | "componentRepo:previewUnavailable"
+  | "componentRepo:previousPage"
   | "componentRepo:processing"
   | "componentRepo:processingPleaseWait"
   | "componentRepo:publish"
   | "componentRepo:published"
   | "componentRepo:publishedVersion"
+  | "componentRepo:quantity"
   | "componentRepo:readyToUpload"
+  | "componentRepo:recognitionVersion"
   | "componentRepo:refreshComponentList"
   | "componentRepo:reject"
   | "componentRepo:rejected"
@@ -253,11 +326,24 @@ export type TranslationKey =
   | "componentRepo:resetPreview"
   | "componentRepo:retryUpload"
   | "componentRepo:revision"
+  | "componentRepo:rootGroupDescription"
+  | "componentRepo:rootGroupIncludesAllComponents"
   | "componentRepo:rotation"
+  | "componentRepo:saveComponents"
+  | "componentRepo:saveGroup"
+  | "componentRepo:saving"
   | "componentRepo:searchComponentNameOrId"
   | "componentRepo:searchComponents"
+  | "componentRepo:searchManagedComponents"
   | "componentRepo:selectAConnectorAndEnterAnInterfaceName"
+  | "componentRepo:selectConnectionPoint"
+  | "componentRepo:selectedConnectionPoint"
+  | "componentRepo:selectedGroupComponents"
   | "componentRepo:selectLdrMpd"
+  | "componentRepo:sharedArtifactsRetained"
+  | "componentRepo:sizeAccessibleLabel"
+  | "componentRepo:sizeUnavailable"
+  | "componentRepo:sizeUnits"
   | "componentRepo:source"
   | "componentRepo:startUpload"
   | "componentRepo:status"
@@ -287,6 +373,9 @@ export type TranslationKey =
   | "componentRepo:validate"
   | "componentRepo:validation"
   | "componentRepo:validationComplete"
+  | "componentRepo:versionActions"
+  | "componentRepo:versionDeleted"
+  | "componentRepo:versionHistory"
   | "componentRepo:viewVersions"
   | "componentRepo:whatHappensAfterUpload"
   | "errors:auth.authentication_required"
@@ -312,9 +401,18 @@ export type TranslationKey =
   | "errors:component_repo.candidate_not_found"
   | "errors:component_repo.candidate_validate_failed"
   | "errors:component_repo.component_not_found"
+  | "errors:component_repo.component_not_managed"
+  | "errors:component_repo.component_processing_failed"
   | "errors:component_repo.confirmed_relation_cannot_be_rejected"
   | "errors:component_repo.connector_capacity_exceeded"
+  | "errors:component_repo.current_version_delete_forbidden"
   | "errors:component_repo.free_connectors_list_failed"
+  | "errors:component_repo.group_cycle"
+  | "errors:component_repo.group_depth_exceeded"
+  | "errors:component_repo.group_name_duplicate"
+  | "errors:component_repo.group_name_invalid"
+  | "errors:component_repo.group_not_found"
+  | "errors:component_repo.group_root_immutable"
   | "errors:component_repo.hash_mismatch"
   | "errors:component_repo.immutable_artifact_exists"
   | "errors:component_repo.import_create_failed"
@@ -338,6 +436,8 @@ export type TranslationKey =
   | "errors:component_repo.relation_detect_failed"
   | "errors:component_repo.relation_reject_failed"
   | "errors:component_repo.storage_unavailable"
+  | "errors:component_repo.subscription_component_unavailable"
+  | "errors:component_repo.subscription_own_component_forbidden"
   | "errors:component_repo.translation_update_failed"
   | "errors:component_repo.upload_session_complete_failed"
   | "errors:component_repo.upload_session_create_failed"
@@ -351,9 +451,11 @@ export type TranslationKey =
   | "errors:component_repo.validation.transforms_valid"
   | "errors:component_repo.version_archive_failed"
   | "errors:component_repo.version_conflict"
+  | "errors:component_repo.version_delete_forbidden"
   | "errors:component_repo.version_deprecate_failed"
   | "errors:component_repo.version_not_found"
   | "errors:component_repo.version_publish_failed"
+  | "errors:component_repo.version_publish_forbidden"
   | "errors:component_repo.version_source_not_found_failed"
   | "errors:dem_lego_design.base_h_empty"
   | "errors:dem_lego_design.base_h_failed"
@@ -834,8 +936,36 @@ export type TranslationParamsByKey = {
   "app:dashboard.i18nHealth.latestHour": {
     "hour": InterpolationValue;
   };
+  "componentRepo:deleteGroupConfirmation": {
+    "name": InterpolationValue;
+  };
+  "componentRepo:deleteOnlyVersionDescription": {
+    "componentName": InterpolationValue;
+    "revision": InterpolationValue;
+    "version": InterpolationValue;
+  };
+  "componentRepo:deleteVersionDescription": {
+    "componentName": InterpolationValue;
+    "revision": InterpolationValue;
+    "version": InterpolationValue;
+  };
+  "componentRepo:pageOf": {
+    "page": InterpolationValue;
+    "totalPages": InterpolationValue;
+  };
+  "componentRepo:selectConnectionPoint": {
+    "id": InterpolationValue;
+  };
+  "componentRepo:sizeAccessibleLabel": {
+    "depth": InterpolationValue;
+    "height": InterpolationValue;
+    "width": InterpolationValue;
+  };
   "componentRepo:uploadProgressValue": {
     "percent": number;
+  };
+  "componentRepo:versionDeleted": {
+    "version": InterpolationValue;
   };
   "errors:auth.session_verification_failed": {
     "status": InterpolationValue;
@@ -851,6 +981,12 @@ export type TranslationParamsByKey = {
   };
   "errors:component_repo.component_not_found": {
     "componentId": InterpolationValue;
+  };
+  "errors:component_repo.group_depth_exceeded": {
+    "maximumDepth": InterpolationValue;
+  };
+  "errors:component_repo.group_name_invalid": {
+    "maximumLength": InterpolationValue;
   };
   "errors:component_repo.import_not_found": {
     "importId": InterpolationValue;

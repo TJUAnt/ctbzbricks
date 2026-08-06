@@ -16,6 +16,11 @@ import { resolvedLocale, useAppTranslation } from '../i18n';
 import { formatNumber } from '../i18n/formatters';
 
 type ResetRegistration = (reset: (() => void) | null) => void;
+export type ComponentSceneConnector = {
+  id: string;
+  position: Record<string, number>;
+  accessAxis?: Record<string, number>;
+};
 type ViewerState =
   | { status: 'loading'; preview: null; error: null }
   | { status: 'ready'; preview: ComponentPreviewResponse; error: null }
@@ -259,13 +264,29 @@ function DimensionRow({
 export function ComponentScene({
   preview,
   registerReset,
+  selectedConnector = null,
 }: {
-  preview: ComponentPreviewResponse;
+  preview: Pick<ComponentPreviewResponse, 'model'>;
   registerReset: ResetRegistration;
+  selectedConnector?: ComponentSceneConnector | null;
 }) {
   const mountRef = React.useRef<HTMLDivElement | null>(null);
+  const connectorRootRef = React.useRef<THREE.Object3D | null>(null);
+  const connectorMarkerRef = React.useRef<THREE.Group | null>(null);
+  const registerResetRef = React.useRef(registerReset);
+  const selectedConnectorRef = React.useRef(selectedConnector);
+  registerResetRef.current = registerReset;
+  selectedConnectorRef.current = selectedConnector;
   const tr = useAppTranslation();
   const [loadFailed, setLoadFailed] = React.useState(false);
+
+  React.useEffect(() => {
+    replaceConnectorMarker(
+      connectorRootRef.current,
+      connectorMarkerRef,
+      selectedConnector,
+    );
+  }, [selectedConnector]);
 
   React.useEffect(() => {
     const mount = mountRef.current;
@@ -311,6 +332,12 @@ export function ComponentScene({
         component = prepareLoadedComponent(loadedComponent);
         scene.add(component);
         centerObject(component);
+        connectorRootRef.current = component.getObjectByName('component-root') ?? component;
+        replaceConnectorMarker(
+          connectorRootRef.current,
+          connectorMarkerRef,
+          selectedConnectorRef.current,
+        );
         floor = new THREE.Mesh(
           new THREE.PlaneGeometry(60, 60),
           new THREE.ShadowMaterial({ color: '#405060', opacity: 0.15 }),
@@ -324,7 +351,7 @@ export function ComponentScene({
           if (component) fitCameraToObject(camera, controls, component);
         };
         resetView();
-        registerReset(resetView);
+        registerResetRef.current(resetView);
       })
       .catch((error: unknown) => {
         if (!disposed && !(error instanceof DOMException && error.name === 'AbortError')) {
@@ -354,7 +381,9 @@ export function ComponentScene({
     return () => {
       disposed = true;
       abortController.abort();
-      registerReset(null);
+      registerResetRef.current(null);
+      connectorRootRef.current = null;
+      connectorMarkerRef.current = null;
       window.cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
       controls.dispose();
@@ -366,7 +395,7 @@ export function ComponentScene({
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [preview, registerReset]);
+  }, [preview.model.artifactId, preview.model.url]);
 
   return (
     <div aria-hidden="true" className="part-viewer-canvas" ref={mountRef}>
@@ -375,11 +404,15 @@ export function ComponentScene({
   );
 }
 
-async function loadBinaryPreview(url: string, signal: AbortSignal): Promise<THREE.Group> {
+async function loadBinaryPreview(
+  url: string,
+  signal: AbortSignal,
+): Promise<THREE.Group> {
   const response = await apiFetch(url, { signal }, 'component_repo.preview_unavailable');
+  const buffer = await response.arrayBuffer();
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
-  const gltf = await loader.parseAsync(await response.arrayBuffer(), '');
+  const gltf = await loader.parseAsync(buffer, '');
   return gltf.scene;
 }
 
@@ -423,6 +456,65 @@ function centerObject(object: THREE.Object3D) {
   object.position.sub(center);
 }
 
+function replaceConnectorMarker(
+  parent: THREE.Object3D | null,
+  markerRef: React.MutableRefObject<THREE.Group | null>,
+  connector: ComponentSceneConnector | null,
+) {
+  const existing = markerRef.current;
+  if (existing) {
+    existing.removeFromParent();
+    disposeObject(existing);
+    markerRef.current = null;
+  }
+  if (!parent || !connector) return;
+  const position = vectorFromRecord(connector.position);
+  if (!position) return;
+
+  const marker = new THREE.Group();
+  marker.name = `selected-connector-${connector.id}`;
+  marker.position.copy(position);
+
+  const sphereMaterial = new THREE.MeshBasicMaterial({
+    color: '#ff7a18',
+    depthTest: false,
+    transparent: true,
+    opacity: 0.96,
+  });
+  const sphere = new THREE.Mesh(new THREE.SphereGeometry(4.2, 20, 14), sphereMaterial);
+  sphere.renderOrder = 1000;
+  marker.add(sphere);
+
+  const axis = vectorFromRecord(connector.accessAxis);
+  if (axis && axis.lengthSq() > 0) {
+    const arrow = new THREE.ArrowHelper(axis.normalize(), new THREE.Vector3(), 22, '#ff7a18', 7, 4);
+    arrow.renderOrder = 1000;
+    arrow.traverse((object) => {
+      object.renderOrder = 1000;
+      if (object instanceof THREE.Line || object instanceof THREE.Mesh) {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => {
+          material.depthTest = false;
+          material.transparent = true;
+        });
+      }
+    });
+    marker.add(arrow);
+  }
+
+  parent.add(marker);
+  markerRef.current = marker;
+}
+
+function vectorFromRecord(value: Record<string, number> | undefined): THREE.Vector3 | null {
+  if (!value) return null;
+  const x = Number(value.x);
+  const y = Number(value.y);
+  const z = Number(value.z);
+  if (![x, y, z].every(Number.isFinite)) return null;
+  return new THREE.Vector3(x, y, z);
+}
+
 function fitCameraToObject(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
@@ -446,7 +538,11 @@ function disposeObject(root: THREE.Object3D) {
   const geometries = new Set<THREE.BufferGeometry>();
   const materials = new Set<THREE.Material>();
   root.traverse((object) => {
-    if (object instanceof THREE.Mesh || object instanceof THREE.LineSegments) {
+    if (
+      object instanceof THREE.Mesh
+      || object instanceof THREE.Line
+      || object instanceof THREE.Points
+    ) {
       geometries.add(object.geometry);
       const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
       objectMaterials.forEach((material) => materials.add(material));

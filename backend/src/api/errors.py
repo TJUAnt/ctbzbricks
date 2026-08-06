@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Mapping
+from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
@@ -16,6 +17,7 @@ from src.api.schemas.error import ApiErrorResponse
 
 
 LOGGER = logging.getLogger(__name__)
+REQUEST_LOGGER = logging.getLogger("uvicorn.error")
 TRACE_ID_HEADER = "X-Trace-Id"
 MACHINE_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$")
 
@@ -64,9 +66,30 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.middleware("http")
     async def attach_trace_id(request: Request, call_next):
         request.state.trace_id = f"req_{uuid4().hex}"
-        response = await call_next(request)
-        response.headers[TRACE_ID_HEADER] = request.state.trace_id
-        return response
+        started_at = perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            response.headers[TRACE_ID_HEADER] = request.state.trace_id
+            return response
+        finally:
+            duration_ms = round((perf_counter() - started_at) * 1000, 1)
+            REQUEST_LOGGER.info(
+                "API request completed method=%s route=%s status=%d durationMs=%.1f traceId=%s",
+                request.method,
+                request.url.path,
+                status_code,
+                duration_ms,
+                request.state.trace_id,
+                extra={
+                    "method": request.method,
+                    "route": request.url.path,
+                    "status": status_code,
+                    "durationMs": duration_ms,
+                    "traceId": request.state.trace_id,
+                },
+            )
 
     @app.exception_handler(DomainError)
     async def handle_domain_error(request: Request, error: DomainError) -> JSONResponse:

@@ -1385,6 +1385,11 @@ class Component(Base):
     created_by = Column(String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]), nullable=False)
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime, nullable=True)
+    deleted_by = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]),
+        nullable=True,
+    )
 
     translations = relationship(
         "ComponentTranslation",
@@ -1396,6 +1401,10 @@ class Component(Base):
         Index(
             COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_status"],
             "status",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_deleted"],
+            "deleted_at",
         ),
         Index(
             COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_category"],
@@ -1440,6 +1449,115 @@ class ComponentTranslation(Base):
         Index(
             COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_translation_status"],
             "translation_status",
+        ),
+    )
+
+
+class ComponentGroup(Base):
+    """One user-owned node in the Component library grouping tree."""
+
+    __tablename__ = COMPONENT_REPO_DATABASE_CONFIG["component_group_table"]
+
+    id = Column(String(36), primary_key=True)
+    owner_id = Column(String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]), nullable=False)
+    parent_group_id = Column(
+        String(36),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['component_group_table']}.id",
+            ondelete="CASCADE",
+        ),
+        nullable=True,
+    )
+    group_type = Column(String(16), nullable=False)
+    name = Column(String(100), nullable=True)
+    normalized_name = Column(String(100), nullable=True)
+    content_locale = Column(String(16), nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "group_type IN ('root', 'custom')",
+            name="ck_component_groups_type",
+        ),
+        UniqueConstraint(
+            "owner_id",
+            "parent_group_id",
+            "normalized_name",
+            name="uq_component_groups_sibling_name",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_group_owner_parent_sort"],
+            "owner_id",
+            "parent_group_id",
+            "sort_order",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_group_root_owner"],
+            "owner_id",
+            unique=True,
+            postgresql_where=(group_type == "root"),
+            sqlite_where=(group_type == "root"),
+        ),
+    )
+
+
+class ComponentGroupMembership(Base):
+    """Direct Component membership in one custom user group."""
+
+    __tablename__ = COMPONENT_REPO_DATABASE_CONFIG["component_group_membership_table"]
+
+    group_id = Column(
+        String(36),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['component_group_table']}.id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+    component_id = Column(
+        String(36),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['component_table']}.id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+    added_by = Column(String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]), nullable=False)
+    added_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_group_membership_component"],
+            "component_id",
+        ),
+    )
+
+
+class ComponentSubscription(Base):
+    """A user's active subscription to another user's Component."""
+
+    __tablename__ = COMPONENT_REPO_DATABASE_CONFIG["component_subscription_table"]
+
+    user_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]),
+        primary_key=True,
+    )
+    component_id = Column(
+        String(36),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['component_table']}.id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+    subscribed_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_subscription_component"],
+            "component_id",
         ),
     )
 
@@ -1494,15 +1612,38 @@ class ComponentVersion(Base):
     interface_signature = Column(String(64), nullable=False)
     structure_hash = Column(String(64), nullable=False)
     geometry_hash = Column(String(64), nullable=False)
+    preview_artifact_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        ForeignKey(f"{COMPONENT_REPO_DATABASE_CONFIG['artifact_table']}.id"),
+        nullable=True,
+    )
+    preview_status = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["status"]),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
+    preview_generator_version = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["parser_version"]),
+        nullable=True,
+    )
+    preview_failure_code = Column(String(160), nullable=True)
+    preview_failure_params_json = Column(JSON, nullable=True)
     metadata_json = Column(JSON, nullable=False)
     created_by = Column(String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]), nullable=False)
     created_at = Column(DateTime, nullable=False)
     published_at = Column(DateTime, nullable=True)
+    deleted_at = Column(DateTime, nullable=True)
+    deleted_by = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["user"]),
+        nullable=True,
+    )
 
     component = relationship("Component")
     component_candidate = relationship("ComponentCandidate")
     source_artifact = relationship("ComponentArtifact", foreign_keys=[source_artifact_id])
     exchange_artifact = relationship("ComponentArtifact", foreign_keys=[exchange_artifact_id])
+    preview_artifact = relationship("ComponentArtifact", foreign_keys=[preview_artifact_id])
     scene_snapshot = relationship("ComponentSceneSnapshot")
     part_library_version = relationship("PartLibraryVersion")
 
@@ -1520,6 +1661,18 @@ class ComponentVersion(Base):
         Index(
             COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_version_status"],
             "status",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_version_deleted"],
+            "deleted_at",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_version_preview_artifact"],
+            "preview_artifact_id",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"]["component_version_preview_status"],
+            "preview_status",
         ),
     )
 
@@ -1697,6 +1850,206 @@ class PartConnectorDefinition(Base):
             COMPONENT_REPO_DATABASE_CONFIG["indexes"]["part_connector_definition_type"],
             "normalized_connector_type",
             "connector_gender",
+        ),
+    )
+
+
+class ComponentConnectorAnalysis(Base):
+    """Materialized connector-classification metadata for one candidate."""
+
+    __tablename__ = COMPONENT_REPO_DATABASE_CONFIG["connector_analysis_table"]
+
+    component_candidate_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['candidate_table']}.id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+    part_library_version_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['part_library_version_table']}.id"
+        ),
+        nullable=False,
+    )
+    recognition_method = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["method"]),
+        nullable=False,
+    )
+    recognition_version = Column(String(64), nullable=False)
+    calculated_at = Column(DateTime, nullable=False)
+
+
+class ComponentConnectorAnalysisItem(Base):
+    """One classified world-space connector, stored without JSON."""
+
+    __tablename__ = COMPONENT_REPO_DATABASE_CONFIG["connector_analysis_item_table"]
+
+    id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        primary_key=True,
+    )
+    component_candidate_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['connector_analysis_table']}.component_candidate_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    part_connector_definition_id = Column(
+        BigInteger,
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['part_connector_definition_table']}.id"
+        ),
+        nullable=False,
+    )
+    world_connector_id = Column(String(255), nullable=False)
+    part_instance_id = Column(String(255), nullable=False)
+    part_ref = Column(String(128), nullable=False)
+    connector_type = Column(String(64), nullable=True)
+    connector_kind = Column(String(64), nullable=True)
+    connector_gender = Column(String(16), nullable=True)
+    direction_label = Column(String(32), nullable=True)
+    direction_group = Column(String(32), nullable=True)
+    state = Column(String(32), nullable=False)
+    position_x = Column(Float, nullable=False)
+    position_y = Column(Float, nullable=False)
+    position_z = Column(Float, nullable=False)
+    axis_x = Column(Float, nullable=False)
+    axis_y = Column(Float, nullable=False)
+    axis_z = Column(Float, nullable=False)
+    matrix_11 = Column(Float, nullable=False)
+    matrix_12 = Column(Float, nullable=False)
+    matrix_13 = Column(Float, nullable=False)
+    matrix_21 = Column(Float, nullable=False)
+    matrix_22 = Column(Float, nullable=False)
+    matrix_23 = Column(Float, nullable=False)
+    matrix_31 = Column(Float, nullable=False)
+    matrix_32 = Column(Float, nullable=False)
+    matrix_33 = Column(Float, nullable=False)
+    access_axis_x = Column(Float, nullable=False)
+    access_axis_y = Column(Float, nullable=False)
+    access_axis_z = Column(Float, nullable=False)
+    external_interface_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        nullable=True,
+    )
+    eligibility_unoccupied = Column(Boolean, nullable=False)
+    eligibility_supported_type = Column(Boolean, nullable=False)
+    eligibility_outward_facing = Column(Boolean, nullable=False)
+    eligibility_clearance_data_available = Column(Boolean, nullable=False)
+    eligibility_clearance_available = Column(Boolean, nullable=False)
+    outward_score = Column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "component_candidate_id",
+            "world_connector_id",
+            name="uq_component_connector_analysis_item_world",
+        ),
+        CheckConstraint(
+            "state IN ('internal', 'external', 'blocked', 'unsupported', 'unresolved')",
+            name="ck_component_connector_analysis_item_state",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"][
+                "connector_analysis_item_candidate_state"
+            ],
+            "component_candidate_id",
+            "state",
+        ),
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"][
+                "connector_analysis_item_candidate_part"
+            ],
+            "component_candidate_id",
+            "part_instance_id",
+        ),
+    )
+
+
+class ComponentConnectorAnalysisPathNode(Base):
+    """Ordered instance-path node for one analyzed connector."""
+
+    __tablename__ = COMPONENT_REPO_DATABASE_CONFIG["connector_analysis_path_table"]
+
+    analysis_item_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['connector_analysis_item_table']}.id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+    ordinal = Column(Integer, primary_key=True)
+    instance_id = Column(String(255), nullable=False)
+
+    __table_args__ = (
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"][
+                "connector_analysis_path_instance"
+            ],
+            "instance_id",
+        ),
+    )
+
+
+class ComponentConnectorAnalysisBlocker(Base):
+    """Part instance obstructing one connector's mating corridor."""
+
+    __tablename__ = COMPONENT_REPO_DATABASE_CONFIG["connector_analysis_blocker_table"]
+
+    analysis_item_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['connector_analysis_item_table']}.id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+    blocker_part_instance_id = Column(String(255), primary_key=True)
+
+    __table_args__ = (
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"][
+                "connector_analysis_blocker_part"
+            ],
+            "blocker_part_instance_id",
+        ),
+    )
+
+
+class ComponentConnectorAnalysisRelation(Base):
+    """Confirmed relation consuming one analyzed connector."""
+
+    __tablename__ = COMPONENT_REPO_DATABASE_CONFIG["connector_analysis_relation_table"]
+
+    analysis_item_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['connector_analysis_item_table']}.id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+    assembly_relation_id = Column(
+        String(COMPONENT_REPO_DATABASE_CONFIG["string_lengths"]["id"]),
+        ForeignKey(
+            f"{COMPONENT_REPO_DATABASE_CONFIG['assembly_relation_table']}.id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+
+    __table_args__ = (
+        Index(
+            COMPONENT_REPO_DATABASE_CONFIG["indexes"][
+                "connector_analysis_relation_relation"
+            ],
+            "assembly_relation_id",
         ),
     )
 

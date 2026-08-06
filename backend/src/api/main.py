@@ -1,9 +1,12 @@
 """FastAPI application entrypoint."""
+from concurrent.futures import ThreadPoolExecutor
+import logging
 from threading import Lock
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine
+from sqlalchemy.pool import QueuePool
 
 from src.api.errors import ERROR_RESPONSES, install_error_handlers
 from src.api.routes.auth import create_auth_router
@@ -23,23 +26,17 @@ from src.api.routes.part_search import create_part_search_router
 from src.api.routes.submodels import create_submodel_router
 from src.api.routes.terrain import create_terrain_router
 from src.config.app_settings import BACKEND_ROOT, load_json_config
-from src.config.db_config import get_db_url
+from src.config.db_config import get_db_engine_options, get_db_url
 from src.config.component_repo_config import REQUIRED_COMPONENT_REPO_CONFIG_KEYS
 from src.config.fitting_candidate_recall_config import (
     REQUIRED_FITTING_CANDIDATE_RECALL_CONFIG_KEYS,
 )
 from src.config.model_fitting_config import REQUIRED_MODEL_FITTING_CONFIG_KEYS
 from src.config.submodel_config import REQUIRED_SUBMODEL_CONFIG_KEYS
-from src.services.fitting_candidate_profile_service import (
-    ensure_fitting_candidate_profile_table,
-)
-from src.services.domain_content_service import ensure_domain_translation_tables
-from src.services.model_asset_service import ensure_model_asset_table
-from src.services.model_fitting_service import ensure_model_fitting_tables
-from src.services.part_shape_profile_service import ensure_part_shape_profile_table
-from src.services.pixel_art_service import ensure_pixel_art_project_table
-from src.services.submodel_service import ensure_submodel_tables
-from src.component_repo.services import ensure_component_repo_tables
+from src.services.database_schema_service import validate_database_revision
+
+
+logger = logging.getLogger(__name__)
 
 
 REQUIRED_SEARCH_API_CONFIG_KEYS = (
@@ -236,24 +233,34 @@ def create_app() -> FastAPI:
     app.state.model_fitting_config = model_fitting_config
     app.state.fitting_candidate_recall_config = fitting_candidate_recall_config
     app.state.component_repo_config = component_repo_config
+    app.state.component_import_executor = ThreadPoolExecutor(
+        max_workers=int(
+            component_repo_config["imports"].get("background_worker_count", 2)
+        ),
+        thread_name_prefix="component-import",
+    )
+    app.state.component_import_futures = {}
+    app.state.component_import_futures_lock = Lock()
     app.state.lego_design_jobs = {}
     app.state.lego_design_jobs_lock = Lock()
     app.state.terrain_jobs = {}
     app.state.terrain_jobs_lock = Lock()
+    db_engine_options = get_db_engine_options()
     app.state.db_engine = create_engine(
         get_db_url(),
         echo=False,
-        pool_pre_ping=True,
-        pool_recycle=1800,
+        poolclass=QueuePool,
+        **db_engine_options,
     )
-    ensure_model_asset_table(app.state.db_engine)
-    ensure_pixel_art_project_table(app.state.db_engine)
-    ensure_submodel_tables(app.state.db_engine)
-    ensure_part_shape_profile_table(app.state.db_engine)
-    ensure_fitting_candidate_profile_table(app.state.db_engine)
-    ensure_model_fitting_tables(app.state.db_engine)
-    ensure_component_repo_tables(app.state.db_engine)
-    ensure_domain_translation_tables(app.state.db_engine)
+    logger.info(
+        "Database connection pool configured poolSize=%s maxOverflow=%s "
+        "poolTimeoutSeconds=%s poolRecycleSeconds=%s",
+        db_engine_options["pool_size"],
+        db_engine_options["max_overflow"],
+        db_engine_options["pool_timeout"],
+        db_engine_options["pool_recycle"],
+    )
+    validate_database_revision(app.state.db_engine)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config["cors"]["allow_origins"],
@@ -264,6 +271,10 @@ def create_app() -> FastAPI:
     @app.get(config["routes"]["health"])
     def health() -> dict[str, str]:
         return {"status": config["app"]["health_status"]}
+
+    @app.on_event("shutdown")
+    def shutdown_component_import_executor() -> None:
+        app.state.component_import_executor.shutdown(wait=False, cancel_futures=False)
 
     app.include_router(create_auth_router())
     app.include_router(create_part_search_router(config))

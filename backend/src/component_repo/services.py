@@ -10,20 +10,29 @@ from typing import Any
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
-from sqlalchemy import Engine, inspect, select, text, update
+from sqlalchemy import Engine, delete as sa_delete, inspect, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.i18n.domain_content import USER_CONTENT, normalize_content_locale
 from src.i18n.messages import error_from_exception, locale_catalog, message
 from src.component_repo.ldraw_deserializer import deserialize_ldraw_document
 from src.component_repo.geometry_service import backfill_component_logical_sizes
-from src.component_repo.storage import ArtifactStorage
+from src.component_repo.storage import ArtifactStorage, ArtifactStorageError
+from src.i18n.messages import normalize_timezone
 from src.model.models import (
     ComponentArtifact,
     ComponentAssemblyRelation,
     Component,
     ComponentTranslation,
+    ComponentGroup,
+    ComponentGroupMembership,
+    ComponentSubscription,
     ComponentCandidate,
+    ComponentConnectorAnalysis,
+    ComponentConnectorAnalysisBlocker,
+    ComponentConnectorAnalysisItem,
+    ComponentConnectorAnalysisPathNode,
+    ComponentConnectorAnalysisRelation,
     ComponentImport,
     ComponentInterface,
     ComponentRelationCandidate,
@@ -45,10 +54,18 @@ def ensure_component_repo_tables(engine: Engine) -> None:
     ComponentCandidate.__table__.create(bind=engine, checkfirst=True)
     PartLibraryVersion.__table__.create(bind=engine, checkfirst=True)
     PartConnectorDefinition.__table__.create(bind=engine, checkfirst=True)
+    ComponentConnectorAnalysis.__table__.create(bind=engine, checkfirst=True)
+    ComponentConnectorAnalysisItem.__table__.create(bind=engine, checkfirst=True)
+    ComponentConnectorAnalysisPathNode.__table__.create(bind=engine, checkfirst=True)
+    ComponentConnectorAnalysisBlocker.__table__.create(bind=engine, checkfirst=True)
     ComponentRelationCandidate.__table__.create(bind=engine, checkfirst=True)
     ComponentAssemblyRelation.__table__.create(bind=engine, checkfirst=True)
+    ComponentConnectorAnalysisRelation.__table__.create(bind=engine, checkfirst=True)
     Component.__table__.create(bind=engine, checkfirst=True)
     ComponentTranslation.__table__.create(bind=engine, checkfirst=True)
+    ComponentGroup.__table__.create(bind=engine, checkfirst=True)
+    ComponentGroupMembership.__table__.create(bind=engine, checkfirst=True)
+    ComponentSubscription.__table__.create(bind=engine, checkfirst=True)
     ComponentInterface.__table__.create(bind=engine, checkfirst=True)
     ComponentVersion.__table__.create(bind=engine, checkfirst=True)
     ComponentValidationReport.__table__.create(bind=engine, checkfirst=True)
@@ -232,11 +249,15 @@ def create_component_import(
     target_component_id: str | None = None,
     base_version_id: str | None = None,
     content_locale: str | None = None,
+    timezone_name: str | None = None,
     created_by: str | None = None,
 ) -> dict[str, Any]:
     """Create an upload/parse task for a Component Repo import."""
     normalized_content_locale = (
         normalize_content_locale(content_locale) if content_locale is not None else None
+    )
+    normalized_timezone = (
+        normalize_timezone(timezone_name) if timezone_name is not None else None
     )
     import_row = ComponentImport(
         id=str(uuid4()),
@@ -252,11 +273,14 @@ def create_component_import(
         completed_at=None,
         failure_code=None,
         failure_params_json=None,
-        metadata_json=(
-            {"contentLocale": normalized_content_locale}
-            if normalized_content_locale is not None
-            else {}
-        ),
+        metadata_json={
+            **(
+                {"contentLocale": normalized_content_locale}
+                if normalized_content_locale is not None
+                else {}
+            ),
+            **({"timezone": normalized_timezone} if normalized_timezone is not None else {}),
+        },
     )
     Session = sessionmaker(bind=engine)
     with Session() as session:
@@ -281,12 +305,16 @@ def create_component_upload_session(
     target_component_id: str | None = None,
     base_version_id: str | None = None,
     content_locale: str | None = None,
+    timezone_name: str | None = None,
     created_by: str | None = None,
 ) -> dict[str, Any]:
     """Create a direct-to-storage upload session with server-generated object paths."""
 
     normalized_content_locale = (
         normalize_content_locale(content_locale) if content_locale is not None else None
+    )
+    normalized_timezone = (
+        normalize_timezone(timezone_name) if timezone_name is not None else None
     )
     session_id = str(uuid4())
     expected_uploads = [
@@ -328,6 +356,7 @@ def create_component_upload_session(
             "targetComponentId": target_component_id,
             "baseVersionId": base_version_id,
             "contentLocale": normalized_content_locale,
+            "timezone": normalized_timezone,
         },
     )
     Session = sessionmaker(bind=engine)
@@ -419,6 +448,10 @@ def complete_component_upload_session(
                     "uploadSessionId": upload_session.id,
                     "uploadMethod": "direct_storage",
                     "contentLocale": (upload_session.metadata_json or {}).get("contentLocale"),
+                    "timezone": (upload_session.metadata_json or {}).get("timezone"),
+                    "processing": {
+                        "status": "queued",
+                    },
                 },
             )
             session.add(import_row)
@@ -459,6 +492,28 @@ def get_component_import(engine: Engine, import_id: str) -> dict[str, Any] | Non
         import_row = session.get(ComponentImport, import_id)
         if import_row is None:
             return None
+        return import_response(import_row)
+
+
+def update_component_import_processing_metadata(
+    engine: Engine,
+    import_id: str,
+    status: str,
+    **values: object,
+) -> dict[str, Any] | None:
+    """Persist stable machine state for one request-independent ingestion run."""
+
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        import_row = session.get(ComponentImport, import_id)
+        if import_row is None:
+            return None
+        metadata = dict(import_row.metadata_json or {})
+        processing = dict(metadata.get("processing") or {})
+        processing.update({"status": status, **values})
+        import_row.metadata_json = {**metadata, "processing": processing}
+        session.commit()
+        session.refresh(import_row)
         return import_response(import_row)
 
 
@@ -585,6 +640,212 @@ def parse_component_import(
             "candidate": candidate_response(candidate),
             "component": draft["component"],
             "version": draft["version"],
+        }
+
+
+def discard_component_ingestion(
+    engine: Engine,
+    storage: ArtifactStorage,
+    *,
+    import_id: str | None = None,
+    upload_session_id: str | None = None,
+    artifact_ids: set[str] | None = None,
+) -> dict[str, int]:
+    """Discard one failed ingestion aggregate and its private Storage objects.
+
+    Successful ComponentImport rows remain as internal source provenance. This
+    cleanup is only for an ingestion that never reached a reviewable outcome.
+    Storage deletion is attempted before database metadata is removed; failures
+    are counted for operational logging but never exposed through the public API.
+    """
+
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        upload_session = None
+        if upload_session_id:
+            upload_session = session.get(ComponentUploadSession, upload_session_id)
+        if import_id is None and upload_session is not None:
+            stored_import_id = (upload_session.metadata_json or {}).get("importId")
+            if isinstance(stored_import_id, str):
+                import_id = stored_import_id
+        import_row = (
+            session.get(ComponentImport, import_id)
+            if import_id is not None
+            else None
+        )
+        if upload_session is None and import_row is not None:
+            stored_upload_session_id = (import_row.metadata_json or {}).get(
+                "uploadSessionId"
+            )
+            if isinstance(stored_upload_session_id, str):
+                upload_session = session.get(
+                    ComponentUploadSession,
+                    stored_upload_session_id,
+                )
+
+        storage_keys = {
+            str(upload["objectPath"])
+            for upload in (upload_session.expected_uploads_json if upload_session else [])
+            if isinstance(upload, dict) and upload.get("objectPath")
+        }
+        artifact_ids_to_delete = set(artifact_ids or set())
+        if import_row is not None:
+            artifact_ids_to_delete.add(import_row.source_artifact_id)
+            if import_row.exchange_artifact_id:
+                artifact_ids_to_delete.add(import_row.exchange_artifact_id)
+        if artifact_ids_to_delete:
+            artifacts = session.scalars(
+                select(ComponentArtifact).where(
+                    ComponentArtifact.id.in_(artifact_ids_to_delete)
+                )
+            ).all()
+            storage_keys.update(artifact.storage_key for artifact in artifacts)
+
+        storage_delete_failures = 0
+        for storage_key in sorted(storage_keys):
+            try:
+                storage.delete(storage_key)
+            except ArtifactStorageError:
+                storage_delete_failures += 1
+
+        if import_row is not None:
+            candidate_ids = set(
+                session.scalars(
+                    select(ComponentCandidate.id).where(
+                        ComponentCandidate.import_id == import_row.id
+                    )
+                ).all()
+            )
+            snapshot_ids = set(
+                session.scalars(
+                    select(ComponentSceneSnapshot.id).where(
+                        ComponentSceneSnapshot.import_id == import_row.id
+                    )
+                ).all()
+            )
+            version_rows = (
+                session.scalars(
+                    select(ComponentVersion).where(
+                        ComponentVersion.component_candidate_id.in_(candidate_ids)
+                    )
+                ).all()
+                if candidate_ids
+                else []
+            )
+            version_ids = {version.id for version in version_rows}
+            component_ids = {version.component_id for version in version_rows}
+
+            if candidate_ids or version_ids:
+                validation_predicates = []
+                if candidate_ids:
+                    validation_predicates.append(
+                        ComponentValidationReport.component_candidate_id.in_(
+                            candidate_ids
+                        )
+                    )
+                if version_ids:
+                    validation_predicates.append(
+                        ComponentValidationReport.component_version_id.in_(
+                            version_ids
+                        )
+                    )
+                for predicate in validation_predicates:
+                    session.execute(
+                        sa_delete(ComponentValidationReport).where(predicate)
+                    )
+            if candidate_ids:
+                session.execute(
+                    sa_delete(ComponentAssemblyRelation).where(
+                        ComponentAssemblyRelation.component_candidate_id.in_(
+                            candidate_ids
+                        )
+                    )
+                )
+                session.execute(
+                    sa_delete(ComponentRelationCandidate).where(
+                        ComponentRelationCandidate.component_candidate_id.in_(
+                            candidate_ids
+                        )
+                    )
+                )
+                session.execute(
+                    sa_delete(ComponentInterface).where(
+                        ComponentInterface.component_candidate_id.in_(candidate_ids)
+                    )
+                )
+            if version_ids:
+                session.execute(
+                    sa_delete(ComponentVersion).where(
+                        ComponentVersion.id.in_(version_ids)
+                    )
+                )
+            session.flush()
+
+            if import_row.target_component_id is None:
+                for component_id in component_ids:
+                    remaining_version = session.scalar(
+                        select(ComponentVersion.id).where(
+                            ComponentVersion.component_id == component_id
+                        )
+                    )
+                    if remaining_version is not None:
+                        continue
+                    session.execute(
+                        sa_delete(ComponentGroupMembership).where(
+                            ComponentGroupMembership.component_id == component_id
+                        )
+                    )
+                    session.execute(
+                        sa_delete(ComponentSubscription).where(
+                            ComponentSubscription.component_id == component_id
+                        )
+                    )
+                    session.execute(
+                        sa_delete(ComponentTranslation).where(
+                            ComponentTranslation.component_id == component_id
+                        )
+                    )
+                    session.execute(
+                        sa_delete(Component).where(Component.id == component_id)
+                    )
+            if candidate_ids:
+                session.execute(
+                    sa_delete(ComponentCandidate).where(
+                        ComponentCandidate.id.in_(candidate_ids)
+                    )
+                )
+            if snapshot_ids:
+                session.execute(
+                    sa_delete(ComponentSceneSnapshot).where(
+                        ComponentSceneSnapshot.id.in_(snapshot_ids)
+                    )
+                )
+            session.execute(
+                sa_delete(ComponentImport).where(ComponentImport.id == import_row.id)
+            )
+            if artifact_ids_to_delete:
+                session.execute(
+                    sa_delete(ComponentArtifact).where(
+                        ComponentArtifact.id.in_(artifact_ids_to_delete)
+                    )
+                )
+        elif artifact_ids_to_delete:
+            session.execute(
+                sa_delete(ComponentArtifact).where(
+                    ComponentArtifact.id.in_(artifact_ids_to_delete)
+                )
+            )
+
+        if upload_session is not None:
+            session.execute(
+                sa_delete(ComponentUploadSession).where(
+                    ComponentUploadSession.id == upload_session.id
+                )
+            )
+        session.commit()
+        return {
+            "storageObjectCount": len(storage_keys),
+            "storageDeleteFailureCount": storage_delete_failures,
         }
 
 
@@ -731,6 +992,21 @@ def get_component_artifact(engine: Engine, artifact_id: str) -> dict[str, Any] |
         if artifact is None:
             return None
         return artifact_response(artifact)
+
+
+def get_component_artifacts(
+    engine: Engine,
+    artifact_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    """Load multiple artifact records in one database round trip."""
+    if not artifact_ids:
+        return {}
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        artifacts = session.scalars(
+            select(ComponentArtifact).where(ComponentArtifact.id.in_(artifact_ids))
+        ).all()
+        return {artifact.id: artifact_response(artifact) for artifact in artifacts}
 
 
 def list_component_imports(

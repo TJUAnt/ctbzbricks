@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Engine, func, select
+from sqlalchemy import Engine, func, insert, literal, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from src.model.models import (
@@ -36,8 +37,9 @@ def ensure_part_library_version(
         existing = session.get(PartLibraryVersion, version_id)
         if existing is not None:
             return part_library_version_response(existing)
-        source_connectors = session.scalars(select(ConnectorInstance).order_by(ConnectorInstance.id)).all()
-        connector_count = len(source_connectors)
+        connector_count = session.scalar(
+            select(func.count()).select_from(ConnectorInstance)
+        ) or 0
         source_hash = connector_source_hash(session)
         now = datetime.now(timezone.utc)
         version = PartLibraryVersion(
@@ -54,16 +56,104 @@ def ensure_part_library_version(
             created_at=now,
         )
         session.add(version)
-        next_definition_id = (session.scalar(select(func.max(PartConnectorDefinition.id))) or 0) + 1
-        for offset, connector in enumerate(source_connectors):
-            session.add(
-                part_connector_definition_from_instance(
-                    next_definition_id + offset,
-                    version_id,
-                    connector,
-                    now,
-                )
+        try:
+            # Flush the version row first. Concurrent initializers then resolve on
+            # this primary key before either starts the large connector snapshot.
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            existing = session.get(PartLibraryVersion, version_id)
+            if existing is None:
+                raise
+            return part_library_version_response(existing)
+
+        snapshot_columns = [
+            "part_library_version_id",
+            "source_connector_id",
+            "ldraw_part_num",
+            "connector_kind",
+            "normalized_connector_type",
+            "connector_group",
+            "connector_gender",
+            "pos_x",
+            "pos_y",
+            "pos_z",
+            "ori_11",
+            "ori_12",
+            "ori_13",
+            "ori_21",
+            "ori_22",
+            "ori_23",
+            "ori_31",
+            "ori_32",
+            "ori_33",
+            "direction_x",
+            "direction_y",
+            "direction_z",
+            "direction_label",
+            "direction_group",
+            "radius",
+            "length",
+            "caps",
+            "center_flag",
+            "slide_flag",
+            "confidence",
+            "raw_params",
+            "created_at",
+        ]
+        snapshot_values = [
+            literal(version_id),
+            ConnectorInstance.id,
+            func.lower(ConnectorInstance.ldraw_part_num),
+            ConnectorInstance.connector_kind,
+            ConnectorInstance.normalized_connector_type,
+            ConnectorInstance.connector_group,
+            ConnectorInstance.connector_gender,
+            ConnectorInstance.pos_x,
+            ConnectorInstance.pos_y,
+            ConnectorInstance.pos_z,
+            ConnectorInstance.ori_11,
+            ConnectorInstance.ori_12,
+            ConnectorInstance.ori_13,
+            ConnectorInstance.ori_21,
+            ConnectorInstance.ori_22,
+            ConnectorInstance.ori_23,
+            ConnectorInstance.ori_31,
+            ConnectorInstance.ori_32,
+            ConnectorInstance.ori_33,
+            ConnectorInstance.direction_x,
+            ConnectorInstance.direction_y,
+            ConnectorInstance.direction_z,
+            ConnectorInstance.direction_label,
+            ConnectorInstance.direction_group,
+            ConnectorInstance.radius,
+            ConnectorInstance.length,
+            ConnectorInstance.caps,
+            ConnectorInstance.center_flag,
+            ConnectorInstance.slide_flag,
+            ConnectorInstance.confidence,
+            ConnectorInstance.raw_params,
+            literal(now),
+        ]
+        # SQLite only auto-increments columns declared exactly as INTEGER PRIMARY
+        # KEY; the test schema uses BigInteger. Production PostgreSQL uses the
+        # sequence-backed identity and therefore omits this compatibility value.
+        if session.bind is not None and session.bind.dialect.name == "sqlite":
+            next_definition_id = (
+                session.scalar(select(func.max(PartConnectorDefinition.id))) or 0
+            ) + 1
+            snapshot_columns.insert(0, "id")
+            snapshot_values.insert(
+                0,
+                literal(next_definition_id - 1)
+                + func.row_number().over(order_by=ConnectorInstance.id),
             )
+        session.execute(
+            insert(PartConnectorDefinition).from_select(
+                snapshot_columns,
+                select(*snapshot_values),
+            )
+        )
         session.commit()
         session.refresh(version)
         return part_library_version_response(version)
@@ -100,6 +190,11 @@ def detect_relation_candidates(
                 "relationDetectionCompleted": True,
                 "partLibraryVersionId": part_library["id"],
             }
+            bind_candidate_versions_to_part_library(
+                session,
+                component_candidate_id,
+                part_library["id"],
+            )
             session.commit()
             return [relation_candidate_response(row) for row in existing]
         rows = []
@@ -145,6 +240,11 @@ def detect_relation_candidates(
             "relationDetectionCompleted": True,
             "partLibraryVersionId": part_library["id"],
         }
+        bind_candidate_versions_to_part_library(
+            session,
+            component_candidate_id,
+            part_library["id"],
+        )
         session.commit()
         for row in rows:
             session.refresh(row)
@@ -227,6 +327,20 @@ def confirm_relation_candidate(
             confirmed_at=datetime.now(timezone.utc),
         )
         session.add(assembly)
+        session.flush()
+        from src.component_repo.interface_recognition_service import (
+            mark_connectors_occupied_by_relation,
+        )
+
+        mark_connectors_occupied_by_relation(
+            session,
+            relation.component_candidate_id,
+            [
+                connector_id
+                for connector_id in relation_connector_ids
+                if connector_id is not None
+            ],
+        )
         session.commit()
         session.refresh(assembly)
         session.refresh(relation)
@@ -494,6 +608,21 @@ def part_library_version_id_for_candidate(session, component_candidate_id: str) 
     return active_part_library_version_id(session)
 
 
+def bind_candidate_versions_to_part_library(
+    session: object,
+    component_candidate_id: str,
+    part_library_version_id: str,
+) -> None:
+    versions = session.scalars(
+        select(ComponentVersion).where(
+            ComponentVersion.component_candidate_id == component_candidate_id,
+            ComponentVersion.part_library_version_id.is_(None),
+        )
+    ).all()
+    for version in versions:
+        version.part_library_version_id = part_library_version_id
+
+
 def ensure_candidate_not_published(
     session,
     config: dict[str, Any],
@@ -506,53 +635,11 @@ def ensure_candidate_not_published(
         select(ComponentVersion).where(
             ComponentVersion.component_candidate_id == component_candidate_id,
             ComponentVersion.status == config["versions"]["status"]["published"],
+            ComponentVersion.deleted_at.is_(None),
         )
     )
     if published is not None:
         raise ValueError(f"Published component candidate is immutable: {component_candidate_id}")
-
-
-def part_connector_definition_from_instance(
-    definition_id: int,
-    part_library_version_id: str,
-    connector: ConnectorInstance,
-    created_at: datetime,
-) -> PartConnectorDefinition:
-    return PartConnectorDefinition(
-        id=definition_id,
-        part_library_version_id=part_library_version_id,
-        source_connector_id=connector.id,
-        ldraw_part_num=connector.ldraw_part_num.lower(),
-        connector_kind=connector.connector_kind,
-        normalized_connector_type=connector.normalized_connector_type,
-        connector_group=connector.connector_group,
-        connector_gender=connector.connector_gender,
-        pos_x=connector.pos_x,
-        pos_y=connector.pos_y,
-        pos_z=connector.pos_z,
-        ori_11=connector.ori_11,
-        ori_12=connector.ori_12,
-        ori_13=connector.ori_13,
-        ori_21=connector.ori_21,
-        ori_22=connector.ori_22,
-        ori_23=connector.ori_23,
-        ori_31=connector.ori_31,
-        ori_32=connector.ori_32,
-        ori_33=connector.ori_33,
-        direction_x=connector.direction_x,
-        direction_y=connector.direction_y,
-        direction_z=connector.direction_z,
-        direction_label=connector.direction_label,
-        direction_group=connector.direction_group,
-        radius=connector.radius,
-        length=connector.length,
-        caps=connector.caps,
-        center_flag=connector.center_flag,
-        slide_flag=connector.slide_flag,
-        confidence=connector.confidence,
-        raw_params=connector.raw_params,
-        created_at=created_at,
-    )
 
 
 def identity_transform() -> dict[str, Any]:

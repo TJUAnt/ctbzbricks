@@ -8,6 +8,7 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from src.api.errors import DomainError
 from src.component_repo.relation_service import (
     confirm_relation_candidate,
     detect_relation_candidates,
@@ -18,12 +19,17 @@ from src.component_repo.relation_service import (
 )
 from src.component_repo.component_service import (
     create_component_interface,
+    delete_component_version,
     ensure_component_candidate_draft,
     list_component_versions,
     list_components,
     publish_component_version,
     set_component_version_lifecycle_status,
     validate_component_candidate,
+)
+from src.component_repo.interface_recognition_service import (
+    analyze_component_connectors,
+    read_component_connector_analysis,
 )
 from src.component_repo.services import (
     create_component_artifact,
@@ -79,8 +85,22 @@ class ComponentRepoRelationTest(unittest.TestCase):
             relations = detect_relation_candidates(engine, config, candidate_id)
             listed_relations = list_relation_candidates(engine, candidate_id)
             free_before = list_free_connectors(engine, candidate_id)
+            Session = sessionmaker(bind=engine)
+            with Session() as session:
+                analysis_before = analyze_component_connectors(session, config, candidate_id)
+                stored_analysis_before = read_component_connector_analysis(
+                    session,
+                    config,
+                    candidate_id,
+                )
             assembly = confirm_relation_candidate(engine, config, relations[0]["id"])
             free_after = list_free_connectors(engine, candidate_id)
+            with Session() as session:
+                analysis_after = read_component_connector_analysis(
+                    session,
+                    config,
+                    candidate_id,
+                )
 
         self.assertEqual(part_library["id"], config["part_library"]["default_version_id"])
         self.assertEqual(part_library["connectorCount"], 2)
@@ -92,8 +112,15 @@ class ComponentRepoRelationTest(unittest.TestCase):
         self.assertEqual(relations[0]["positionResidual"], 0.0)
         self.assertEqual(relations[0]["rotationResidual"], 0.0)
         self.assertEqual(len(free_before), 2)
+        self.assertEqual(
+            [connector["state"] for connector in analysis_before["connectors"]],
+            ["blocked", "blocked"],
+        )
+        self.assertEqual(analysis_before["externalInterfaces"], [])
+        self.assertEqual(stored_analysis_before["connectors"], [])
         self.assertEqual(assembly["relationCandidateId"], relations[0]["id"])
         self.assertEqual(len(free_after), 0)
+        self.assertEqual(analysis_after["connectors"], [])
 
     def test_reject_relation_candidate_marks_candidate_rejected(self) -> None:
         config = component_repo_config()
@@ -219,18 +246,18 @@ class ComponentRepoRelationTest(unittest.TestCase):
 
         self.assertEqual(repeated["id"], assembly["id"])
 
-    def test_validation_requires_external_interface(self) -> None:
+    def test_validation_accepts_automatically_recognized_external_interfaces(self) -> None:
         config = component_repo_config()
         engine = test_engine()
         seed_connector_pair(engine)
         with tempfile.TemporaryDirectory() as directory:
             storage = local_storage(config, directory)
-            candidate_id = parsed_candidate(engine, config, storage, "pin_pair.ldr", pin_pair_ldraw())
+            candidate_id = parsed_candidate(engine, config, storage, "pin_pair.ldr", far_pair_ldraw())
 
             report = validate_component_candidate(engine, config, candidate_id)
 
-        self.assertFalse(report["passed"])
-        self.assertIn(
+        self.assertTrue(report["passed"])
+        self.assertNotIn(
             "component_repo.validation.interfaces_valid",
             {issue["code"] for issue in report["issues"]},
         )
@@ -241,7 +268,7 @@ class ComponentRepoRelationTest(unittest.TestCase):
         seed_connector_pair(engine)
         with tempfile.TemporaryDirectory() as directory:
             storage = local_storage(config, directory)
-            candidate_id = parsed_candidate(engine, config, storage, "pin_pair.ldr", pin_pair_ldraw())
+            candidate_id = parsed_candidate(engine, config, storage, "pin_pair.ldr", far_pair_ldraw())
             detect_relation_candidates(engine, config, candidate_id)
             free_connectors = list_free_connectors(engine, candidate_id)
 
@@ -267,13 +294,50 @@ class ComponentRepoRelationTest(unittest.TestCase):
         self.assertEqual(draft["version"]["status"], config["versions"]["status"]["draft"])
         self.assertEqual(draft["version"]["componentCandidateId"], candidate_id)
 
+    def test_delete_only_draft_version_hides_empty_component(self) -> None:
+        config = component_repo_config()
+        engine = test_engine()
+        seed_connector_pair(engine)
+        with tempfile.TemporaryDirectory() as directory:
+            storage = local_storage(config, directory)
+            candidate_id = parsed_candidate(
+                engine,
+                config,
+                storage,
+                "delete_me.ldr",
+                far_pair_ldraw(),
+            )
+            detect_relation_candidates(engine, config, candidate_id)
+            draft = ensure_component_candidate_draft(engine, config, candidate_id)
+
+            deletion = delete_component_version(
+                engine,
+                config,
+                draft["version"]["id"],
+                config["audit"]["system_user"],
+            )
+            repeated = delete_component_version(
+                engine,
+                config,
+                draft["version"]["id"],
+                config["audit"]["system_user"],
+            )
+
+        self.assertTrue(deletion["componentDeleted"])
+        self.assertEqual(repeated, deletion)
+        self.assertEqual(
+            list_component_versions(engine, config, draft["component"]["id"]),
+            [],
+        )
+        self.assertEqual(list_components(engine, config, "en-US"), [])
+
     def test_publish_component_version_makes_it_queryable_and_immutable(self) -> None:
         config = component_repo_config()
         engine = test_engine()
         seed_connector_pair(engine)
         with tempfile.TemporaryDirectory() as directory:
             storage = local_storage(config, directory)
-            candidate_id = parsed_candidate(engine, config, storage, "pin_pair.ldr", pin_pair_ldraw())
+            candidate_id = parsed_candidate(engine, config, storage, "pin_pair.ldr", far_pair_ldraw())
             relations = detect_relation_candidates(engine, config, candidate_id)
             free_connectors = list_free_connectors(engine, candidate_id)
             create_component_interface(
@@ -295,6 +359,16 @@ class ComponentRepoRelationTest(unittest.TestCase):
                 config,
                 draft["component"]["id"],
             )
+            with self.assertRaisesRegex(
+                ValueError,
+                "^component_repo.version_publish_forbidden$",
+            ):
+                publish_component_version(
+                    engine,
+                    config,
+                    draft["version"]["id"],
+                    published_by="auth:another-user",
+                )
             published = publish_component_version(
                 engine,
                 config,
@@ -332,7 +406,7 @@ class ComponentRepoRelationTest(unittest.TestCase):
                     "second_mount",
                 )
             with self.assertRaises(ValueError):
-                reject_relation_candidate(engine, config, relations[0]["id"])
+                detect_relation_candidates(engine, config, candidate_id)
             set_component_version_lifecycle_status(
                 engine,
                 config,
@@ -358,14 +432,14 @@ class ComponentRepoRelationTest(unittest.TestCase):
         self.assertEqual(published["status"], config["versions"]["status"]["published"])
         self.assertEqual(len(published_components), 1)
         self.assertEqual(len(published_versions), 1)
-        self.assertEqual(persisted_size, (1.0, 1.0, 1.0))
+        self.assertEqual(persisted_size, (3.0, 1.0, 1.0))
         self.assertEqual(
             (
                 persisted_profile.width_stud,
                 persisted_profile.depth_stud,
                 persisted_profile.height_plate,
             ),
-            (1.0, 1.0, 1.0),
+            (3.0, 1.0, 1.0),
         )
         self.assertIsNone(archived_profile)
         self.assertEqual(archived_size, (None, None, None))
@@ -381,7 +455,7 @@ class ComponentRepoRelationTest(unittest.TestCase):
                 config,
                 storage,
                 "first.ldr",
-                pin_pair_ldraw(),
+                far_pair_ldraw(),
             )
             detect_relation_candidates(engine, config, first_candidate_id)
             first_free = list_free_connectors(engine, first_candidate_id)
@@ -420,7 +494,7 @@ class ComponentRepoRelationTest(unittest.TestCase):
                 storage,
                 config["artifacts"]["ldraw_ldr"],
                 "second.ldr",
-                pin_pair_ldraw().encode("utf-8"),
+                far_pair_ldraw().encode("utf-8"),
             )
             second_import = create_component_import(
                 engine,
@@ -457,6 +531,26 @@ class ComponentRepoRelationTest(unittest.TestCase):
                 engine,
                 config,
                 first_draft["component"]["id"],
+                actor=config["audit"]["system_user"],
+            )
+            with self.assertRaises(DomainError) as current_error:
+                delete_component_version(
+                    engine,
+                    config,
+                    second_published["id"],
+                    config["audit"]["system_user"],
+                )
+            old_deletion = delete_component_version(
+                engine,
+                config,
+                first_published["id"],
+                config["audit"]["system_user"],
+            )
+            remaining_versions = list_component_versions(
+                engine,
+                config,
+                first_draft["component"]["id"],
+                actor=config["audit"]["system_user"],
             )
             components = list_components(engine, config, "en-US")
 
@@ -471,6 +565,20 @@ class ComponentRepoRelationTest(unittest.TestCase):
             config["versions"]["status"]["draft"],
         )
         self.assertEqual(components[0]["currentVersionId"], second_published["id"])
+        self.assertEqual(
+            current_error.exception.code,
+            "component_repo.current_version_delete_forbidden",
+        )
+        self.assertFalse(old_deletion["componentDeleted"])
+        self.assertEqual(old_deletion["nextVersionId"], second_published["id"])
+        self.assertEqual(
+            [version["id"] for version in remaining_versions],
+            [second_published["id"]],
+        )
+        self.assertEqual(
+            remaining_versions[0]["deletion"],
+            {"allowed": False, "reason": "current"},
+        )
 
     def test_publish_rolls_back_when_basic_profile_upsert_fails(self) -> None:
         config = component_repo_config()
@@ -483,7 +591,7 @@ class ComponentRepoRelationTest(unittest.TestCase):
                 config,
                 storage,
                 "pin_pair.ldr",
-                pin_pair_ldraw(),
+                far_pair_ldraw(),
             )
             detect_relation_candidates(engine, config, candidate_id)
             free_connectors = list_free_connectors(engine, candidate_id)
@@ -704,6 +812,6 @@ def far_pair_ldraw() -> str:
     return (
         "0 FILE far_pair\n"
         "1 16 0 0 0 1 0 0 0 1 0 0 0 1 male.dat\n"
-        "1 16 20 0 0 1 0 0 0 1 0 0 0 1 female.dat\n"
+        "1 16 40 0 0 1 0 0 0 1 0 0 0 1 female.dat\n"
         "0 NOFILE\n"
     )

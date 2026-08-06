@@ -118,8 +118,6 @@ def localized_part_content(
     requested_locale: str,
 ) -> dict[str, Any]:
     requested_locale = normalize_content_locale(requested_locale)
-    if requested_locale == part.content_locale:
-        return part_source_content(part)
     translation = next(
         (
             row
@@ -129,7 +127,23 @@ def localized_part_content(
         ),
         None,
     )
-    if translation is not None:
+    return localized_part_content_from_translation(part, translation, requested_locale)
+
+
+def localized_part_content_from_translation(
+    part: LDrawPart,
+    translation: PartTranslation | None,
+    requested_locale: str,
+) -> dict[str, Any]:
+    """Select reviewed Part content when the matching translation is already loaded."""
+    requested_locale = normalize_content_locale(requested_locale)
+    if requested_locale == part.content_locale:
+        return part_source_content(part)
+    if (
+        translation is not None
+        and translation.locale == requested_locale
+        and translation.translation_status == TRANSLATION_REVIEWED
+    ):
         return {
             "name": translation.name,
             "description": translation.description,

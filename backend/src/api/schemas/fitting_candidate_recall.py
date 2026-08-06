@@ -28,6 +28,7 @@ class FittingCandidateRecallConnectorRequest(BaseModel):
 
 
 class FittingCandidateRecallRequest(BaseModel):
+    query: str | None = None
     candidateTypes: list[str] | None = None
     profileStatuses: list[str] | None = None
     bbox: FittingCandidateRecallBBoxRequest | None = None

@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, inspect, select
 from sqlalchemy.orm import selectinload, sessionmaker
 
+from src.api.errors import DomainError
 from src.i18n.domain_content import normalize_content_locale, validate_content_kind
 from src.config.fitting_candidate_profile_config import (
     FITTING_CANDIDATE_PROFILE_CONFIG,
@@ -25,6 +26,7 @@ from src.services.fitting_candidate_profile_service import (
     upsert_component_fitting_candidate_profile,
 )
 from src.component_repo.relation_service import (
+    ensure_part_library_version,
     expanded_world_parts,
     part_library_version_id_for_candidate,
     world_connectors_for_parts,
@@ -32,10 +34,15 @@ from src.component_repo.relation_service import (
 from src.component_repo.geometry_service import (
     clear_component_logical_size,
     component_geometry,
-    component_preview_meshes,
-    component_preview_parts,
+    component_part_summaries,
+    component_preview_data,
     part_preview_mesh,
     persist_component_logical_size,
+)
+from src.component_repo.interface_recognition_service import (
+    automatic_interface_signature,
+    ensure_component_connector_analysis,
+    persist_component_connector_analysis,
 )
 from src.model.models import (
     Component,
@@ -187,17 +194,19 @@ def validate_component_candidate(
             "relations_valid",
             relations_valid(session, component_candidate_id),
         )
-        interfaces = session.scalars(
-            select(ComponentInterface).where(
-                ComponentInterface.component_candidate_id == component_candidate_id,
-                ComponentInterface.review_status == config["interfaces"]["status"]["confirmed"],
-            )
-        ).all()
+        try:
+            interfaces = ensure_component_connector_analysis(
+                session,
+                config,
+                component_candidate_id,
+            )["externalInterfaces"]
+        except ValueError:
+            interfaces = []
         add_check(
             checks,
             issues,
             "interfaces_valid",
-            interfaces_valid(session, snapshot, component_candidate_id, interfaces),
+            bool(interfaces),
         )
         add_check(
             checks,
@@ -235,15 +244,27 @@ def ensure_component_candidate_draft(
     created_by: str | None = None,
 ) -> dict[str, Any]:
     """Idempotently create the editable ComponentVersion produced by one import."""
+    if inspect(engine).has_table(config["part_library"]["source_table"]):
+        ensure_part_library_version(engine, config)
     Session = sessionmaker(bind=engine)
     with Session() as session:
         candidate, snapshot, import_row = candidate_context(session, component_candidate_id)
         draft_version_id = (candidate.review_decisions_json or {}).get("draftVersionId")
         if draft_version_id:
             existing_version = session.get(ComponentVersion, draft_version_id)
-            if existing_version is not None:
+            if existing_version is not None and existing_version.deleted_at is None:
                 existing_component = session.get(Component, existing_version.component_id)
-                if existing_component is not None:
+                if existing_component is not None and existing_component.deleted_at is None:
+                    try:
+                        ensure_component_connector_analysis(
+                            session,
+                            config,
+                            component_candidate_id,
+                        )
+                    except ValueError as error:
+                        if str(error) != "No active part library version exists":
+                            raise
+                    session.commit()
                     return {
                         "component": component_response(existing_component),
                         "version": component_version_response(existing_version),
@@ -254,7 +275,10 @@ def ensure_component_candidate_draft(
             if import_row.target_component_id
             else None
         )
-        if import_row.target_component_id and component is None:
+        if (
+            import_row.target_component_id
+            and (component is None or component.deleted_at is not None)
+        ):
             raise ValueError(f"Component not found: {import_row.target_component_id}")
         source_artifact = session.get(ComponentArtifact, import_row.source_artifact_id)
         if source_artifact is None:
@@ -282,6 +306,8 @@ def ensure_component_candidate_draft(
             import_row.target_component_id = component.id
         base_version_id = import_row.base_version_id or component.current_version_id
         base_version = session.get(ComponentVersion, base_version_id) if base_version_id else None
+        if base_version is not None and base_version.deleted_at is not None:
+            base_version = None
         if base_version is not None and base_version.component_id != component.id:
             raise ValueError(f"Component version does not belong to component: {base_version_id}")
         version_name = base_version.version if base_version is not None else "0.1.0"
@@ -292,11 +318,14 @@ def ensure_component_candidate_draft(
             )
         ).all()
         revision = max(existing_revisions, default=0) + 1
-        interfaces = session.scalars(
-            select(ComponentInterface)
-            .where(ComponentInterface.component_candidate_id == component_candidate_id)
-            .order_by(ComponentInterface.created_at.asc())
-        ).all()
+        try:
+            interfaces = persist_component_connector_analysis(
+                session,
+                config,
+                component_candidate_id,
+            )["externalInterfaces"]
+        except ValueError:
+            interfaces = []
         part_library_version_id = safe_part_library_version_id_for_candidate(session, component_candidate_id)
         version_row = ComponentVersion(
             id=str(uuid4()),
@@ -311,7 +340,7 @@ def ensure_component_candidate_draft(
             parser_version=snapshot.parser_version,
             part_library_version_id=part_library_version_id,
             validation_report_id=None,
-            interface_signature=interface_signature(interfaces),
+            interface_signature=automatic_interface_signature(interfaces),
             structure_hash=stable_hash(snapshot.document_json),
             geometry_hash=stable_hash(bounding_box(snapshot.document_json) or {}),
             metadata_json={
@@ -352,12 +381,26 @@ def publish_component_version(
     Session = sessionmaker(bind=engine)
     with Session() as session:
         version = session.get(ComponentVersion, component_version_id)
-        if version is None:
+        if version is None or version.deleted_at is not None:
             raise ValueError(f"Component version not found: {component_version_id}")
+        component = session.get(Component, version.component_id)
+        if (
+            published_by is not None
+            and (
+                component is None
+                or component.deleted_at is not None
+                or component.content_kind == "official"
+                or component.created_by != published_by
+            )
+        ):
+            raise ValueError("component_repo.version_publish_forbidden")
         if version.status == config["versions"]["status"]["published"]:
-            component = session.get(Component, version.component_id)
             snapshot = session.get(ComponentSceneSnapshot, version.scene_snapshot_id)
-            if component is not None and snapshot is not None:
+            if (
+                component is not None
+                and component.deleted_at is None
+                and snapshot is not None
+            ):
                 geometry = component_geometry(session, snapshot.document_json)
                 if geometry is not None:
                     upsert_component_fitting_candidate_profile(
@@ -382,7 +425,7 @@ def publish_component_version(
 
     with Session() as session:
         version = session.get(ComponentVersion, component_version_id)
-        if version is None:
+        if version is None or version.deleted_at is not None:
             raise ValueError(f"Component version not found: {component_version_id}")
         if version.status != config["versions"]["status"]["draft"]:
             raise ValueError(f"Only draft component versions can be published: {component_version_id}")
@@ -392,21 +435,21 @@ def publish_component_version(
         if source_artifact.artifact_type not in config["artifacts"]["allowed_types"]:
             raise ValueError(f"Unsupported component version source artifact: {component_version_id}")
         candidate, snapshot, _import_row = candidate_context(session, version.component_candidate_id)
-        interfaces = session.scalars(
-            select(ComponentInterface)
-            .where(ComponentInterface.component_candidate_id == candidate.id)
-            .order_by(ComponentInterface.created_at.asc())
-        ).all()
+        interfaces = ensure_component_connector_analysis(
+            session,
+            config,
+            candidate.id,
+        )["externalInterfaces"]
         current_structure_hash = stable_hash(snapshot.document_json)
         current_geometry_hash = stable_hash(bounding_box(snapshot.document_json) or {})
-        current_interface_signature = interface_signature(interfaces)
+        current_interface_signature = automatic_interface_signature(interfaces)
         now = datetime.now(timezone.utc)
         component = session.scalar(
             select(Component)
             .where(Component.id == version.component_id)
             .with_for_update()
         )
-        if component is None:
+        if component is None or component.deleted_at is not None:
             raise ValueError(f"Component not found: {version.component_id}")
         if name is not None and name.strip():
             component.name = name.strip()
@@ -421,6 +464,7 @@ def publish_component_version(
                     ComponentVersion.version == version_name.strip(),
                     ComponentVersion.revision == version.revision,
                     ComponentVersion.id != version.id,
+                    ComponentVersion.deleted_at.is_(None),
                 )
             )
             if duplicate is not None:
@@ -431,6 +475,7 @@ def publish_component_version(
                 ComponentVersion.component_id == component.id,
                 ComponentVersion.status == config["versions"]["status"]["published"],
                 ComponentVersion.id != version.id,
+                ComponentVersion.deleted_at.is_(None),
             )
         ).all()
         for previous in previous_published:
@@ -485,7 +530,11 @@ def list_components(
     """List each logical Component once, optionally filtered by lifecycle status."""
     Session = sessionmaker(bind=engine)
     with Session() as session:
-        statement = select(Component).options(selectinload(Component.translations))
+        statement = (
+            select(Component)
+            .options(selectinload(Component.translations))
+            .where(Component.deleted_at.is_(None))
+        )
         if status is not None:
             statement = statement.where(Component.status == status)
         rows = session.scalars(statement.order_by(Component.created_at.desc())).all()
@@ -522,7 +571,10 @@ def first_component_preview(
                 raise ValueError("component_repo.preview_unavailable")
             version = session.scalar(
                 select(ComponentVersion)
-                .where(ComponentVersion.component_candidate_id == candidate.id)
+                .where(
+                    ComponentVersion.component_candidate_id == candidate.id,
+                    ComponentVersion.deleted_at.is_(None),
+                )
                 .order_by(ComponentVersion.created_at.desc(), ComponentVersion.id.desc())
             )
             component = session.get(Component, version.component_id) if version is not None else None
@@ -531,6 +583,7 @@ def first_component_preview(
                     session,
                     snapshot,
                     config,
+                    content_locale=normalized_locale,
                     source={
                         "kind": "component",
                         "id": component.id,
@@ -552,6 +605,7 @@ def first_component_preview(
                 session,
                 snapshot,
                 config,
+                content_locale=normalized_locale,
                 source={
                     "kind": "import",
                     "id": import_row.id,
@@ -569,6 +623,7 @@ def first_component_preview(
         component = session.scalar(
             select(Component)
             .options(selectinload(Component.translations))
+            .where(Component.deleted_at.is_(None))
             .order_by(Component.created_at.desc(), Component.id.desc())
         )
         if component is None:
@@ -578,10 +633,15 @@ def first_component_preview(
             if component.current_version_id is not None
             else None
         )
+        if version is not None and version.deleted_at is not None:
+            version = None
         if version is None:
             version = session.scalar(
                 select(ComponentVersion)
-                .where(ComponentVersion.component_id == component.id)
+                .where(
+                    ComponentVersion.component_id == component.id,
+                    ComponentVersion.deleted_at.is_(None),
+                )
                 .order_by(ComponentVersion.created_at.desc(), ComponentVersion.id.desc())
             )
         if version is None:
@@ -594,6 +654,7 @@ def first_component_preview(
             session,
             snapshot,
             config,
+            content_locale=normalized_locale,
             source={
                 "kind": "component",
                 "id": component.id,
@@ -616,17 +677,18 @@ def component_version_preview(
     Session = sessionmaker(bind=engine)
     with Session() as session:
         version = session.get(ComponentVersion, component_version_id)
-        if version is None:
+        if version is None or version.deleted_at is not None:
             return None
         component = session.get(Component, version.component_id)
         snapshot = session.get(ComponentSceneSnapshot, version.scene_snapshot_id)
-        if component is None or snapshot is None:
+        if component is None or component.deleted_at is not None or snapshot is None:
             raise ValueError("component_repo.preview_unavailable")
         localized_content = localized_component_content(session, component, normalized_locale)
         return component_preview_payload(
             session,
             snapshot,
             config,
+            content_locale=normalized_locale,
             source={
                 "kind": "component",
                 "id": component.id,
@@ -636,6 +698,58 @@ def component_version_preview(
             component=component_response(component, localized_content),
             version_id=version.id,
         )
+
+
+def component_version_parts(
+    engine: Engine,
+    component_version_id: str,
+    content_locale: str,
+) -> dict[str, Any] | None:
+    """Load a version BOM and display metadata without transferring its scene JSON."""
+    normalized_locale = normalize_content_locale(content_locale)
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        version = session.get(ComponentVersion, component_version_id)
+        if version is None or version.deleted_at is not None:
+            return None
+        metadata = version.metadata_json or {}
+        summary = metadata.get("summary") if isinstance(metadata.get("summary"), dict) else {}
+        bom = summary.get("bom") if isinstance(summary.get("bom"), dict) else None
+        if bom is None:
+            bom = session.scalar(
+                select(ComponentSceneSnapshot.bom_json).where(
+                    ComponentSceneSnapshot.id == version.scene_snapshot_id
+                )
+            ) or {}
+        preview = metadata.get("preview") if isinstance(metadata.get("preview"), dict) else {}
+        availability = (
+            preview.get("partAvailability")
+            if isinstance(preview.get("partAvailability"), dict)
+            else {}
+        )
+        parts = component_part_summaries(
+            session,
+            bom,
+            normalized_locale,
+            availability,
+        )
+        part_count = sum(int(quantity) for quantity in bom.values())
+        logical_size = preview.get("logicalSize")
+        if not isinstance(logical_size, dict):
+            logical_size = {}
+        return {
+            "versionId": version.id,
+            "partCount": part_count,
+            "renderablePartCount": int(
+                preview.get("renderablePartCount", part_count)
+            ),
+            "logicalSize": {
+                "widthStud": float(logical_size.get("widthStud", 0)),
+                "depthStud": float(logical_size.get("depthStud", 0)),
+                "heightPlate": float(logical_size.get("heightPlate", 0)),
+            },
+            "parts": parts,
+        }
 
 
 def library_item_preview(
@@ -663,7 +777,10 @@ def library_item_preview(
         component = session.scalar(
             select(Component)
             .options(selectinload(Component.translations))
-            .where(Component.id == item_id)
+            .where(
+                Component.id == item_id,
+                Component.deleted_at.is_(None),
+            )
         )
         if component is None:
             return None
@@ -672,10 +789,15 @@ def library_item_preview(
             if component.current_version_id is not None
             else None
         )
+        if version is not None and version.deleted_at is not None:
+            version = None
         if version is None:
             version = session.scalar(
                 select(ComponentVersion)
-                .where(ComponentVersion.component_id == component.id)
+                .where(
+                    ComponentVersion.component_id == component.id,
+                    ComponentVersion.deleted_at.is_(None),
+                )
                 .order_by(ComponentVersion.created_at.desc(), ComponentVersion.id.desc())
             )
         if version is None:
@@ -692,6 +814,7 @@ def library_item_preview(
             session,
             snapshot,
             config,
+            content_locale=normalized_locale,
             source={
                 "kind": "component",
                 "id": component.id,
@@ -750,6 +873,7 @@ def part_item_preview(
         "component": None,
         "versionId": None,
         "partCount": 1,
+        "renderablePartCount": 1,
         "logicalSize": {
             "widthStud": width_stud,
             "depthStud": depth_stud,
@@ -772,6 +896,24 @@ def part_item_preview(
                     "maxY": max_y,
                     "maxZ": max_z,
                 },
+            }
+        ],
+        "partInventory": [
+            {
+                "instanceId": part.ldraw_part_num,
+                "partRef": part.ldraw_part_num,
+                "colorCode": "16",
+                "availability": "ready",
+            }
+        ],
+        "partCatalog": [
+            {
+                "partRef": part.ldraw_part_num,
+                "name": localized_content["name"] or part.ldraw_part_num,
+                "contentLocale": localized_content["contentLocale"],
+                "translationStatus": localized_content["translationStatus"],
+                "imageUrl": None,
+                "availability": "ready",
             }
         ],
         "meshes": [mesh],
@@ -806,11 +948,14 @@ def component_candidate_preview(
 
         version = session.scalar(
             select(ComponentVersion)
-            .where(ComponentVersion.component_candidate_id == candidate.id)
+            .where(
+                ComponentVersion.component_candidate_id == candidate.id,
+                ComponentVersion.deleted_at.is_(None),
+            )
             .order_by(ComponentVersion.created_at.desc(), ComponentVersion.id.desc())
         )
         component = session.get(Component, version.component_id) if version is not None else None
-        if component is not None:
+        if component is not None and component.deleted_at is None:
             localized_content = localized_component_content(
                 session,
                 component,
@@ -820,6 +965,7 @@ def component_candidate_preview(
                 session,
                 snapshot,
                 config,
+                content_locale=normalized_locale,
                 source={
                     "kind": "component",
                     "id": component.id,
@@ -835,6 +981,7 @@ def component_candidate_preview(
             session,
             snapshot,
             config,
+            content_locale=normalized_locale,
             source={
                 "kind": "import",
                 "id": import_row.id,
@@ -855,6 +1002,7 @@ def component_preview_payload(
     snapshot: ComponentSceneSnapshot,
     config: dict[str, Any],
     *,
+    content_locale: str,
     source: dict[str, str],
     component: dict[str, Any] | None,
     version_id: str | None,
@@ -863,26 +1011,33 @@ def component_preview_payload(
 
     Component records do not persist a second geometry collection. Their scene snapshot
     supplies instance references and transforms, while the configured LDraw library is
-    parsed for each unique Part mesh. Missing bounds or meshes fail the whole payload to
-    prevent a dimensionally incorrect partial preview.
+    parsed for each unique Part mesh. Missing bounds or meshes are retained in the
+    inventory but excluded from logical size, connector, and GLB calculations.
     """
-    geometry = component_geometry(session, snapshot.document_json)
-    parts = component_preview_parts(session, snapshot.document_json)
-    meshes = component_preview_meshes(session, snapshot.document_json, config)
-    if geometry is None or parts is None or meshes is None:
+    preview_data = component_preview_data(
+        session,
+        snapshot.document_json,
+        config,
+        content_locale,
+    )
+    if preview_data is None:
         raise ValueError("component_repo.preview_unavailable")
+    geometry = preview_data["geometry"]
     return {
         "source": source,
         "component": component,
         "versionId": version_id,
-        "partCount": geometry["partCount"],
+        "partCount": len(preview_data["partInventory"]),
+        "renderablePartCount": geometry["partCount"],
         "logicalSize": {
             "widthStud": geometry["widthStud"],
             "depthStud": geometry["depthStud"],
             "heightPlate": geometry["heightPlate"],
         },
-        "parts": parts,
-        "meshes": meshes,
+        "parts": preview_data["parts"],
+        "partInventory": preview_data["partInventory"],
+        "partCatalog": preview_data["partCatalog"],
+        "meshes": preview_data["meshes"],
     }
 
 
@@ -899,7 +1054,10 @@ def get_component(
         component = session.scalar(
             select(Component)
             .options(selectinload(Component.translations))
-            .where(Component.id == component_id)
+            .where(
+                Component.id == component_id,
+                Component.deleted_at.is_(None),
+            )
         )
         if component is None:
             return None
@@ -916,15 +1074,25 @@ def list_component_versions(
     config: dict[str, Any],
     component_id: str,
     status: str | None = None,
+    actor: str | None = None,
 ) -> list[dict[str, Any]]:
     """List the complete editable and published version history."""
     Session = sessionmaker(bind=engine)
     with Session() as session:
-        statement = select(ComponentVersion).where(ComponentVersion.component_id == component_id)
+        component = session.get(Component, component_id)
+        if component is None or component.deleted_at is not None:
+            return []
+        statement = select(ComponentVersion).where(
+            ComponentVersion.component_id == component_id,
+            ComponentVersion.deleted_at.is_(None),
+        )
         if status is not None:
             statement = statement.where(ComponentVersion.status == status)
         rows = session.scalars(statement.order_by(ComponentVersion.created_at.desc())).all()
-        return [component_version_response(row) for row in rows]
+        return [
+            component_version_response(row, component=component, actor=actor)
+            for row in rows
+        ]
 
 
 def get_component_version(
@@ -932,16 +1100,118 @@ def get_component_version(
     config: dict[str, Any],
     component_version_id: str,
     status: str | None = None,
+    actor: str | None = None,
 ) -> dict[str, Any] | None:
     """Get one editable or published version."""
     Session = sessionmaker(bind=engine)
     with Session() as session:
         version = session.get(ComponentVersion, component_version_id)
-        if version is None:
+        if version is None or version.deleted_at is not None:
             return None
         if status is not None and version.status != status:
             return None
-        return component_version_response(version)
+        component = session.get(Component, version.component_id)
+        if component is None or component.deleted_at is not None:
+            return None
+        return component_version_response(version, component=component, actor=actor)
+
+
+def delete_component_version(
+    engine: Engine,
+    config: dict[str, Any],
+    component_version_id: str,
+    actor: str,
+) -> dict[str, Any]:
+    """Logically delete one owned, non-current ComponentVersion.
+
+    Source artifacts, parsed snapshots, and candidates are intentionally retained:
+    those records may be shared with imports or other versions and require a
+    reference-aware garbage collector rather than an inline destructive cascade.
+    """
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        version = session.scalar(
+            select(ComponentVersion)
+            .where(ComponentVersion.id == component_version_id)
+            .with_for_update()
+        )
+        if version is None:
+            raise DomainError(
+                "component_repo.version_not_found",
+                {"versionId": component_version_id},
+                404,
+            )
+        component = session.scalar(
+            select(Component)
+            .where(Component.id == version.component_id)
+            .with_for_update()
+        )
+        if component is None:
+            raise DomainError(
+                "component_repo.component_not_found",
+                {"componentId": version.component_id},
+                404,
+            )
+        if component.created_by != actor or component.content_kind == "official":
+            raise DomainError(
+                "component_repo.version_delete_forbidden",
+                {
+                    "versionId": version.id,
+                    "componentId": component.id,
+                },
+                403,
+            )
+        if component.current_version_id == version.id:
+            raise DomainError(
+                "component_repo.current_version_delete_forbidden",
+                {
+                    "versionId": version.id,
+                    "componentId": component.id,
+                },
+                409,
+            )
+
+        if version.deleted_at is None:
+            version.deleted_at = datetime.now(timezone.utc)
+            version.deleted_by = actor
+            candidate = session.get(ComponentCandidate, version.component_candidate_id)
+            if candidate is not None:
+                decisions = dict(candidate.review_decisions_json or {})
+                for key in ("draftVersionId", "publishedVersionId"):
+                    if decisions.get(key) == version.id:
+                        decisions.pop(key, None)
+                candidate.review_decisions_json = decisions
+
+        remaining = session.scalars(
+            select(ComponentVersion)
+            .where(
+                ComponentVersion.component_id == component.id,
+                ComponentVersion.deleted_at.is_(None),
+                ComponentVersion.id != version.id,
+            )
+            .order_by(ComponentVersion.created_at.desc(), ComponentVersion.id.desc())
+        ).all()
+        component_deleted = not remaining and component.current_version_id is None
+        if component_deleted and component.deleted_at is None:
+            component.deleted_at = version.deleted_at
+            component.deleted_by = actor
+            remove_component_fitting_candidate_profile(
+                session,
+                FITTING_CANDIDATE_PROFILE_CONFIG,
+                component.id,
+            )
+
+        next_version_id = (
+            component.current_version_id
+            or (remaining[0].id if remaining else None)
+        )
+        session.commit()
+        return {
+            "versionId": version.id,
+            "componentId": component.id,
+            "componentDeleted": component_deleted,
+            "nextVersionId": next_version_id,
+        }
 
 
 def set_component_version_lifecycle_status(
@@ -960,7 +1230,7 @@ def set_component_version_lifecycle_status(
     Session = sessionmaker(bind=engine)
     with Session() as session:
         version = session.get(ComponentVersion, component_version_id)
-        if version is None:
+        if version is None or version.deleted_at is not None:
             raise ValueError(f"Component version not found: {component_version_id}")
         if version.status != config["versions"]["status"]["published"]:
             raise ValueError(f"Only published component versions can change lifecycle status: {component_version_id}")
@@ -990,7 +1260,7 @@ def component_version_source_artifact_id(
     Session = sessionmaker(bind=engine)
     with Session() as session:
         version = session.get(ComponentVersion, component_version_id)
-        if version is None:
+        if version is None or version.deleted_at is not None:
             raise ValueError(f"Component version not found: {component_version_id}")
         return version.source_artifact_id
 
@@ -1007,6 +1277,7 @@ def ensure_candidate_not_published(
         select(ComponentVersion).where(
             ComponentVersion.component_candidate_id == component_candidate_id,
             ComponentVersion.status == config["versions"]["status"]["published"],
+            ComponentVersion.deleted_at.is_(None),
         )
     )
     if published is not None:
@@ -1190,6 +1461,20 @@ def component_response(
     content: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     content = content or component_source_content(component)
+    logical_size_values = (
+        component.logical_width_stud,
+        component.logical_depth_stud,
+        component.logical_height_plate,
+    )
+    logical_size = (
+        None
+        if any(value is None for value in logical_size_values)
+        else {
+            "widthStud": logical_size_values[0],
+            "depthStud": logical_size_values[1],
+            "heightPlate": logical_size_values[2],
+        }
+    )
     return {
         "id": component.id,
         "name": content["name"],
@@ -1199,6 +1484,7 @@ def component_response(
         "category": component.category,
         "status": component.status,
         "currentVersionId": component.current_version_id,
+        "logicalSize": logical_size,
         "description": content["description"],
         "tags": content["tags"],
         "metadata": component.metadata_json or {},
@@ -1208,7 +1494,20 @@ def component_response(
     }
 
 
-def component_version_response(version: ComponentVersion) -> dict[str, Any]:
+def component_version_response(
+    version: ComponentVersion,
+    *,
+    component: Component | None = None,
+    actor: str | None = None,
+) -> dict[str, Any]:
+    deletion = None
+    if component is not None and actor is not None:
+        if component.created_by != actor or component.content_kind == "official":
+            deletion = {"allowed": False, "reason": "forbidden"}
+        elif component.current_version_id == version.id:
+            deletion = {"allowed": False, "reason": "current"}
+        else:
+            deletion = {"allowed": True, "reason": None}
     return {
         "id": version.id,
         "componentId": version.component_id,
@@ -1225,8 +1524,20 @@ def component_version_response(version: ComponentVersion) -> dict[str, Any]:
         "interfaceSignature": version.interface_signature,
         "structureHash": version.structure_hash,
         "geometryHash": version.geometry_hash,
+        "previewArtifactId": version.preview_artifact_id,
+        "previewStatus": version.preview_status,
+        "previewGeneratorVersion": version.preview_generator_version,
+        "previewFailure": (
+            {
+                "code": version.preview_failure_code,
+                "params": version.preview_failure_params_json or {},
+            }
+            if version.preview_failure_code
+            else None
+        ),
         "metadata": version.metadata_json or {},
         "createdBy": version.created_by,
         "createdAt": version.created_at.isoformat(),
         "publishedAt": version.published_at.isoformat() if version.published_at else None,
+        "deletion": deletion,
     }

@@ -1,0 +1,2 @@
+-- G1 intentionally defines no application tables.
+-- G2 will replace this scaffold with the PostgreSQL Component Repo baseline.

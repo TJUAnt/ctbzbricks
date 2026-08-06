@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -74,6 +75,24 @@ def test_domain_error_response_contains_code_params_and_trace_id() -> None:
         }
     }
     assert response.headers["X-Trace-Id"].startswith("req_")
+
+
+def test_request_timing_is_logged_on_the_backend_without_query_values(caplog) -> None:
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        response = TestClient(contract_app()).get("/domain?token=hidden")
+
+    timing_record = next(
+        record for record in caplog.records
+        if record.getMessage().startswith("API request completed")
+    )
+    assert response.status_code == 404
+    assert timing_record.method == "GET"
+    assert timing_record.route == "/domain"
+    assert timing_record.status == 404
+    assert isinstance(timing_record.durationMs, float)
+    assert timing_record.traceId == response.headers["X-Trace-Id"]
+    assert "token" not in timing_record.getMessage()
+    assert "hidden" not in timing_record.getMessage()
 
 
 def test_validation_errors_have_stable_field_paths_codes_and_params() -> None:

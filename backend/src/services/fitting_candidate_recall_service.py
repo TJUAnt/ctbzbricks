@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+from itertools import permutations
 from math import ceil
+import re
 from typing import Any
 
 from sqlalchemy import Engine, and_, func, literal, or_, select, true, union_all
@@ -140,6 +142,7 @@ def normalized_recall_query(
     config: dict[str, Any],
     request: FittingCandidateRecallRequest,
 ) -> dict[str, Any]:
+    search_query = parse_search_query(request.query)
     page_size = (
         request.pageSize
         if request.pageSize is not None
@@ -166,6 +169,10 @@ def normalized_recall_query(
         "categories": request.categories,
         "color_codes": request.colorCodes,
         "key": normalize_search_text(request.key),
+        "keywords": search_query["keywords"] if request.query is not None else None,
+        "search_dimensions": (
+            search_query["dimensions"] if request.query is not None else None
+        ),
         "allow_planar_rotation": request.allowPlanarRotation,
         "include_irregular": (
             request.includeIrregular
@@ -175,6 +182,41 @@ def normalized_recall_query(
         "page": request.page,
         "page_size": min(page_size, config["limits"]["max_limit"]),
     }
+
+
+def parse_search_query(value: str | None) -> dict[str, list[Any]]:
+    """Split one search box into strict size alternatives and fuzzy name keywords."""
+    dimensions: list[tuple[float, ...]] = []
+    keywords: list[str] = []
+    seen_dimensions: set[tuple[float, ...]] = set()
+    seen_keywords: set[str] = set()
+    for raw_fragment in re.split(r"[,，\s]+", value or ""):
+        fragment = raw_fragment.strip()
+        if not fragment:
+            continue
+        size = parsed_dimension_fragment(fragment)
+        if size is not None:
+            normalized_size = tuple(sorted(size))
+            if normalized_size not in seen_dimensions:
+                seen_dimensions.add(normalized_size)
+                dimensions.append(normalized_size)
+            continue
+        keyword = normalize_search_text(fragment)
+        if keyword is not None and keyword not in seen_keywords:
+            seen_keywords.add(keyword)
+            keywords.append(keyword)
+    return {"dimensions": dimensions, "keywords": keywords}
+
+
+def parsed_dimension_fragment(value: str) -> tuple[float, ...] | None:
+    match = re.fullmatch(
+        r"\s*(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)"
+        r"(?:\s*[xX×]\s*(\d+(?:\.\d+)?))?\s*",
+        value,
+    )
+    if match is None:
+        return None
+    return tuple(float(item) for item in match.groups() if item is not None)
 
 
 def normalized_bbox_query(
@@ -281,6 +323,14 @@ def ready_candidate_responses(
         )
     if query["logical_size"] is not None:
         statement = statement.where(persisted_logical_size_filter(config, query))
+    if query["search_dimensions"]:
+        statement = statement.where(
+            persisted_search_dimension_filter(query["search_dimensions"])
+        )
+    if query["keywords"]:
+        statement = statement.where(
+            persisted_keywords_filter(config, query["keywords"])
+        )
     if query["key"] is not None:
         statement = statement.where(persisted_name_filter(config, query["key"]))
     profiles = session.scalars(statement).all()
@@ -307,6 +357,16 @@ def persisted_name_filter(config: dict[str, Any], key: str):
     )
 
 
+def persisted_keywords_filter(config: dict[str, Any], keywords: list[str]):
+    """Match at least one comma-delimited keyword against the persisted source name."""
+    name = FittingCandidateProfile.appearance_tags_json[
+        config["json_keys"]["name"]
+    ].as_string()
+    return or_(
+        *(func.lower(name).contains(keyword, autoescape=True) for keyword in keywords)
+    )
+
+
 def persisted_logical_size_filter(
     config: dict[str, Any],
     query: dict[str, Any],
@@ -319,6 +379,22 @@ def persisted_logical_size_filter(
         FittingCandidateProfile.depth_stud,
         FittingCandidateProfile.height_plate,
     )
+
+
+def persisted_search_dimension_filter(dimensions: list[tuple[float, ...]]):
+    stored_dimensions = (
+        FittingCandidateProfile.width_stud,
+        FittingCandidateProfile.depth_stud,
+        FittingCandidateProfile.height_plate,
+    )
+    alternatives = []
+    for dimension in dimensions:
+        columns = stored_dimensions[: len(dimension)]
+        alternatives.extend(
+            and_(*(column == value for column, value in zip(columns, ordering)))
+            for ordering in set(permutations(dimension))
+        )
+    return or_(*alternatives)
 
 
 def persisted_dimension_filter(
@@ -456,6 +532,15 @@ def irregular_candidate_responses(
                 )
             )
         )
+    if query["keywords"]:
+        statement = statement.where(
+            or_(
+                *(
+                    func.lower(LDrawPart.name).contains(keyword, autoescape=True)
+                    for keyword in query["keywords"]
+                )
+            )
+        )
     rows = session.execute(statement)
     responses = []
     for part, geometry, profile in rows:
@@ -581,6 +666,30 @@ def fuzzy_name_match(
     query: dict[str, Any],
     payload: dict[str, Any],
 ) -> dict[str, Any] | None:
+    keywords = query["keywords"]
+    if keywords is not None:
+        if not keywords:
+            return None
+        appearance = payload.get("appearance_tags") or {}
+        value = appearance.get(config["json_keys"]["name"])
+        if not isinstance(value, str) or normalize_search_text(value) is None:
+            return None
+        scores = [
+            name_similarity(keyword, value)
+            for keyword in keywords
+        ]
+        matched_scores = [
+            score
+            for score in scores
+            if score >= config["fuzzy_key"]["minimum_score"]
+        ]
+        if not matched_scores:
+            return None
+        return {
+            "value": value,
+            "score": round(sum(matched_scores) / len(matched_scores), 4),
+            "count": len(matched_scores),
+        }
     key = query["key"]
     if key is None:
         return None
@@ -700,6 +809,10 @@ def filter_reasons(
         return None
     if query["logical_size"] is not None:
         reasons.append(config["response"]["logical_size_filter_reason"])
+    if not search_dimensions_match(config, query, payload):
+        return None
+    if query["search_dimensions"]:
+        reasons.append(config["response"]["logical_size_filter_reason"])
     if not connectors_match(config, query, payload):
         return None
     if query["connectors"]:
@@ -716,7 +829,33 @@ def filter_reasons(
         if key_match is None:
             return None
         reasons.append(config["response"]["key_filter_reason"])
+    if query["keywords"]:
+        if key_match is None:
+            return None
+        reasons.append(config["response"]["key_filter_reason"])
     return reasons
+
+
+def search_dimensions_match(
+    config: dict[str, Any],
+    query: dict[str, Any],
+    payload: dict[str, Any],
+) -> bool:
+    search_dimensions = query["search_dimensions"]
+    if not search_dimensions:
+        return True
+    keys = config["json_keys"]
+    logical_size = payload["logical_size"][keys["logical_size"]]
+    candidate_dimensions = (
+        logical_size.get(keys["width_stud"]),
+        logical_size.get(keys["depth_stud"]),
+        logical_size.get(keys["height_plate"]),
+    )
+    return any(
+        None not in candidate_dimensions[: len(dimension)]
+        and tuple(sorted(candidate_dimensions[: len(dimension)])) == dimension
+        for dimension in search_dimensions
+    )
 
 
 def bbox_matches(
@@ -927,7 +1066,9 @@ def key_match_score(
 ) -> float:
     if key_match is None:
         return 0.0
-    return key_match["score"] * config["scoring"]["key_match_weight"]
+    weight = config["scoring"]["key_match_weight"]
+    extra_keyword_count = max(0, int(key_match.get("count", 1)) - 1)
+    return key_match["score"] * weight + extra_keyword_count * weight * 2
 
 
 def connector_score(config: dict[str, Any], query: dict[str, Any]) -> float:

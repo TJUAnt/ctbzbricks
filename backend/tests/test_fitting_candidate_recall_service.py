@@ -36,7 +36,10 @@ from src.model.models import (
 from src.services.fitting_candidate_profile_service import (
     ensure_fitting_candidate_profile_table,
 )
-from src.services.fitting_candidate_recall_service import recall_fitting_candidates
+from src.services.fitting_candidate_recall_service import (
+    parse_search_query,
+    recall_fitting_candidates,
+)
 from src.services import fitting_candidate_recall_service as recall_service
 from src.services.part_shape_profile_service import (
     ensure_part_shape_profile_table,
@@ -126,6 +129,105 @@ class FittingCandidateRecallServiceTest(unittest.TestCase):
         self.assertEqual(response.total, 1)
         self.assertEqual(response.candidates[0].matchedName, "Plate 1 x 1")
         self.assertGreater(response.candidates[0].keyScore, 0.8)
+
+    def test_single_search_query_extracts_sizes_and_keywords(self) -> None:
+        self.assertEqual(
+            parse_search_query(" 4x2, Plate ， 3×1×2 plate "),
+            {
+                "dimensions": [(2.0, 4.0), (1.0, 2.0, 3.0)],
+                "keywords": ["plate"],
+            },
+        )
+        self.assertEqual(
+            parse_search_query("2x2x1 tile"),
+            {
+                "dimensions": [(1.0, 2.0, 2.0)],
+                "keywords": ["tile"],
+            },
+        )
+
+    def test_single_search_query_matches_any_keyword_and_ranks_match_count(self) -> None:
+        config = recall_config()
+        engine = test_engine()
+        seed_ready_part_candidate(
+            engine,
+            config,
+            candidate_id="plate-only.dat",
+            name="Plate 1 x 1",
+        )
+        seed_ready_part_candidate(
+            engine,
+            config,
+            candidate_id="plate-brick.dat",
+            name="Technic Plate Brick",
+        )
+        seed_ready_part_candidate(
+            engine,
+            config,
+            candidate_id="tile-only.dat",
+            name="Tile 1 x 1",
+        )
+
+        response = recall_fitting_candidates(
+            engine,
+            config,
+            FittingCandidateRecallRequest(
+                candidateTypes=["part"],
+                query="plate, brick",
+            ),
+        )
+
+        self.assertEqual(response.total, 2)
+        self.assertEqual(
+            [candidate.candidateId for candidate in response.candidates],
+            ["plate-brick.dat", "plate-only.dat"],
+        )
+
+    def test_single_search_query_strictly_matches_sorted_dimensions(self) -> None:
+        config = recall_config()
+        engine = test_engine()
+        seed_ready_part_candidate(
+            engine,
+            config,
+            candidate_id="matching.dat",
+            width_stud=2,
+            depth_stud=4,
+            height_plate=1,
+        )
+        seed_ready_part_candidate(
+            engine,
+            config,
+            candidate_id="wrong-height.dat",
+            width_stud=2,
+            depth_stud=4,
+            height_plate=2,
+        )
+
+        three_dimensional = recall_fitting_candidates(
+            engine,
+            config,
+            FittingCandidateRecallRequest(
+                candidateTypes=["part"],
+                query="4x1x2",
+            ),
+        )
+        two_dimensional = recall_fitting_candidates(
+            engine,
+            config,
+            FittingCandidateRecallRequest(
+                candidateTypes=["part"],
+                query="4x2",
+            ),
+        )
+
+        self.assertEqual(
+            [candidate.candidateId for candidate in three_dimensional.candidates],
+            ["matching.dat"],
+        )
+        self.assertEqual(
+            {candidate.candidateId for candidate in two_dimensional.candidates},
+            {"matching.dat", "wrong-height.dat"},
+        )
 
     def test_recall_allows_planar_dimension_rotation(self) -> None:
         config = recall_config()
@@ -454,6 +556,7 @@ def seed_ready_part_candidate(
     candidate_id: str = "3024.dat",
     width_stud: float = 1,
     depth_stud: float = 1,
+    height_plate: float = 1,
     name: str = "Plate 1 x 1",
 ) -> None:
     Session = sessionmaker(bind=engine)
@@ -477,12 +580,12 @@ def seed_ready_part_candidate(
                     "logicalSize": {
                         "widthStud": width_stud,
                         "depthStud": depth_stud,
-                        "heightPlate": 1,
+                        "heightPlate": height_plate,
                     }
                 },
                 width_stud=width_stud,
                 depth_stud=depth_stud,
-                height_plate=1,
+                height_plate=height_plate,
                 is_sticker=False,
                 normalized_type="plate",
                 shape_profile_json={},

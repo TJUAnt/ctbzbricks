@@ -27,6 +27,9 @@ class ArtifactStorage(Protocol):
     def head(self, storage_key: str) -> "ArtifactObjectMetadata":
         """Read object metadata without downloading the object body."""
 
+    def delete(self, storage_key: str) -> None:
+        """Permanently remove one object."""
+
     def create_download_url(self, storage_key: str, expires_in: int) -> str | None:
         """Return a direct temporary download URL when supported."""
 
@@ -73,6 +76,14 @@ class LocalArtifactStorage:
         except OSError as error:
             raise ArtifactStorageError(
                 f"Local artifact head failed for bucket={self.bucket}, key={storage_key}"
+            ) from error
+
+    def delete(self, storage_key: str) -> None:
+        try:
+            self._target_path(storage_key).unlink(missing_ok=True)
+        except OSError as error:
+            raise ArtifactStorageError(
+                f"Local artifact deletion failed for bucket={self.bucket}, key={storage_key}"
             ) from error
 
     def create_download_url(self, storage_key: str, expires_in: int) -> str | None:
@@ -141,6 +152,16 @@ class SupabaseArtifactStorage:
             etag=payload.get("etag"),
         )
 
+    def delete(self, storage_key: str) -> None:
+        response = httpx.request(
+            "DELETE",
+            self._bucket_object_url(),
+            json={"prefixes": [storage_key]},
+            headers=self._auth_headers(),
+            timeout=30,
+        )
+        raise_for_storage_status("delete", self.bucket, storage_key, response)
+
     def create_download_url(self, storage_key: str, expires_in: int) -> str | None:
         response = httpx.post(
             self._sign_url(storage_key),
@@ -166,6 +187,10 @@ class SupabaseArtifactStorage:
     def _object_url(self, storage_key: str) -> str:
         base_url = self.supabase_url.rstrip("/")
         return f"{base_url}/storage/v1/object/{self.bucket}/{storage_key}"
+
+    def _bucket_object_url(self) -> str:
+        base_url = self.supabase_url.rstrip("/")
+        return f"{base_url}/storage/v1/object/{self.bucket}"
 
     def _sign_url(self, storage_key: str) -> str:
         base_url = self.supabase_url.rstrip("/")
@@ -208,7 +233,10 @@ def storage_from_config(config: dict, backend_root: Path) -> ArtifactStorage:
         )
     if provider == storage_config["supabase_provider"]:
         supabase_url = env_value(storage_config["supabase_url_env"], env_values)
-        api_key = env_value(storage_config["supabase_storage_key_env"], env_values)
+        api_key = env_value(
+            storage_config["supabase_publishable_key_env"],
+            env_values,
+        )
         if not api_key:
             api_key = first_env_value(
                 storage_config.get("supabase_legacy_key_envs", []),

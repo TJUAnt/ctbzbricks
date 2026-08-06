@@ -301,7 +301,11 @@ def save_component_fitting_candidate_profile(
     Session = sessionmaker(bind=engine)
     with Session() as session:
         component = session.get(Component, component_id)
-        if component is None or component.current_version_id is None:
+        if (
+            component is None
+            or component.deleted_at is not None
+            or component.current_version_id is None
+        ):
             raise ValueError(
                 config["errors"]["candidate_not_found"].format(
                     candidate_type=config["profile"]["candidate_types"]["component"],
@@ -309,7 +313,7 @@ def save_component_fitting_candidate_profile(
                 )
             )
         version = session.get(ComponentVersion, component.current_version_id)
-        if version is None:
+        if version is None or version.deleted_at is not None:
             raise ValueError(
                 config["errors"]["candidate_not_found"].format(
                     candidate_type=config["profile"]["candidate_types"]["component"],
@@ -372,13 +376,14 @@ def backfill_basic_fitting_candidate_profiles(
         components = session.scalars(
             select(Component)
             .where(Component.status == component_status)
+            .where(Component.deleted_at.is_(None))
             .where(Component.current_version_id.is_not(None))
             .order_by(Component.created_at)
         ).all()
         component_records = []
         for component in components:
             version = session.get(ComponentVersion, component.current_version_id)
-            if version is None:
+            if version is None or version.deleted_at is not None:
                 raise ValueError("fitting_candidate_profile.component_version_not_found")
             snapshot = session.get(ComponentSceneSnapshot, version.scene_snapshot_id)
             if snapshot is None:
