@@ -4,6 +4,7 @@
 > 更新日期：2026-08-06
 > 原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)
 > 进度：[go_migration_progress.md](./go_migration_progress.md)
+> G2 schema 决策：[go_component_schema_baseline.md](./go_component_schema_baseline.md)
 
 ## 1. 范围与假设
 
@@ -264,7 +265,7 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - 编写 Goose baseline；
 - 编写 sqlc query schema 输入；
 - PostgreSQL 集成测试；
-- 明确 Alembic -> Goose 一次性交接；
+- 将 `component_repo` schema 的 authority 从 Alembic 边界中剥离并交给 Goose；legacy `public` 域暂由 Alembic 管理；
 - 开发数据 reset/reseed runbook。
 
 验收：
@@ -272,7 +273,7 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - 空 PostgreSQL 可以从零升级到 head；
 - schema 与 sqlc 生成结果一致；
 - API/Worker 启动不执行 DDL；
-- 交接后不再新增组件 Alembic revision。
+- 交接后不再新增或修改任何触及 `component_repo` 的 Alembic revision。
 
 注意：任何实际 drop/reset 必须在执行前确认数据库目标，不能仅凭本计划自动执行。
 

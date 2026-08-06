@@ -102,14 +102,17 @@ Python Worker 负责：
 
 新 Go 后端只支持 PostgreSQL。不得为 MySQL、SQLite 或 ORM 方言兼容降低 SQL 设计质量。SQLite 可以用于与生产语义无关的纯函数测试，但不能替代 PostgreSQL 集成测试。
 
-### 4.2 单一 schema authority
+### 4.2 按 schema/domain 分配 migration authority
 
-任何时刻只能有一个生产 schema migration authority：
+渐进迁移期间，migration authority 以 PostgreSQL schema/domain 为所有权单元；任一数据库对象在任一时刻只能有一个 authority：
 
-1. 在 Go schema baseline 被验收前，现有 Alembic 仍是当前数据库 authority。
-2. 迁移计划的数据库基线阶段完成一次性交接。
-3. 交接后，`backend-go/db/migrations` 与 Goose 成为唯一 authority，Alembic 冻结并不再新增 revision。
-4. 禁止 Alembic 与 Goose 并行修改同一数据库。
+1. G2 前，Alembic 拥有现有 `public` 中的 Python/legacy 对象。
+2. G2 建立独立 `component_repo` schema；此 schema 内的表、索引、约束、函数、trigger 和 RLS 只由 `backend-go/db/migrations` 与 Goose 管理。
+3. Alembic 可以暂时继续管理尚未迁移的 `public` 域，但不得创建、修改或删除 `component_repo` 内的任何对象。
+4. 后续领域迁移必须记录一次明确的所有权交接；交接后冻结该领域对应的 Alembic revision，不做双写或双 authority。
+5. 当最后一个 legacy 域完成交接后，Alembic 才整体冻结，Goose 成为全库唯一 authority。
+
+schema 隔离不是运行时兼容层。新 Go 组件代码只访问 `component_repo`，不会代理或同步 legacy `public` 组件表。
 
 迁移在部署或显式开发命令中运行；API 和 Worker 启动不得创建表、补列、建索引或回填数据。
 

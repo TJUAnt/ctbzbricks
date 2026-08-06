@@ -26,6 +26,7 @@ docs/adr/*
 !docs/go_backend_migration_principles.md
 !docs/go_component_migration_plan.md
 !docs/go_migration_progress.md
+!docs/go_component_schema_baseline.md
 LDCadShadowLibrary/
 frontend/.env
 backend/.env

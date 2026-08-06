@@ -3,3 +3,400 @@
 //   sqlc v1.31.1
 
 package db
+
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+type ComponentRepoArtifact struct {
+	ID                 pgtype.UUID
+	OwnerID            pgtype.UUID
+	ArtifactType       string
+	SourceKind         string
+	OriginalFilename   string
+	StorageProvider    string
+	StorageBucket      string
+	StorageKey         string
+	Sha256             string
+	FileSize           int64
+	MimeType           string
+	Immutable          bool
+	VerificationStatus string
+	VerifiedAt         pgtype.Timestamptz
+	UploadedBy         pgtype.UUID
+	UploadedAt         pgtype.Timestamptz
+	Metadata           []byte
+	DeletedAt          pgtype.Timestamptz
+}
+
+type ComponentRepoAssemblyRelation struct {
+	ID                   pgtype.UUID
+	ComponentCandidateID pgtype.UUID
+	RelationCandidateID  pgtype.UUID
+	EndpointA            []byte
+	EndpointB            []byte
+	ConnectionType       string
+	JointType            string
+	Placement            []byte
+	ConfirmedBy          pgtype.UUID
+	ConfirmedAt          pgtype.Timestamptz
+}
+
+type ComponentRepoCandidate struct {
+	ID              pgtype.UUID
+	OwnerID         pgtype.UUID
+	ImportID        pgtype.UUID
+	SceneSnapshotID pgtype.UUID
+	Status          string
+	Summary         []byte
+	ReviewDecisions []byte
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
+type ComponentRepoComponent struct {
+	ID                 pgtype.UUID
+	OwnerID            pgtype.UUID
+	ContentKind        string
+	ContentLocale      string
+	Name               string
+	Description        *string
+	Tags               []string
+	Category           *string
+	Status             string
+	CurrentVersionID   pgtype.UUID
+	LogicalWidthStud   pgtype.Numeric
+	LogicalDepthStud   pgtype.Numeric
+	LogicalHeightPlate pgtype.Numeric
+	Metadata           []byte
+	CreatedBy          pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	DeletedAt          pgtype.Timestamptz
+	DeletedBy          pgtype.UUID
+}
+
+type ComponentRepoComponentGroup struct {
+	ID             pgtype.UUID
+	OwnerID        pgtype.UUID
+	ParentGroupID  pgtype.UUID
+	GroupType      string
+	Name           *string
+	NormalizedName *string
+	ContentLocale  *string
+	SortOrder      int32
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
+type ComponentRepoComponentGroupMembership struct {
+	OwnerID     pgtype.UUID
+	GroupID     pgtype.UUID
+	ComponentID pgtype.UUID
+	AddedBy     pgtype.UUID
+	AddedAt     pgtype.Timestamptz
+}
+
+type ComponentRepoComponentSubscription struct {
+	OwnerID      pgtype.UUID
+	ComponentID  pgtype.UUID
+	SubscribedAt pgtype.Timestamptz
+}
+
+type ComponentRepoComponentTranslation struct {
+	ID                int64
+	ComponentID       pgtype.UUID
+	Locale            string
+	Name              string
+	Description       *string
+	Tags              []string
+	TranslationStatus string
+	ReviewedBy        pgtype.UUID
+	ReviewedAt        pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+type ComponentRepoComponentVersion struct {
+	ID                      pgtype.UUID
+	ComponentID             pgtype.UUID
+	ComponentCandidateID    pgtype.UUID
+	VersionLabel            string
+	Revision                int32
+	Status                  string
+	SourceArtifactID        pgtype.UUID
+	ExchangeArtifactID      pgtype.UUID
+	SceneSnapshotID         pgtype.UUID
+	ParserVersion           string
+	PartLibraryVersionID    pgtype.UUID
+	ValidationReportID      pgtype.UUID
+	InterfaceSignature      string
+	StructureHash           string
+	GeometryHash            string
+	PreviewArtifactID       pgtype.UUID
+	PreviewStatus           string
+	PreviewGeneratorVersion *string
+	PreviewFailureCode      *string
+	PreviewFailureParams    []byte
+	ReleaseNote             *string
+	ReleaseNoteLocale       *string
+	Metadata                []byte
+	CreatedBy               pgtype.UUID
+	CreatedAt               pgtype.Timestamptz
+	PublishedAt             pgtype.Timestamptz
+	DeletedAt               pgtype.Timestamptz
+	DeletedBy               pgtype.UUID
+}
+
+type ComponentRepoConnectorAnalysis struct {
+	ComponentCandidateID pgtype.UUID
+	PartLibraryVersionID pgtype.UUID
+	RecognitionMethod    string
+	RecognitionVersion   string
+	CalculatedAt         pgtype.Timestamptz
+}
+
+type ComponentRepoConnectorAnalysisBlocker struct {
+	AnalysisItemID        pgtype.UUID
+	BlockerPartInstanceID string
+}
+
+type ComponentRepoConnectorAnalysisItem struct {
+	ID                                pgtype.UUID
+	ComponentCandidateID              pgtype.UUID
+	PartConnectorDefinitionID         int64
+	WorldConnectorID                  string
+	PartInstanceID                    string
+	PartRef                           string
+	ConnectorType                     *string
+	ConnectorKind                     *string
+	ConnectorGender                   *string
+	DirectionLabel                    *string
+	DirectionGroup                    *string
+	State                             string
+	Position                          []float64
+	Axis                              []float64
+	Matrix                            []float64
+	AccessAxis                        []float64
+	ExternalInterfaceID               pgtype.UUID
+	EligibilityUnoccupied             bool
+	EligibilitySupportedType          bool
+	EligibilityOutwardFacing          bool
+	EligibilityClearanceDataAvailable bool
+	EligibilityClearanceAvailable     bool
+	OutwardScore                      float64
+	Capacity                          int32
+}
+
+type ComponentRepoConnectorAnalysisPathNode struct {
+	AnalysisItemID pgtype.UUID
+	Ordinal        int32
+	InstanceID     string
+}
+
+type ComponentRepoConnectorAnalysisRelation struct {
+	AnalysisItemID     pgtype.UUID
+	AssemblyRelationID pgtype.UUID
+}
+
+type ComponentRepoImport struct {
+	ID                   pgtype.UUID
+	OwnerID              pgtype.UUID
+	SourceArtifactID     pgtype.UUID
+	ExchangeArtifactID   pgtype.UUID
+	TargetComponentID    pgtype.UUID
+	BaseVersionID        pgtype.UUID
+	Status               string
+	ParserVersion        *string
+	PartLibraryVersionID pgtype.UUID
+	Locale               string
+	Timezone             string
+	FailureCode          *string
+	FailureParams        []byte
+	Metadata             []byte
+	CreatedBy            pgtype.UUID
+	CreatedAt            pgtype.Timestamptz
+	StartedAt            pgtype.Timestamptz
+	CompletedAt          pgtype.Timestamptz
+}
+
+type ComponentRepoInterface struct {
+	ID                   pgtype.UUID
+	ComponentCandidateID pgtype.UUID
+	WorldConnectorID     string
+	Name                 string
+	Exposure             string
+	DefaultBehavior      string
+	SourceConnector      []byte
+	MechanicalRoles      []byte
+	BusinessRoles        []byte
+	Requirements         []byte
+	ReviewStatus         string
+	CreatedBy            pgtype.UUID
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+}
+
+type ComponentRepoOutboxEvent struct {
+	ID              pgtype.UUID
+	AggregateType   string
+	AggregateID     pgtype.UUID
+	Topic           string
+	EventKey        string
+	Payload         []byte
+	Attempts        int32
+	AvailableAt     pgtype.Timestamptz
+	PublishedAt     pgtype.Timestamptz
+	LastErrorCode   *string
+	LastErrorParams []byte
+	CreatedAt       pgtype.Timestamptz
+}
+
+type ComponentRepoPartConnectorDefinition struct {
+	ID                      int64
+	PartLibraryVersionID    pgtype.UUID
+	SourceConnectorID       int64
+	LdrawPartNum            string
+	ConnectorKind           string
+	NormalizedConnectorType *string
+	ConnectorGroup          *string
+	ConnectorGender         *string
+	Position                []float64
+	Orientation             []float64
+	Direction               []float64
+	DirectionLabel          *string
+	DirectionGroup          *string
+	Radius                  *float64
+	Length                  *float64
+	Caps                    *string
+	CenterFlag              bool
+	SlideFlag               bool
+	Confidence              pgtype.Numeric
+	RawParams               []byte
+	CreatedAt               pgtype.Timestamptz
+}
+
+type ComponentRepoPartLibraryVersion struct {
+	ID             pgtype.UUID
+	SourceName     string
+	SourceHash     string
+	ConnectorCount int32
+	Status         string
+	Metadata       []byte
+	CreatedBy      pgtype.UUID
+	CreatedAt      pgtype.Timestamptz
+}
+
+type ComponentRepoRelationCandidate struct {
+	ID                   pgtype.UUID
+	ComponentCandidateID pgtype.UUID
+	PartLibraryVersionID pgtype.UUID
+	EndpointA            []byte
+	EndpointB            []byte
+	ConnectionType       string
+	JointType            string
+	PositionResidual     float64
+	RotationResidual     float64
+	VerifiedByTolerance  bool
+	Confidence           pgtype.Numeric
+	Status               string
+	DetectionMethod      string
+	Metadata             []byte
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+}
+
+type ComponentRepoSceneSnapshot struct {
+	ID            pgtype.UUID
+	ImportID      pgtype.UUID
+	SchemaVersion string
+	ParserVersion string
+	RootModelID   *string
+	Document      []byte
+	Bom           []byte
+	ParseIssues   []byte
+	CreatedAt     pgtype.Timestamptz
+}
+
+type ComponentRepoTask struct {
+	ID               pgtype.UUID
+	OwnerID          pgtype.UUID
+	TaskType         string
+	Status           string
+	Payload          []byte
+	Result           []byte
+	ResultArtifactID pgtype.UUID
+	Locale           string
+	Timezone         string
+	CreatedBy        pgtype.UUID
+	IdempotencyKey   *string
+	Attempts         int32
+	MaxAttempts      int32
+	AvailableAt      pgtype.Timestamptz
+	LeaseOwner       *string
+	LeaseExpiresAt   pgtype.Timestamptz
+	ProgressCode     *string
+	ProgressParams   []byte
+	ProgressPercent  pgtype.Numeric
+	ErrorCode        *string
+	ErrorParams      []byte
+	CreatedAt        pgtype.Timestamptz
+	StartedAt        pgtype.Timestamptz
+	FinishedAt       pgtype.Timestamptz
+}
+
+type ComponentRepoTaskEvent struct {
+	ID              int64
+	TaskID          pgtype.UUID
+	Status          string
+	Code            *string
+	Params          []byte
+	ProgressPercent pgtype.Numeric
+	CreatedAt       pgtype.Timestamptz
+}
+
+type ComponentRepoUploadSession struct {
+	ID                pgtype.UUID
+	OwnerID           pgtype.UUID
+	Status            string
+	TargetComponentID pgtype.UUID
+	BaseVersionID     pgtype.UUID
+	Locale            string
+	Timezone          string
+	FailureCode       *string
+	FailureParams     []byte
+	Metadata          []byte
+	CreatedBy         pgtype.UUID
+	CreatedAt         pgtype.Timestamptz
+	ExpiresAt         pgtype.Timestamptz
+	CompletedAt       pgtype.Timestamptz
+}
+
+type ComponentRepoUploadSessionFile struct {
+	ID               pgtype.UUID
+	UploadSessionID  pgtype.UUID
+	Ordinal          int32
+	ArtifactType     string
+	OriginalFilename string
+	ExpectedSize     int64
+	ExpectedSha256   *string
+	StorageProvider  string
+	StorageBucket    string
+	StorageKey       string
+	ArtifactID       pgtype.UUID
+	Status           string
+	CreatedAt        pgtype.Timestamptz
+	CompletedAt      pgtype.Timestamptz
+}
+
+type ComponentRepoValidationReport struct {
+	ID                   pgtype.UUID
+	ComponentCandidateID pgtype.UUID
+	ComponentVersionID   pgtype.UUID
+	ValidationLevel      string
+	Passed               bool
+	Checks               []byte
+	Issues               []byte
+	ValidatorVersion     string
+	CreatedAt            pgtype.Timestamptz
+}

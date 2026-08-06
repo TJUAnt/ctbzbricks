@@ -5,10 +5,9 @@ import (
 	"io/fs"
 )
 
-// Files contains the migration package documentation during G1. G2 will add
-// versioned SQL files to the embedded filesystem when Goose becomes authoritative.
+// Files contains the versioned Goose migrations and their operator notes.
 //
-//go:embed README.md
+//go:embed README.md *.sql
 var Files embed.FS
 
 func SQLFiles() ([]fs.DirEntry, error) {

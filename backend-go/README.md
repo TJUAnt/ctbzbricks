@@ -8,6 +8,7 @@ This module is the target BrickBuilder system backend. The current migration pha
 cp .env.example .env
 make generate
 make check
+make test-postgres
 make run-api
 make run-worker
 make migrate-help
@@ -22,6 +23,8 @@ GET /health/live
 GET /health/ready
 ```
 
-The migration command supports `status`, `version`, `up`, `up-by-one`, `down`, `redo`, and `reset`. G1 contains no schema migration; G2 will add the PostgreSQL baseline and complete the Alembic-to-Goose authority handoff. Do not run destructive migration commands without confirming the exact database.
+The migration command supports `status`, `version`, `up`, `up-by-one`, `down`, `redo`, and `reset`. Goose exclusively owns the `component_repo` schema; Alembic may only manage unmigrated legacy objects outside it. Do not run destructive migration commands without confirming the exact database.
+
+`make test-postgres` creates an isolated temporary local PostgreSQL cluster, migrates it from zero to head, runs schema contract tests, verifies a second `up` is a no-op, and confirms that API/Worker startup does not change the schema. It never uses `DATABASE_URL` from your environment.
 
 `make generate` and `make check` use the project-level sqlc tool version pinned in `go.mod`. Generated files under `db/generated` must not be edited manually.
