@@ -23,6 +23,21 @@ GET /health/live
 GET /health/ready
 ```
 
+G3 also exposes the authenticated Component Repo catalog under `/api/v1`:
+
+```text
+/components
+/components/:componentId/versions
+/component-versions/:versionId
+/component-groups
+/component-groups/:groupId/components
+/components/:componentId/subscription
+```
+
+Component Repo routes require an HS256 Bearer JWT. `AUTH_JWT_SECRET` verifies the signature; optional `AUTH_JWT_ISSUER` and `AUTH_JWT_AUDIENCE` restrict claims. The verified UUID `sub` is the actor identity. Missing auth configuration fails closed for these routes while health endpoints remain available.
+
+User-authored Component and Group content is returned verbatim with normalized `contentLocale`. Official Components select only a `reviewed` translation for the requested `locale`; otherwise they return source content and its actual `contentLocale`.
+
 The migration command supports `status`, `version`, `up`, `up-by-one`, `down`, `redo`, and `reset`. Goose exclusively owns the `component_repo` schema; Alembic may only manage unmigrated legacy objects outside it. Do not run destructive migration commands without confirming the exact database.
 
 `make test-postgres` creates an isolated temporary local PostgreSQL cluster, migrates it from zero to head, runs schema contract tests, verifies a second `up` is a no-op, and confirms that API/Worker startup does not change the schema. It never uses `DATABASE_URL` from your environment.

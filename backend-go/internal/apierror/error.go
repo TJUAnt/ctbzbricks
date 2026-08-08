@@ -16,6 +16,8 @@ type Error struct {
 	HTTPStatus int
 }
 
+func (e *Error) Error() string { return e.Code }
+
 type Response struct {
 	Error Detail `json:"error"`
 }

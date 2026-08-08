@@ -1,6 +1,6 @@
 # Go 后端迁移进度
 
-> 最后更新：2026-08-06（G2）
+> 最后更新：2026-08-07（G3）
 > 状态依据：[go_component_migration_plan.md](./go_component_migration_plan.md)
 > 更新规则：只记录已经由代码、测试或文档证据证明的事实。
 
@@ -11,14 +11,14 @@
 | G0 原则、路线与工程决策 | Completed | 目标架构、迁移原则、阶段和完成定义已入库 |
 | G1 Go 工程骨架 | Completed | API、Worker、migration、sqlc/pgxpool 与测试骨架已验收 |
 | G2 PostgreSQL schema baseline | Completed | `component_repo` baseline、authority、sqlc 与 PostgreSQL contract 已验收 |
-| G3 组件目录、版本和分组 | Not started | 下一实施阶段 |
-| G4 Artifact 与上传会话 | Not started | 等待 G3 核心实体稳定 |
+| G3 组件目录、版本和分组 | Completed | Go API、事务、授权、翻译选择与 PostgreSQL contract 已验收 |
+| G4 Artifact 与上传会话 | Not started | 下一实施阶段 |
 | G5 持久化任务系统 | Not started | 等待 G2，可与 G4 局部并行设计 |
 | G6 导入、解析与候选流程 | Not started | 等待 G4/G5 |
 | G7 关系、接口、校验和预览 | Not started | 等待 G6 |
 | G8 前端切换与 Python API 删除 | Not started | 等待 Go 组件闭环 |
 
-当前已有可运行的 Go 工程骨架、Goose 管理的 `component_repo` schema baseline 和 sqlc 生成类型，但还没有 Component Repo 业务 API 或已切换的前端接口。不得把 schema 完成等同于组件业务迁移完成。
+当前已有可运行的 Go 工程骨架、Goose 管理的 `component_repo` schema，以及组件目录、版本、分组和订阅 Go API。Artifact/上传、持久化任务、导入算法和前端切换尚未完成，因此 Python Component Repo 公共路由暂未删除。
 
 ## 2. 已确认决策
 
@@ -125,20 +125,60 @@ Python backend pytest  PASS（294 tests；6 个既有 warning）
 
 隔离 PostgreSQL cluster 位于系统临时目录，验证结束后已停止并删除。未对现有开发数据库执行 Goose、drop、reset 或 reseed。
 
-## 6. 阻塞与风险
+## 6. G3 完成记录
+
+日期：2026-08-07
+
+完成内容：
+
+- [x] 增加 `/api/v1` 下 Component CRUD、版本查询/草稿创建/发布/弃用/归档/删除、分组树/移动/成员关系和订阅接口。
+- [x] 增加 HS256 Bearer JWT 验证；只接受已验证 UUID `sub` 作为 actor，签名、过期时间、issuer 和 audience 均可校验，未配置时 fail closed。
+- [x] 所有业务 SQL 由 sqlc 生成并显式携带 actor/owner 条件；跨用户草稿读取、修改、分组操作和版本输入引用均被拒绝。
+- [x] 所有 mutation 通过 serializable pgx transaction 执行，serialization/deadlock 最多重试三次；版本发布在一个事务中弃用旧版本并更新 current version。
+- [x] Component 列表支持 query/category/status、稳定 `updated_at DESC, id` 页码分页；版本和分组成员列表也使用稳定排序。
+- [x] ComponentGroup 自动创建无名称 root，支持最大深度 5、循环检测、同级规范化名称唯一性、sort order 和并发写保护。
+- [x] 用户 Component/Group 内容原文保存并返回规范化 `contentLocale`；官方 Component 只选择目标 locale 的 `reviewed` translation，缺失时返回源内容和实际 locale。
+- [x] Gin 使用严格 JSON 解码，不接受未知字段；公共错误保持 `code + params + traceId`，内部数据库/JWT/decoder 细节不进入响应。
+- [x] 增加 JWT/UUID 单元测试、PostgreSQL application-service contract 和真实 Gin HTTP contract。
+
+G3 暂不实现 `component-versions/:id/parts` 与 `/source`：前者依赖 G7 的结构投影，后者依赖 G4 的对象存储签名下载边界。
+
+验证结果：
+
+```text
+go tool sqlc generate PASS
+go tool sqlc vet      PASS
+go test ./...          PASS
+go test -race ./...    PASS
+go vet ./...           PASS
+isolated PostgreSQL    PASS（G2 migration + G3 service/HTTP contracts）
+owner isolation        PASS（Component/Version/Group/Artifact references）
+version lifecycle      PASS（draft -> published，current version 原子切换）
+group invariants       PASS（root/depth/cycle/sibling uniqueness/concurrency/sort）
+official translation   PASS（draft 不可见，reviewed 可选，source fallback 带实际 locale）
+HTTP error contract    PASS（JWT、严格 JSON、code + params + traceId）
+frontend i18n check    PASS（2 locales / 10 namespaces；复用既有 error codes）
+frontend test          PASS（12 files / 50 tests）
+frontend build         PASS
+Python backend pytest  PASS（294 tests；6 个既有 warning）
+```
+
+未连接、重置或修改现有开发数据库；所有 PostgreSQL application tests 使用自动清理的隔离临时 cluster。
+
+## 7. 阻塞与风险
 
 当前无外部阻塞。
 
-进入 G3 的已知实现重点：
+进入 G4 的已知实现重点：
 
-- 所有 sqlc 业务查询仍必须显式包含 owner/actor 条件，不能因为 RLS 已 enable 就省略应用授权。
-- ComponentGroup 的循环检测、最大深度和移动排序需要在显式 pgx transaction 中实现。
-- 官方 translation 查询只能选择 `reviewed`；用户内容必须保留 `content_locale` 和原文。
-- G2 只建立 task schema，任务领取、lease、重试和 outbox 发布逻辑属于 G5。
+- 选择并实现 Supabase/S3-compatible Storage adapter，服务端生成 owner-scoped object key。
+- 上传完成需要 HEAD/metadata 校验、不可变 source artifact 和部分失败补偿。
+- 下载和 source API 必须只返回短期签名 URL，不暴露 provider 原始错误或内部路径。
+- G3 使用 HS256 JWT；若部署切换到非对称 JWT signing key，需要在 auth verifier 中增加缓存 JWKS 支持后再启用。
 
 实际开发库是否 reset/reseed 尚未决定；若以后执行，仍需先确认精确数据库目标。
 
-## 7. 更新模板
+## 8. 更新模板
 
 每次完成迁移工作后追加：
 

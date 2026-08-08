@@ -6,10 +6,44 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
+	AddComponentGroupMembership(ctx context.Context, arg AddComponentGroupMembershipParams) (pgtype.UUID, error)
+	ComponentGroupDepth(ctx context.Context, arg ComponentGroupDepthParams) (int32, error)
+	ComponentGroupSubtreeDepth(ctx context.Context, arg ComponentGroupSubtreeDepthParams) (int32, error)
+	ComponentIsVisible(ctx context.Context, arg ComponentIsVisibleParams) (bool, error)
+	CreateComponent(ctx context.Context, arg CreateComponentParams) (ComponentRepoComponent, error)
+	CreateComponentGroup(ctx context.Context, arg CreateComponentGroupParams) (ComponentRepoComponentGroup, error)
+	CreateComponentSubscription(ctx context.Context, arg CreateComponentSubscriptionParams) (ComponentRepoComponentSubscription, error)
+	CreateComponentVersion(ctx context.Context, arg CreateComponentVersionParams) (ComponentRepoComponentVersion, error)
 	DatabasePing(ctx context.Context) (int64, error)
+	DeleteComponentSubscription(ctx context.Context, arg DeleteComponentSubscriptionParams) (pgtype.UUID, error)
+	DeleteOwnedComponentGroup(ctx context.Context, arg DeleteOwnedComponentGroupParams) (pgtype.UUID, error)
+	DeprecateOtherPublishedVersions(ctx context.Context, arg DeprecateOtherPublishedVersionsParams) error
+	EnsureComponentRootGroup(ctx context.Context, arg EnsureComponentRootGroupParams) (ComponentRepoComponentGroup, error)
+	GetOwnedComponentGroup(ctx context.Context, arg GetOwnedComponentGroupParams) (ComponentRepoComponentGroup, error)
+	GetVisibleComponent(ctx context.Context, arg GetVisibleComponentParams) (GetVisibleComponentRow, error)
+	GetVisibleComponentVersion(ctx context.Context, arg GetVisibleComponentVersionParams) (ComponentRepoComponentVersion, error)
+	ListComponentGroupDescendantIDs(ctx context.Context, arg ListComponentGroupDescendantIDsParams) ([]pgtype.UUID, error)
+	ListComponentGroupMembers(ctx context.Context, arg ListComponentGroupMembersParams) ([]ListComponentGroupMembersRow, error)
+	ListOwnedComponentGroups(ctx context.Context, ownerID pgtype.UUID) ([]ListOwnedComponentGroupsRow, error)
+	ListVisibleComponentVersions(ctx context.Context, arg ListVisibleComponentVersionsParams) ([]ComponentRepoComponentVersion, error)
+	ListVisibleComponents(ctx context.Context, arg ListVisibleComponentsParams) ([]ListVisibleComponentsRow, error)
+	LockOwnedComponent(ctx context.Context, arg LockOwnedComponentParams) (LockOwnedComponentRow, error)
+	LockOwnedComponentVersion(ctx context.Context, arg LockOwnedComponentVersionParams) (LockOwnedComponentVersionRow, error)
+	MoveOwnedComponentGroup(ctx context.Context, arg MoveOwnedComponentGroupParams) (ComponentRepoComponentGroup, error)
+	PublishComponentVersion(ctx context.Context, versionID pgtype.UUID) (pgtype.UUID, error)
+	RemoveComponentGroupMembership(ctx context.Context, arg RemoveComponentGroupMembershipParams) (pgtype.UUID, error)
+	SetComponentCurrentVersion(ctx context.Context, arg SetComponentCurrentVersionParams) error
+	SoftDeleteOwnedComponent(ctx context.Context, arg SoftDeleteOwnedComponentParams) (pgtype.UUID, error)
+	SoftDeleteOwnedDraftVersion(ctx context.Context, arg SoftDeleteOwnedDraftVersionParams) (pgtype.UUID, error)
+	TransitionOwnedComponentVersion(ctx context.Context, arg TransitionOwnedComponentVersionParams) (pgtype.UUID, error)
+	UpdateOwnedComponent(ctx context.Context, arg UpdateOwnedComponentParams) (ComponentRepoComponent, error)
+	UpdateOwnedComponentGroup(ctx context.Context, arg UpdateOwnedComponentGroupParams) (ComponentRepoComponentGroup, error)
+	VersionInputsOwnedByActor(ctx context.Context, arg VersionInputsOwnedByActorParams) (bool, error)
 }
 
 var _ Querier = (*Queries)(nil)

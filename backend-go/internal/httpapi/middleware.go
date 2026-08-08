@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/auth"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/requestmeta"
 	"github.com/gin-gonic/gin"
 )
@@ -18,6 +19,18 @@ func traceMiddleware() gin.HandlerFunc {
 		traceID := requestmeta.ResolveTraceID(c.GetHeader(requestmeta.TraceIDHeader))
 		c.Set(requestmeta.TraceIDKey, traceID)
 		c.Header(requestmeta.TraceIDHeader, traceID)
+		c.Next()
+	}
+}
+
+func authenticationMiddleware(verifier auth.TokenVerifier) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		actor, err := verifier.VerifyAuthorization(c.GetHeader("Authorization"))
+		if err != nil {
+			apierror.Write(c, apierror.New(auth.FailureCode(err), http.StatusUnauthorized, nil))
+			return
+		}
+		auth.SetActor(c, actor)
 		c.Next()
 	}
 }

@@ -73,6 +73,16 @@ func TestLoadParsesOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsShortJWTSecret(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{
+		"DATABASE_URL":    "postgresql://localhost/brickbuilder",
+		"AUTH_JWT_SECRET": "short",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "AUTH_JWT_SECRET") {
+		t.Fatalf("expected JWT secret error, got %v", err)
+	}
+}
+
 func mapLookup(values map[string]string) lookupFunc {
 	return func(key string) string { return values[key] }
 }

@@ -47,7 +47,7 @@ export APP_ENV=test
 go run ./cmd/migrate up
 go run ./cmd/migrate up
 go run ./cmd/migrate version
-go test -tags=integration ./internal/database
+go test -p=1 -tags=integration ./internal/database ./internal/component ./internal/httpapi
 
 before_schema="$test_root/schema-before.sql"
 after_schema="$test_root/schema-after.sql"

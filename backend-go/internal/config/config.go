@@ -20,6 +20,7 @@ type Config struct {
 	Environment string
 	HTTP        HTTPConfig
 	Database    DatabaseConfig
+	Auth        AuthConfig
 	Worker      WorkerConfig
 }
 
@@ -54,6 +55,12 @@ type WorkerConfig struct {
 	HealthCheckInterval time.Duration
 }
 
+type AuthConfig struct {
+	JWTSecret   string
+	JWTIssuer   string
+	JWTAudience string
+}
+
 type lookupFunc func(string) string
 
 func Load() (Config, error) {
@@ -72,6 +79,10 @@ func load(lookup lookupFunc) (Config, error) {
 	}
 	if !strings.HasPrefix(databaseURL, "postgres://") && !strings.HasPrefix(databaseURL, "postgresql://") {
 		return Config{}, errors.New("DATABASE_URL must use postgres:// or postgresql://")
+	}
+	jwtSecret := strings.TrimSpace(lookup("AUTH_JWT_SECRET"))
+	if jwtSecret != "" && len(jwtSecret) < 32 {
+		return Config{}, errors.New("AUTH_JWT_SECRET must contain at least 32 bytes")
 	}
 
 	httpPort, err := intValue(lookup, "GO_BACKEND_PORT", 8080, 1, 65535)
@@ -160,6 +171,11 @@ func load(lookup lookupFunc) (Config, error) {
 			MaxConnIdleTime:   maxConnIdleTime,
 			HealthCheckPeriod: healthCheckPeriod,
 			ConnectTimeout:    connectTimeout,
+		},
+		Auth: AuthConfig{
+			JWTSecret:   jwtSecret,
+			JWTIssuer:   strings.TrimSpace(lookup("AUTH_JWT_ISSUER")),
+			JWTAudience: strings.TrimSpace(lookup("AUTH_JWT_AUDIENCE")),
 		},
 		Worker: WorkerConfig{
 			ID:                  strings.TrimSpace(lookup("WORKER_ID")),
