@@ -52,8 +52,28 @@ func TestG3HTTPAuthenticationAndErrorContract(t *testing.T) {
 	assertPublicError(t, unauthorized, http.StatusUnauthorized, "auth.authentication_required")
 
 	actorAToken := integrationToken(t, "30000000-0000-0000-0000-000000000001")
+	clientSuppliedKey := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/component-imports/upload-sessions", strings.NewReader(`{
+		"sourceFile":{"filename":"model.ldr","contentType":"text/plain","fileSize":10,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","objectPath":"client/chosen/key"},
+		"contentLocale":"en-US","timezone":"UTC"
+	}`))
+	request.Header.Set("Authorization", "Bearer "+actorAToken)
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(clientSuppliedKey, request)
+	assertPublicError(t, clientSuppliedKey, http.StatusUnprocessableEntity, "request.validation_failed")
+
+	disabledStorage := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/component-imports/upload-sessions", strings.NewReader(`{
+		"sourceFile":{"filename":"model.ldr","contentType":"text/plain","fileSize":10,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		"contentLocale":"en-US","timezone":"UTC"
+	}`))
+	request.Header.Set("Authorization", "Bearer "+actorAToken)
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(disabledStorage, request)
+	assertPublicError(t, disabledStorage, http.StatusBadGateway, "component_repo.storage_unavailable")
+
 	create := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/components", bytes.NewBufferString(`{
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/components", bytes.NewBufferString(`{
 		"name":"API component","contentLocale":"en-US","tags":[]
 	}`))
 	request.Header.Set("Authorization", "Bearer "+actorAToken)

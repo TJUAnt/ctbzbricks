@@ -8,9 +8,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/artifact"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/config"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/database"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/logging"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/worker"
 )
 
@@ -47,5 +49,9 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	}
 	logger.Info("Worker started", "workerId", workerID)
 	defer logger.Info("Worker stopped", "workerId", workerID)
-	return worker.Run(ctx, workerID, cfg.Worker.HealthCheckInterval, pool, logger)
+	var maintenance worker.UploadMaintenance
+	if cfg.Storage.Provider != "disabled" {
+		maintenance = artifact.NewService(pool, storage.New(cfg.Storage), cfg.Storage)
+	}
+	return worker.Run(ctx, workerID, cfg.Worker.HealthCheckInterval, pool, maintenance, logger)
 }

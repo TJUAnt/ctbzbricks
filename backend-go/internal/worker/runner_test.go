@@ -21,7 +21,7 @@ func TestRunChecksDatabaseAndStopsWithContext(t *testing.T) {
 	pinger := &countingPinger{}
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, "worker-test", 5*time.Millisecond, pinger, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		done <- Run(ctx, "worker-test", 5*time.Millisecond, pinger, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}()
 
 	deadline := time.After(time.Second)

@@ -12,6 +12,7 @@ import (
 
 type Querier interface {
 	AddComponentGroupMembership(ctx context.Context, arg AddComponentGroupMembershipParams) (pgtype.UUID, error)
+	CompleteUploadSession(ctx context.Context, arg CompleteUploadSessionParams) (ComponentRepoUploadSession, error)
 	ComponentGroupDepth(ctx context.Context, arg ComponentGroupDepthParams) (int32, error)
 	ComponentGroupSubtreeDepth(ctx context.Context, arg ComponentGroupSubtreeDepthParams) (int32, error)
 	ComponentIsVisible(ctx context.Context, arg ComponentIsVisibleParams) (bool, error)
@@ -19,21 +20,38 @@ type Querier interface {
 	CreateComponentGroup(ctx context.Context, arg CreateComponentGroupParams) (ComponentRepoComponentGroup, error)
 	CreateComponentSubscription(ctx context.Context, arg CreateComponentSubscriptionParams) (ComponentRepoComponentSubscription, error)
 	CreateComponentVersion(ctx context.Context, arg CreateComponentVersionParams) (ComponentRepoComponentVersion, error)
+	CreateSourceArtifact(ctx context.Context, arg CreateSourceArtifactParams) (ComponentRepoArtifact, error)
+	CreateUploadSession(ctx context.Context, arg CreateUploadSessionParams) (ComponentRepoUploadSession, error)
+	CreateUploadSessionFile(ctx context.Context, arg CreateUploadSessionFileParams) (ComponentRepoUploadSessionFile, error)
 	DatabasePing(ctx context.Context) (int64, error)
 	DeleteComponentSubscription(ctx context.Context, arg DeleteComponentSubscriptionParams) (pgtype.UUID, error)
 	DeleteOwnedComponentGroup(ctx context.Context, arg DeleteOwnedComponentGroupParams) (pgtype.UUID, error)
 	DeprecateOtherPublishedVersions(ctx context.Context, arg DeprecateOtherPublishedVersionsParams) error
 	EnsureComponentRootGroup(ctx context.Context, arg EnsureComponentRootGroupParams) (ComponentRepoComponentGroup, error)
+	ExpireUploadSession(ctx context.Context, sessionID pgtype.UUID) (int64, error)
+	FailUploadSession(ctx context.Context, arg FailUploadSessionParams) error
+	FailUploadSessionFiles(ctx context.Context, sessionID pgtype.UUID) error
+	GetOwnedArtifact(ctx context.Context, arg GetOwnedArtifactParams) (ComponentRepoArtifact, error)
 	GetOwnedComponentGroup(ctx context.Context, arg GetOwnedComponentGroupParams) (ComponentRepoComponentGroup, error)
+	GetOwnedUploadSession(ctx context.Context, arg GetOwnedUploadSessionParams) (ComponentRepoUploadSession, error)
 	GetVisibleComponent(ctx context.Context, arg GetVisibleComponentParams) (GetVisibleComponentRow, error)
 	GetVisibleComponentVersion(ctx context.Context, arg GetVisibleComponentVersionParams) (ComponentRepoComponentVersion, error)
+	GetVisibleVersionSourceArtifact(ctx context.Context, arg GetVisibleVersionSourceArtifactParams) (ComponentRepoArtifact, error)
 	ListComponentGroupDescendantIDs(ctx context.Context, arg ListComponentGroupDescendantIDsParams) ([]pgtype.UUID, error)
 	ListComponentGroupMembers(ctx context.Context, arg ListComponentGroupMembersParams) ([]ListComponentGroupMembersRow, error)
+	ListExpiredUploadSessions(ctx context.Context, arg ListExpiredUploadSessionsParams) ([]ComponentRepoUploadSession, error)
 	ListOwnedComponentGroups(ctx context.Context, ownerID pgtype.UUID) ([]ListOwnedComponentGroupsRow, error)
+	ListUploadSessionFiles(ctx context.Context, sessionID pgtype.UUID) ([]ComponentRepoUploadSessionFile, error)
 	ListVisibleComponentVersions(ctx context.Context, arg ListVisibleComponentVersionsParams) ([]ComponentRepoComponentVersion, error)
 	ListVisibleComponents(ctx context.Context, arg ListVisibleComponentsParams) ([]ListVisibleComponentsRow, error)
 	LockOwnedComponent(ctx context.Context, arg LockOwnedComponentParams) (LockOwnedComponentRow, error)
 	LockOwnedComponentVersion(ctx context.Context, arg LockOwnedComponentVersionParams) (LockOwnedComponentVersionRow, error)
+	LockOwnedUploadSession(ctx context.Context, arg LockOwnedUploadSessionParams) (ComponentRepoUploadSession, error)
+	MarkArtifactFailed(ctx context.Context, arg MarkArtifactFailedParams) (ComponentRepoArtifact, error)
+	MarkArtifactVerified(ctx context.Context, arg MarkArtifactVerifiedParams) (ComponentRepoArtifact, error)
+	MarkUploadSessionFileFailed(ctx context.Context, artifactID pgtype.UUID) error
+	MarkUploadSessionFileUploaded(ctx context.Context, arg MarkUploadSessionFileUploadedParams) (ComponentRepoUploadSessionFile, error)
+	MarkUploadSessionFileVerified(ctx context.Context, artifactID pgtype.UUID) error
 	MoveOwnedComponentGroup(ctx context.Context, arg MoveOwnedComponentGroupParams) (ComponentRepoComponentGroup, error)
 	PublishComponentVersion(ctx context.Context, versionID pgtype.UUID) (pgtype.UUID, error)
 	RemoveComponentGroupMembership(ctx context.Context, arg RemoveComponentGroupMembershipParams) (pgtype.UUID, error)

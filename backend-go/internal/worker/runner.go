@@ -10,7 +10,11 @@ import (
 
 // Run keeps the independent Worker process alive and verifies its database
 // dependency. Durable task claiming is introduced in migration phase G5.
-func Run(ctx context.Context, workerID string, interval time.Duration, databasePinger database.Pinger, logger *slog.Logger) error {
+type UploadMaintenance interface {
+	CleanupExpired(context.Context, time.Time, int32) (int, error)
+}
+
+func Run(ctx context.Context, workerID string, interval time.Duration, databasePinger database.Pinger, maintenance UploadMaintenance, logger *slog.Logger) error {
 	check := func() {
 		checkCtx, cancel := context.WithTimeout(ctx, interval)
 		defer cancel()
@@ -22,6 +26,18 @@ func Run(ctx context.Context, workerID string, interval time.Duration, databaseP
 			return
 		}
 		logger.DebugContext(checkCtx, "worker database health check passed", "workerId", workerID)
+		if maintenance == nil {
+			return
+		}
+		cleaned, err := maintenance.CleanupExpired(checkCtx, time.Now().UTC(), 100)
+		if err != nil {
+			logger.WarnContext(checkCtx, "expired upload cleanup failed",
+				"workerId", workerID, "errorCode", "component_repo.storage_unavailable")
+			return
+		}
+		if cleaned > 0 {
+			logger.InfoContext(checkCtx, "expired uploads cleaned", "workerId", workerID, "count", cleaned)
+		}
 	}
 
 	check()

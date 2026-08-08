@@ -1,6 +1,6 @@
 # Go 后端迁移进度
 
-> 最后更新：2026-08-07（G3）
+> 最后更新：2026-08-08（G4）
 > 状态依据：[go_component_migration_plan.md](./go_component_migration_plan.md)
 > 更新规则：只记录已经由代码、测试或文档证据证明的事实。
 
@@ -12,13 +12,13 @@
 | G1 Go 工程骨架 | Completed | API、Worker、migration、sqlc/pgxpool 与测试骨架已验收 |
 | G2 PostgreSQL schema baseline | Completed | `component_repo` baseline、authority、sqlc 与 PostgreSQL contract 已验收 |
 | G3 组件目录、版本和分组 | Completed | Go API、事务、授权、翻译选择与 PostgreSQL contract 已验收 |
-| G4 Artifact 与上传会话 | Not started | 下一实施阶段 |
+| G4 Artifact 与上传会话 | Completed | Storage、直传会话、校验、签名下载、补偿和清理已验收 |
 | G5 持久化任务系统 | Not started | 等待 G2，可与 G4 局部并行设计 |
 | G6 导入、解析与候选流程 | Not started | 等待 G4/G5 |
 | G7 关系、接口、校验和预览 | Not started | 等待 G6 |
 | G8 前端切换与 Python API 删除 | Not started | 等待 Go 组件闭环 |
 
-当前已有可运行的 Go 工程骨架、Goose 管理的 `component_repo` schema，以及组件目录、版本、分组和订阅 Go API。Artifact/上传、持久化任务、导入算法和前端切换尚未完成，因此 Python Component Repo 公共路由暂未删除。
+当前已有可运行的 Go 工程骨架、Goose 管理的 `component_repo` schema，以及组件目录、版本、分组、订阅、Artifact 和上传会话 Go API。持久化任务、导入算法和前端切换尚未完成，因此 Python Component Repo 公共路由暂未删除。
 
 ## 2. 已确认决策
 
@@ -165,20 +165,62 @@ Python backend pytest  PASS（294 tests；6 个既有 warning）
 
 未连接、重置或修改现有开发数据库；所有 PostgreSQL application tests 使用自动清理的隔离临时 cluster。
 
-## 7. 阻塞与风险
+## 7. G4 完成记录
+
+日期：2026-08-08
+
+完成内容：
+
+- [x] 增加 Storage interface 与 Supabase Storage REST adapter；普通对象 URL 不支持 HEAD，因此使用对象信息端点完成 metadata-only 校验。
+- [x] 增加 Storage 配置边界、disabled 开发模式、认证 header、请求 timeout、短期签名 URL、幂等删除和 provider 错误归一化。
+- [x] 增加 `/api/v1/component-imports/upload-sessions` 创建和完成接口；严格 JSON DTO 不接受客户端 `objectPath`/完整 key。
+- [x] object key 固定为 server-generated `prefix/owners/{ownerId}/uploads/{sessionId}/{role}/{artifactId}.{ext}`；原始文件名仅作为用户内容原文保存，不进入可信定位符。
+- [x] 上传会话冻结规范化 locale、IANA timezone、owner、目标 Component/Base Version；目标引用必须属于 actor 且关系一致。
+- [x] upload complete 在 Storage HEAD/size/MIME 校验后用 serializable transaction 原子创建 immutable source Artifact、关联 session file 并完成 session；幂等重试不重复 HEAD 或 Artifact。
+- [x] complete 不读取对象正文；`VerifyOwnedArtifact` 以单次流式读取同时计算 SHA-256 和长度，成功/失败都持久化机器验证状态，已验证重试不重复读取。
+- [x] 增加 owner-scoped Artifact 和 Component Version source 签名下载；只允许 verified Artifact，响应不暴露 provider key、原始错误或正文。
+- [x] metadata 失败会幂等删除本会话对象，并在同一数据库事务中将 session/files 标记失败；对象回收失败时保留 pending 供重试，不制造半完成 Artifact。
+- [x] 独立 Worker 周期清理过期 pending upload；只有全部对象删除成功后才将 session 标记 expired，部分失败会在下次周期重试。
+- [x] 原始 Artifact 始终 `source_kind=source`、`immutable=true` 且使用唯一对象 key；G4 没有提供覆盖或以 derived 替换 source 的写路径。
+- [x] G4 complete 只完成上传和 Artifact 元数据，不提前创建缺少 durable task 的 queued import；G6 再原子创建 import + parse task 并启用最终 `202` 契约。
+
+验证结果：
+
+```text
+go tool sqlc generate PASS
+go tool sqlc vet      PASS
+go test ./...          PASS
+go test -race ./...    PASS
+go vet ./...           PASS
+isolated PostgreSQL    PASS（Goose v1 + G3/G4 service/HTTP contracts + startup schema no-drift）
+server key boundary    PASS（客户端 objectPath 被 strict JSON 拒绝；owner/session/artifact path）
+upload completion      PASS（1 HEAD / 0 body reads；事务、幂等、immutable source）
+hash verification      PASS（唯一 1 次 body open；已验证重试 0 次额外读取）
+owner isolation        PASS（session complete、Artifact download 与 target/base ownership）
+failure compensation   PASS（对象删除、session/files failed、0 个残留 Artifact）
+expired cleanup        PASS（对象删除成功后才 expired；Worker 独立接线）
+frontend i18n check    PASS（2 locales / 10 namespaces；仅复用既有 error codes）
+frontend test          PASS（12 files / 50 tests）
+frontend build         PASS（既有 Vite deprecation/chunk-size warnings）
+Python backend pytest  PASS（294 tests；6 个既有 warning；多进程用例在沙箱外验证）
+```
+
+未增加 i18n 资源或 UI 文案；locale/timezone、文件名原文和结构化 error code 的既有边界保持不变。未连接、重置或修改现有开发数据库；PostgreSQL 验证继续使用自动删除的隔离临时 cluster。
+
+## 8. 阻塞与风险
 
 当前无外部阻塞。
 
-进入 G4 的已知实现重点：
+进入 G5 的已知实现重点：
 
-- 选择并实现 Supabase/S3-compatible Storage adapter，服务端生成 owner-scoped object key。
-- 上传完成需要 HEAD/metadata 校验、不可变 source artifact 和部分失败补偿。
-- 下载和 source API 必须只返回短期签名 URL，不暴露 provider 原始错误或内部路径。
+- 实现 PostgreSQL durable task claim/lease/heartbeat/retry/cancel/event/outbox，不使用 goroutine 或进程内队列作为权威状态。
+- 将 `component.artifact.verify` 接入 Go Worker；保持 G4 已验证的单次正文流式读取语义。
+- G6 在 upload complete 事务中同时创建 import 与 parse task，再将临时 G4 completion DTO 切换为最终 `202 {importId, taskId, status}`。
 - G3 使用 HS256 JWT；若部署切换到非对称 JWT signing key，需要在 auth verifier 中增加缓存 JWKS 支持后再启用。
 
 实际开发库是否 reset/reseed 尚未决定；若以后执行，仍需先确认精确数据库目标。
 
-## 8. 更新模板
+## 9. 更新模板
 
 每次完成迁移工作后追加：
 

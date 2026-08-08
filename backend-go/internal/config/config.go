@@ -21,6 +21,7 @@ type Config struct {
 	HTTP        HTTPConfig
 	Database    DatabaseConfig
 	Auth        AuthConfig
+	Storage     StorageConfig
 	Worker      WorkerConfig
 }
 
@@ -59,6 +60,19 @@ type AuthConfig struct {
 	JWTSecret   string
 	JWTIssuer   string
 	JWTAudience string
+}
+
+type StorageConfig struct {
+	Provider         string
+	Bucket           string
+	KeyPrefix        string
+	SupabaseURL      string
+	APIKey           string
+	Authorization    string
+	RequestTimeout   time.Duration
+	SignedURLTTL     time.Duration
+	UploadSessionTTL time.Duration
+	MaxArtifactBytes int64
 }
 
 type lookupFunc func(string) string
@@ -149,6 +163,40 @@ func load(lookup lookupFunc) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	storageProvider := strings.ToLower(valueOrDefault(lookup, "STORAGE_PROVIDER", "disabled"))
+	if storageProvider != "disabled" && storageProvider != "supabase" {
+		return Config{}, errors.New("STORAGE_PROVIDER must be disabled or supabase")
+	}
+	storageBucket := valueOrDefault(lookup, "STORAGE_BUCKET", "component-artifacts")
+	storagePrefix := strings.Trim(strings.TrimSpace(lookup("STORAGE_KEY_PREFIX")), "/")
+	if storageBucket == "" || strings.ContainsAny(storageBucket, "/\\") {
+		return Config{}, errors.New("STORAGE_BUCKET must be a bucket name without path separators")
+	}
+	if strings.Contains(storagePrefix, "..") || strings.Contains(storagePrefix, "\\") {
+		return Config{}, errors.New("STORAGE_KEY_PREFIX contains an invalid path segment")
+	}
+	storageURL := strings.TrimRight(strings.TrimSpace(lookup("SUPABASE_URL")), "/")
+	storageAPIKey := strings.TrimSpace(lookup("SUPABASE_STORAGE_API_KEY"))
+	storageAuthorization := strings.TrimSpace(lookup("SUPABASE_STORAGE_AUTHORIZATION"))
+	if storageProvider == "supabase" && (storageURL == "" || storageAPIKey == "") {
+		return Config{}, errors.New("SUPABASE_URL and SUPABASE_STORAGE_API_KEY are required for supabase storage")
+	}
+	storageRequestTimeout, err := durationValue(lookup, "STORAGE_REQUEST_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	signedURLTTL, err := durationValue(lookup, "STORAGE_SIGNED_URL_TTL", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	uploadSessionTTL, err := durationValue(lookup, "STORAGE_UPLOAD_SESSION_TTL", time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	maxArtifactBytes, err := int64Value(lookup, "STORAGE_MAX_ARTIFACT_BYTES", 512*1024*1024, 1)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Environment: environment,
@@ -176,6 +224,18 @@ func load(lookup lookupFunc) (Config, error) {
 			JWTSecret:   jwtSecret,
 			JWTIssuer:   strings.TrimSpace(lookup("AUTH_JWT_ISSUER")),
 			JWTAudience: strings.TrimSpace(lookup("AUTH_JWT_AUDIENCE")),
+		},
+		Storage: StorageConfig{
+			Provider:         storageProvider,
+			Bucket:           storageBucket,
+			KeyPrefix:        storagePrefix,
+			SupabaseURL:      storageURL,
+			APIKey:           storageAPIKey,
+			Authorization:    storageAuthorization,
+			RequestTimeout:   storageRequestTimeout,
+			SignedURLTTL:     signedURLTTL,
+			UploadSessionTTL: uploadSessionTTL,
+			MaxArtifactBytes: maxArtifactBytes,
 		},
 		Worker: WorkerConfig{
 			ID:                  strings.TrimSpace(lookup("WORKER_ID")),

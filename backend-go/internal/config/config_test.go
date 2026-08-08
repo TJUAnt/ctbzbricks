@@ -39,6 +39,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.HTTP.RequestTimeout != 30*time.Second {
 		t.Fatalf("request timeout = %s", cfg.HTTP.RequestTimeout)
 	}
+	if cfg.Storage.Provider != "disabled" || cfg.Storage.Bucket != "component-artifacts" {
+		t.Fatalf("unexpected storage defaults: %+v", cfg.Storage)
+	}
 }
 
 func TestLoadValidatesPoolBounds(t *testing.T) {
@@ -80,6 +83,34 @@ func TestLoadRejectsShortJWTSecret(t *testing.T) {
 	}))
 	if err == nil || !strings.Contains(err.Error(), "AUTH_JWT_SECRET") {
 		t.Fatalf("expected JWT secret error, got %v", err)
+	}
+}
+
+func TestLoadValidatesSupabaseStorage(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{
+		"DATABASE_URL":     "postgresql://localhost/brickbuilder",
+		"STORAGE_PROVIDER": "supabase",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "SUPABASE_URL") {
+		t.Fatalf("expected Supabase configuration error, got %v", err)
+	}
+
+	cfg, err := load(mapLookup(map[string]string{
+		"DATABASE_URL":               "postgresql://localhost/brickbuilder",
+		"STORAGE_PROVIDER":           "supabase",
+		"STORAGE_BUCKET":             "artifacts",
+		"STORAGE_KEY_PREFIX":         "/component-repo/",
+		"SUPABASE_URL":               "https://example.supabase.co/",
+		"SUPABASE_STORAGE_API_KEY":   "service-key",
+		"STORAGE_UPLOAD_SESSION_TTL": "45m",
+		"STORAGE_SIGNED_URL_TTL":     "5m",
+		"STORAGE_MAX_ARTIFACT_BYTES": "2048",
+	}))
+	if err != nil {
+		t.Fatalf("load Supabase storage: %v", err)
+	}
+	if cfg.Storage.KeyPrefix != "component-repo" || cfg.Storage.UploadSessionTTL != 45*time.Minute || cfg.Storage.MaxArtifactBytes != 2048 {
+		t.Fatalf("unexpected Supabase storage config: %+v", cfg.Storage)
 	}
 }
 
