@@ -77,7 +77,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := goose.RunContext(ctx, command, db, "."); err != nil {
-		logger.Error("migration command failed", "errorCode", "database.migration_failed", "command", command)
+		logger.Error("migration command failed", "errorCode", "database.migration_failed", "command", command, "reason", err.Error())
 		os.Exit(1)
 	}
 }

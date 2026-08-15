@@ -108,9 +108,10 @@ Python Worker 负责：
 
 1. G2 前，Alembic 拥有现有 `public` 中的 Python/legacy 对象。
 2. G2 建立独立 `component_repo` schema；此 schema 内的表、索引、约束、函数、trigger 和 RLS 只由 `backend-go/db/migrations` 与 Goose 管理。
-3. Alembic 可以暂时继续管理尚未迁移的 `public` 域，但不得创建、修改或删除 `component_repo` 内的任何对象。
-4. 后续领域迁移必须记录一次明确的所有权交接；交接后冻结该领域对应的 Alembic revision，不做双写或双 authority。
-5. 当最后一个 legacy 域完成交接后，Alembic 才整体冻结，Goose 成为全库唯一 authority。
+3. Alembic 可以暂时继续管理尚未迁移的 `public` 域，以及既有 Supabase 集成在 provider-owned `storage` schema 中的 policy；不得创建、修改或删除 `component_repo` 内的任何对象。
+4. Goose 不管理 Supabase `storage` schema；`component_repo` 与 `storage` 的对象和 policy 不得跨工具重复定义。
+5. 后续领域迁移必须记录一次明确的所有权交接；交接后冻结该领域对应的 Alembic revision，不做双写或双 authority。
+6. 当最后一个 legacy 域及 provider-owned policy 完成独立迁移或冻结后，Alembic 才整体冻结，Goose 成为应用自有 schema 的唯一 authority。
 
 schema 隔离不是运行时兼容层。新 Go 组件代码只访问 `component_repo`，不会代理或同步 legacy `public` 组件表。
 
@@ -137,7 +138,23 @@ schema 隔离不是运行时兼容层。新 Go 组件代码只访问 `component_
 
 初期使用 PostgreSQL 持久化任务队列，不额外引入 Redis、Kafka 或 RabbitMQ。
 
-任务至少包含：
+任务系统必须区分三个层次：
+
+- Logical Job：同一 owner、task type、业务对象和确定性输入的逻辑计算；
+- Execution：Logical Job 的一次实际执行，失败/取消后重提会创建下一次 Execution；
+- Attempt：单个 Execution 因 lease 超时或可重试错误产生的领取尝试。
+
+Logical Job 至少包含：
+
+```text
+id
+owner_id / task_type
+logical_key / input_hash
+execution_count
+latest_task_id / successful_task_id
+```
+
+Execution 至少包含：
 
 ```text
 id
@@ -148,7 +165,7 @@ result_json / result_artifact_id
 locale
 timezone
 created_by
-idempotency_key
+task_job_id / execution_number / retry_of_task_id
 attempts / max_attempts
 available_at
 lease_owner / lease_expires_at
@@ -159,12 +176,17 @@ created_at / started_at / finished_at
 
 执行规则：
 
+- `(owner_id, task_type, logical_key, input_hash)` 唯一标识 Logical Job；`input_hash` 必须覆盖会改变结果的权威输入和算法/配置版本。
+- 同一 Logical Job 已有 queued/running Execution 时复用该 Execution；已有可复用成功结果时直接返回；只有没有可复用结果或显式重建派生缓存时才创建下一次 Execution。
+- failed/cancelled 是 Execution 终态，不得把原行改回 queued；重新提交创建同一 Job 下递增编号的新 Execution，并记录 `retry_of_task_id`。
+- lease 恢复和有限重试只增加同一 Execution 的 Attempt，不创建新 Execution。
 - Worker 使用 `FOR UPDATE SKIP LOCKED` 短事务领取任务。
 - 领取后写 lease，计算期间不持有领取事务。
 - 任务必须支持超时重领、有限重试和幂等执行。
 - 业务状态与任务/outbox 创建需要原子一致时，必须放在同一事务。
 - `LISTEN/NOTIFY` 只能作为唤醒优化，任务表才是事实来源。
 - 不保存最终展示句子、原始异常正文、SQL、路径或堆栈。
+- task event/outbox 必须携带 `taskJobId + executionNumber + attempt`，以便区分逻辑任务、执行和领取尝试。
 
 ## 6. 对象存储原则
 

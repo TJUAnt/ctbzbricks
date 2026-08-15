@@ -1,10 +1,5 @@
 import appConfig from '../app/appConfig';
-import {
-  ApiError,
-  apiErrorFromPayload,
-  apiFetch,
-  requestJson as apiRequestJson,
-} from '../api/client';
+import { ApiError, apiFetch, requestJson as apiRequestJson } from '../api/client';
 import type { StructuredMessage } from '../api/client';
 import { currentAccessToken, supabase } from '../auth/supabaseClient';
 import { currentTaskContext } from '../api/taskContext';
@@ -14,14 +9,15 @@ type ComponentRepoApiConfig = typeof appConfig.componentRepoApi;
 
 export type ComponentResponse = {
   id: string;
+  ownerId?: string | null;
   name: string;
   contentKind: 'official' | 'user';
   contentLocale: 'zh-CN' | 'en-US';
-  translationStatus: 'source' | 'draft' | 'reviewed' | 'rejected' | 'fallback';
+  translationStatus?: 'source' | 'draft' | 'reviewed' | 'rejected' | 'fallback';
   category: string | null;
   status: string;
   currentVersionId: string | null;
-  logicalSize: {
+  logicalSize?: {
     widthStud: number;
     depthStud: number;
     heightPlate: number;
@@ -29,7 +25,9 @@ export type ComponentResponse = {
   description: string | null;
   tags: string[];
   metadata: Record<string, unknown>;
-  createdBy: string;
+  createdBy?: string;
+  subscribed?: boolean;
+  translationMissing?: boolean;
   createdAt: string;
   updatedAt: string | null;
 };
@@ -122,7 +120,7 @@ export type ComponentPreviewResponse = {
   model: {
     artifactId: string;
     format: 'glb';
-    compression: 'meshopt';
+    compression?: 'meshopt';
     url: string;
     sha256: string;
     byteLength: number;
@@ -139,30 +137,58 @@ export type ComponentVersionPreviewModelResponse = {
 
 export type ComponentVersionPartSummary = {
   partRef: string;
-  name: string;
+  name: string | null;
   contentLocale: 'zh-CN' | 'en-US' | null;
   translationStatus: 'source' | 'draft' | 'reviewed' | 'rejected' | 'fallback' | null;
-  imageUrl: string | null;
   quantity: number;
-  availability: ComponentPreviewPartAvailability;
 };
 
 export type ComponentVersionPartsResponse = {
   versionId: string;
+  partLibraryVersionId: string | null;
   partCount: number;
-  renderablePartCount: number;
-  logicalSize: {
-    widthStud: number;
-    depthStud: number;
-    heightPlate: number;
-  };
   parts: ComponentVersionPartSummary[];
+};
+
+export type PartLibraryVersionResponse = {
+  id: string;
+  sourceName: string;
+  sourceHash: string;
+  status: 'active';
+  createdAt: string;
+};
+
+export type PartPreviewResponse = {
+  partLibraryVersionId: string;
+  ldrawPartNum: string;
+  name: string;
+  contentLocale: 'zh-CN' | 'en-US';
+  translationStatus: 'reviewed' | 'fallback';
+  status: 'pending' | 'running' | 'ready' | 'failed';
+  generatorVersion: string | null;
+  taskId: string | null;
+  geometry: {
+    bbox: { minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number };
+    logicalWidthStud: number;
+    logicalDepthStud: number;
+    logicalHeightPlate: number;
+    vertexCount: number;
+    faceCount: number;
+  } | null;
+  model: ComponentPreviewResponse['model'] | null;
+  failure: StructuredMessage | null;
+};
+
+export type ReadyPartPreviewResponse = PartPreviewResponse & {
+  status: 'ready';
+  geometry: NonNullable<PartPreviewResponse['geometry']>;
+  model: NonNullable<PartPreviewResponse['model']>;
 };
 
 export type ComponentVersionResponse = {
   id: string;
   componentId: string;
-  componentCandidateId: string;
+  componentCandidateId: string | null;
   version: string;
   revision: number;
   status: string;
@@ -179,39 +205,16 @@ export type ComponentVersionResponse = {
   previewStatus: 'pending' | 'ready' | 'failed' | 'stale';
   previewGeneratorVersion: string | null;
   previewFailure: StructuredMessage | null;
+  releaseNote: string | null;
+  releaseNoteLocale: string | null;
   metadata: Record<string, unknown>;
-  createdBy: string;
+  createdBy?: string;
   createdAt: string;
   publishedAt: string | null;
   deletion?: {
     allowed: boolean;
     reason: 'current' | 'forbidden' | null;
   } | null;
-};
-
-export type ComponentVersionDeleteResponse = {
-  versionId: string;
-  componentId: string;
-  componentDeleted: boolean;
-  nextVersionId: string | null;
-};
-
-export type ComponentArtifactResponse = {
-  id: string;
-  artifactType: string;
-  originalFilename: string;
-  storageProvider: string;
-  storageBucket: string;
-  storageKey: string;
-  storageUri: string;
-  sha256: string;
-  fileSize: number;
-  mimeType: string;
-  immutable: boolean;
-  uploadedBy: string;
-  uploadedAt: string;
-  metadata: Record<string, unknown>;
-  verificationStatus: 'pending' | 'verified';
 };
 
 export type ComponentImportResponse = {
@@ -222,14 +225,17 @@ export type ComponentImportResponse = {
   baseVersionId: string | null;
   status: string;
   parserVersion: string | null;
-  partLibraryVersion: string | null;
-  createdBy: string;
+  partLibraryVersionId: string | null;
+  taskId: string;
+  candidateId: string | null;
+  draftVersionId: string | null;
+  locale: string;
+  timezone: string;
   createdAt: string;
+  startedAt: string | null;
   completedAt: string | null;
   failure: StructuredMessage | null;
   metadata: Record<string, unknown>;
-  sourceFilename?: string | null;
-  sourceFileSize?: number | null;
 };
 
 export type ComponentUploadProgress = {
@@ -240,10 +246,24 @@ export type ComponentUploadProgress = {
 export type ComponentCandidateResponse = {
   id: string;
   importId: string;
-  sceneSnapshotId: string;
   status: string;
   summary: Record<string, unknown>;
   reviewDecisions: Record<string, unknown>;
+  interfaceSignature: string;
+  structureHash: string;
+  geometryHash: string;
+  componentId: string | null;
+  draftVersionId: string | null;
+  sceneSnapshot: {
+    id: string;
+    schemaVersion: string;
+    parserVersion: string;
+    rootModelId: string | null;
+    document: Record<string, unknown>;
+    bom: Record<string, number>;
+    parseIssues: StructuredIssue[];
+    createdAt: string;
+  };
   createdAt: string;
   updatedAt: string | null;
 };
@@ -274,30 +294,31 @@ export type ComponentUploadSessionResponse = {
   metadata: Record<string, unknown>;
 };
 
-export type ComponentImportParseResponse = {
-  importJob: ComponentImportResponse;
-  sourceArtifact: ComponentArtifactResponse;
-  exchangeArtifact: ComponentArtifactResponse | null;
-  sceneSnapshot: {
-    id: string;
-    importId: string;
-    snapshotSchema: string;
-    parserVersion: string;
-    rootModelId: string | null;
-    document: Record<string, unknown>;
-    bom: Record<string, number>;
-    parseIssues: StructuredIssue[];
-    createdAt: string;
-  };
-  candidate: ComponentCandidateResponse;
-  component: ComponentResponse;
-  version: ComponentVersionResponse;
+export type ComponentImportUploadCompleteResponse = {
+  importId: string;
+  taskId: string;
+  status: string;
 };
 
-export type ComponentImportUploadCompleteResponse = {
-  importJob: ComponentImportResponse;
-  sourceArtifact: ComponentArtifactResponse;
-  exchangeArtifact: ComponentArtifactResponse | null;
+export type ComponentTaskResponse = {
+  id: string;
+  taskJobId: string;
+  executionNumber: number;
+  taskType: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  result: Record<string, unknown>;
+  resultArtifactId: string | null;
+  locale: string;
+  timezone: string;
+  attempts: number;
+  maxAttempts: number;
+  progress: StructuredMessage & { percent: number | null } | null;
+  error: StructuredMessage | null;
+  cancelRequestedAt: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
 };
 
 export type StructuredIssue = StructuredMessage & {
@@ -329,24 +350,6 @@ export type ComponentRelationCandidateResponse = {
   updatedAt: string | null;
 };
 
-export type ComponentFreeConnectorResponse = {
-  worldConnectorId: string;
-  partInstanceId: string;
-  instancePath: string[];
-  partRef: string;
-  connectorId: string;
-  connectorType: string | null;
-  connectorGender: string | null;
-  connectorKind: string;
-  connectorGroup: string | null;
-  position: Record<string, number>;
-  axis: Record<string, number>;
-  matrix: number[];
-  directionLabel: string | null;
-  directionGroup: string | null;
-  metadata: Record<string, unknown>;
-};
-
 export type ComponentConnectorResponse = {
   worldConnectorId: string;
   partInstanceId: string;
@@ -354,10 +357,15 @@ export type ComponentConnectorResponse = {
   connectorId: string;
   connectorType: string | null;
   connectorKind: string;
+  connectorGender: string | null;
   state: 'internal' | 'external' | 'blocked' | 'unsupported' | 'unresolved';
   position: Record<string, number>;
   accessAxis: Record<string, number>;
   externalInterfaceId: string | null;
+  capacity: number;
+  occupiedSlots: number;
+  availableCapacity: number;
+  eligibility: Record<string, unknown>;
 };
 
 export type ComponentInterfaceResponse = {
@@ -372,19 +380,12 @@ export type ComponentInterfaceResponse = {
   businessRoles: string[];
   requirements: Record<string, unknown>;
   reviewStatus: string;
-  createdBy: string;
   createdAt: string;
   updatedAt: string | null;
-  recognitionMethod: 'automatic';
-  recognitionVersion: string;
-  interfaceGroupId: string;
 };
 
 export type ComponentConnectorAnalysisResponse = {
   componentCandidateId: string;
-  partLibraryVersionId: string;
-  recognitionMethod: 'automatic';
-  recognitionVersion: string;
   connectors: ComponentConnectorResponse[];
   externalInterfaces: ComponentInterfaceResponse[];
 };
@@ -393,12 +394,12 @@ export type ComponentValidationReportResponse = {
   id: string;
   componentCandidateId: string | null;
   componentVersionId: string | null;
-  validationLevel: string;
+  validationLevel?: string;
   passed: boolean;
   checks: StructuredCheck[];
   issues: StructuredIssue[];
-  validatorVersion: string;
-  createdAt: string;
+  validatorVersion?: string;
+  createdAt: string | null;
 };
 
 export type ComponentImportTarget = {
@@ -406,17 +407,71 @@ export type ComponentImportTarget = {
   baseVersionId?: string | null;
 };
 
+type AcceptedTask = { taskId: string; status: string };
+
+type GoComponentVersionResponse = Omit<
+  ComponentVersionResponse,
+  'deletion' | 'previewFailure'
+> & {
+  previewFailureCode: string | null;
+  previewFailureParams: Record<string, unknown>;
+};
+
+type GoComponentPreview = {
+  versionId: string;
+  status: ComponentVersionPreviewModelResponse['status'];
+  generatorVersion: string | null;
+  artifactId: string | null;
+  sha256: string | null;
+  fileSize: number | null;
+  url: string | null;
+  failure: StructuredMessage | null;
+};
+
+type GoComponentVersionParts = {
+  versionId: string;
+  partLibraryVersionId: string | null;
+  partCount: number;
+  items: Array<{
+    ldrawPartNum: string;
+    quantity: number;
+    name: string | null;
+    contentLocale: 'zh-CN' | 'en-US' | null;
+    translationStatus: ComponentVersionPartSummary['translationStatus'];
+  }>;
+};
+
+type GoConnector = Omit<
+  ComponentConnectorResponse,
+  'accessAxis' | 'connectorId' | 'connectorKind' | 'position'
+> & {
+  id: string;
+  connectorKind: string | null;
+  position: number[];
+  axis: number[];
+  matrix: number[];
+  accessAxis: number[];
+};
+
 export async function listComponents(status?: string): Promise<ComponentResponse[]> {
   const url = new URL(appConfig.componentRepoApi.components, window.location.origin);
-  url.searchParams.set('contentLocale', currentTaskContext().locale);
+  url.searchParams.set('locale', currentTaskContext().locale);
   if (status) {
     url.searchParams.set('status', status);
   }
-  return requestJson<ComponentResponse[]>(url.toString());
+  const response = await requestJson<{ items: ComponentResponse[] }>(url.toString());
+  return response.items;
 }
 
 export async function listComponentGroups(): Promise<ComponentGroupTreeResponse> {
-  return requestJson<ComponentGroupTreeResponse>(appConfig.componentRepoApi.componentGroups);
+  let response = await requestJson<{ items: ComponentGroupResponse[] }>(appConfig.componentRepoApi.componentGroups);
+  if (!response.items.some((group) => group.groupType === 'root')) {
+    await requestVoid(appConfig.componentRepoApi.componentGroupsBootstrap, { method: 'POST' });
+    response = await requestJson<{ items: ComponentGroupResponse[] }>(appConfig.componentRepoApi.componentGroups);
+  }
+  const root = response.items.find((group) => group.groupType === 'root');
+  if (!root) throw new ApiError('component_repo.group_not_found');
+  return { root, groups: response.items.filter((group) => group.groupType === 'custom') };
 }
 
 export async function createComponentGroup(payload: {
@@ -455,7 +510,7 @@ export async function moveComponentGroup(
   return requestJson<ComponentGroupResponse>(pathFor('componentGroupMove', { groupId }), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ parentGroupId, position }),
+    body: JSON.stringify({ parentGroupId, sortOrder: position }),
   });
 }
 
@@ -470,8 +525,10 @@ export async function listComponentGroupComponents(
     pathFor('componentGroupComponents', { groupId }),
     window.location.origin,
   );
-  url.searchParams.set('contentLocale', currentTaskContext().locale);
-  return requestJson<ComponentResponse[]>(url.toString());
+  url.searchParams.set('locale', currentTaskContext().locale);
+  url.searchParams.set('pageSize', '100');
+  const response = await requestJson<{ items: ComponentResponse[] }>(url.toString());
+  return response.items;
 }
 
 export async function searchComponentGroupComponents(
@@ -485,19 +542,13 @@ export async function searchComponentGroupComponents(
     pageSize: number;
   },
 ): Promise<ComponentGroupSearchResponse> {
-  return requestJson<ComponentGroupSearchResponse>(
-    pathFor('componentGroupComponentSearch', { groupId }),
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contentLocale: currentTaskContext().locale,
-        allowPlanarRotation: true,
-        sizeTolerance: 0,
-        ...payload,
-      }),
-    },
-  );
+  const url = new URL(pathFor('componentGroupComponentSearch', { groupId }), window.location.origin);
+  url.searchParams.set('locale', currentTaskContext().locale);
+  url.searchParams.set('query', payload.query);
+  url.searchParams.set('page', String(payload.page));
+  url.searchParams.set('pageSize', String(payload.pageSize));
+  payload.statuses?.forEach((status) => url.searchParams.append('status', status));
+  return requestJson<ComponentGroupSearchResponse>(url.toString());
 }
 
 export async function listComponentGroupIds(componentId: string): Promise<string[]> {
@@ -512,8 +563,12 @@ export async function addComponentToGroup(
   componentId: string,
 ): Promise<void> {
   await requestVoid(
-    pathFor('componentGroupComponent', { groupId, componentId }),
-    { method: 'PUT' },
+    pathFor('componentGroupComponents', { groupId }),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ componentId }),
+    },
   );
 }
 
@@ -527,81 +582,141 @@ export async function removeComponentFromGroup(
   );
 }
 
-/** Load the first renderable repository item; locale affects domain content, not geometry. */
-export async function loadFirstComponentPreview(): Promise<ComponentPreviewResponse> {
-  const url = new URL(appConfig.componentRepoApi.componentPreviewFirst, window.location.origin);
-  url.searchParams.set('contentLocale', currentTaskContext().locale);
-  return requestJson<ComponentPreviewResponse>(url.toString(), { method: 'POST' });
+export async function getActivePartLibraryVersion(): Promise<PartLibraryVersionResponse> {
+  return requestJson<PartLibraryVersionResponse>(appConfig.componentRepoApi.activePartLibraryVersion);
 }
 
-/** Load one explicit Component or Part resource; locale affects content, not geometry. */
-export async function loadLibraryItemPreview(
-  itemType: 'component' | 'part',
-  itemId: string,
-): Promise<ComponentPreviewResponse> {
-  const url = new URL(
-    pathFor('libraryItemPreview', { itemType, itemId }),
-    window.location.origin,
-  );
-  url.searchParams.set('contentLocale', currentTaskContext().locale);
-  return requestJson<ComponentPreviewResponse>(url.toString(), { method: 'POST' });
+/** Load one immutable Part resource and materialize its GLB through the durable task system. */
+export async function loadPartPreview(
+  partLibraryVersionId: string,
+  ldrawPartNum: string,
+): Promise<ReadyPartPreviewResponse> {
+  const previewPath = pathFor('partPreview', { partLibraryVersionId, ldrawPartNum });
+  const previewUrl = new URL(previewPath, window.location.origin);
+  previewUrl.searchParams.set('locale', currentTaskContext().locale);
+  let preview = await requestJson<PartPreviewResponse>(previewUrl.toString());
+  if (preview.status !== 'ready') {
+    const context = currentTaskContext();
+    const accepted = await requestJson<AcceptedTask>(
+      pathFor('partPreviewMaterialize', { partLibraryVersionId, ldrawPartNum }),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(context),
+      },
+    );
+    await waitForTask(accepted.taskId);
+    preview = await requestJson<PartPreviewResponse>(previewUrl.toString());
+  }
+  if (preview.status === 'failed' || !preview.model) {
+    throw new ApiError(
+      preview.failure?.code ?? 'component_repo.part_preview_unavailable',
+      preview.failure?.params ?? { partLibraryVersionId, ldrawPartNum },
+      null,
+      409,
+    );
+  }
+  if (!preview.geometry) {
+    throw new ApiError(
+      'component_repo.part_preview_unavailable',
+      { partLibraryVersionId, ldrawPartNum },
+      null,
+      409,
+    );
+  }
+  return preview as ReadyPartPreviewResponse;
 }
 
 export async function getComponent(componentId: string): Promise<ComponentResponse> {
   const url = new URL(pathFor('componentDetail', { componentId }), window.location.origin);
-  url.searchParams.set('contentLocale', currentTaskContext().locale);
+  url.searchParams.set('locale', currentTaskContext().locale);
   return requestJson<ComponentResponse>(url.toString());
 }
 
+export async function updateComponent(
+  componentId: string,
+  payload: {
+    name?: string;
+    category?: string | null;
+    contentLocale?: string;
+  },
+): Promise<ComponentResponse> {
+  return requestJson<ComponentResponse>(pathFor('componentDetail', { componentId }), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function getComponentVersion(versionId: string): Promise<ComponentVersionResponse> {
-  return requestJson<ComponentVersionResponse>(pathFor('componentVersion', { versionId }));
+  const version = await requestJson<GoComponentVersionResponse>(pathFor('componentVersion', { versionId }));
+  return componentVersionFromGo(version);
+}
+
+export async function updateComponentVersion(
+  versionId: string,
+  payload: { version?: string; revision?: number; releaseNote?: string | null; releaseNoteLocale?: string | null },
+): Promise<ComponentVersionResponse> {
+  const version = await requestJson<GoComponentVersionResponse>(pathFor('componentVersion', { versionId }), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return componentVersionFromGo(version);
 }
 
 export async function deleteComponentVersion(
-  versionId: string,
-): Promise<ComponentVersionDeleteResponse> {
-  return requestJson<ComponentVersionDeleteResponse>(
-    pathFor('componentVersionDelete', { versionId }),
-    { method: 'DELETE' },
-  );
+  version: ComponentVersionResponse,
+): Promise<void> {
+  await requestVoid(pathFor('componentVersionDelete', { versionId: version.id }), { method: 'DELETE' });
 }
 
 /** Load one explicit ComponentVersion using the same real Part mesh contract as the viewer. */
 export async function loadComponentVersionPreview(versionId: string): Promise<ComponentVersionPreviewModelResponse> {
-  const url = new URL(pathFor('componentVersionPreview', { versionId }), window.location.origin);
-  url.searchParams.set('contentLocale', currentTaskContext().locale);
-  return requestJson<ComponentVersionPreviewModelResponse>(url.toString(), { method: 'POST' });
+  let preview = await requestJson<GoComponentPreview>(pathFor('componentVersionPreview', { versionId }));
+  if (preview.status === 'pending' || preview.status === 'stale') {
+    const accepted = await requestJson<AcceptedTask>(
+      pathFor('componentVersionPreviewMaterialize', { versionId }),
+      { method: 'POST' },
+    );
+    await waitForTask(accepted.taskId);
+    preview = await requestJson<GoComponentPreview>(pathFor('componentVersionPreview', { versionId }));
+  }
+  if (preview.status === 'failed') {
+    throw new ApiError(
+      preview.failure?.code ?? 'common.internal_error',
+      preview.failure?.params ?? {},
+      null,
+      400,
+    );
+  }
+  return componentPreviewFromGo(preview);
 }
 
 export async function loadComponentVersionParts(versionId: string): Promise<ComponentVersionPartsResponse> {
   const url = new URL(pathFor('componentVersionParts', { versionId }), window.location.origin);
-  url.searchParams.set('contentLocale', currentTaskContext().locale);
-  return requestJson<ComponentVersionPartsResponse>(url.toString());
+  url.searchParams.set('locale', currentTaskContext().locale);
+  const response = await requestJson<GoComponentVersionParts>(url.toString());
+  return {
+    versionId: response.versionId,
+    partLibraryVersionId: response.partLibraryVersionId,
+    partCount: response.partCount,
+    parts: response.items.map((item) => ({
+      partRef: item.ldrawPartNum,
+      quantity: item.quantity,
+      name: item.name,
+      contentLocale: item.contentLocale,
+      translationStatus: item.translationStatus,
+    })),
+  };
 }
 
 export async function listComponentVersions(componentId: string, status?: string): Promise<ComponentVersionResponse[]> {
   const url = new URL(pathFor('componentVersions', { componentId }), window.location.origin);
-  if (status) {
-    url.searchParams.set('status', status);
-  }
-  return requestJson<ComponentVersionResponse[]>(url.toString());
-}
-
-export async function createComponentImport(
-  sourceFile: File,
-  exchangeFile: File | null,
-  target: ComponentImportTarget = {},
-): Promise<ComponentImportParseResponse> {
-  const body = new FormData();
-  body.append('source_file', sourceFile);
-  if (exchangeFile) {
-    body.append('exchange_file', exchangeFile);
-  }
-  appendImportContext(body, target);
-  return requestJson<ComponentImportParseResponse>(appConfig.componentRepoApi.componentImports, {
-    method: 'POST',
-    body,
-  });
+  url.searchParams.set('pageSize', '100');
+  const response = await requestJson<{ items: GoComponentVersionResponse[] }>(url.toString());
+  const versions = response.items.map(componentVersionFromGo);
+  return status ? versions.filter((version) => version.status === status) : versions;
 }
 
 export async function createComponentImportWithUploadSession(
@@ -619,9 +734,7 @@ export async function createComponentImportWithProgress(
   target: ComponentImportTarget = {},
 ): Promise<ComponentCandidateResponse> {
   if (!supabase) {
-    onProgress?.({ percent: 2, message: tr('componentRepo:switchingToACompatibleUploadMethod') });
-    const result = await uploadComponentImportWithXhr(sourceFile, exchangeFile, onProgress, target);
-    return result.candidate;
+    throw new ApiError('component_repo.missing_supabase_config');
   }
   onProgress?.({ percent: 4, message: tr('componentRepo:creatingASecureUploadChannel') });
   const uploadSession = await createComponentUploadSession(sourceFile, exchangeFile, target);
@@ -630,7 +743,8 @@ export async function createComponentImportWithProgress(
   onProgress?.({ percent: 92, message: tr('componentRepo:filesUploadedProcessingComponent') });
   const completion = await completeComponentUploadSession(uploadSession.id);
   const candidate = await waitForComponentImportCandidate(
-    completion.importJob.id,
+    completion.importId,
+    completion.taskId,
     uploadSession.id,
   );
   onProgress?.({ percent: 100, message: tr('componentRepo:componentReadyForReview') });
@@ -667,7 +781,7 @@ export async function uploadComponentSessionFiles(
   onProgress?: (progress: ComponentUploadProgress) => void,
 ): Promise<void> {
   if (!supabase) {
-    throw new Error(tr('componentRepo:supabaseSignInIsNotConfigured'));
+    throw new ApiError('component_repo.missing_supabase_config');
   }
   const fileByRole = new Map<string, File>([['source', sourceFile]]);
   if (exchangeFile) {
@@ -676,14 +790,14 @@ export async function uploadComponentSessionFiles(
   for (const [index, upload] of uploadSession.uploads.entries()) {
     const file = fileByRole.get(upload.role);
     if (!file) {
-      throw new Error(`Missing upload file for role: ${upload.role}`);
+      throw new ApiError('request.validation_failed', { field: upload.role });
     }
     const { error } = await supabase.storage.from(upload.bucket).upload(upload.objectPath, file, {
       contentType: upload.contentType,
       upsert: false,
     });
     if (error) {
-      throw new Error(error.message);
+      throw new ApiError('component_repo.storage_unavailable');
     }
     const percent = 12 + Math.round(((index + 1) / uploadSession.uploads.length) * 74);
     onProgress?.({
@@ -708,96 +822,46 @@ export async function getComponentImport(importId: string): Promise<ComponentImp
   );
 }
 
-export async function getComponentImportCandidate(importId: string): Promise<ComponentCandidateResponse> {
-  return requestJson<ComponentCandidateResponse>(
-    pathFor('componentImportCandidate', { importId }),
-  );
-}
-
 const componentImportPollIntervalMs = 1_000;
 const componentImportPollTimeoutMs = 10 * 60 * 1_000;
 
 async function waitForComponentImportCandidate(
   importId: string,
+  taskId: string,
   uploadSessionId: string,
 ): Promise<ComponentCandidateResponse> {
-  const deadline = Date.now() + componentImportPollTimeoutMs;
-  while (Date.now() < deadline) {
-    let importJob: ComponentImportResponse;
-    try {
-      importJob = await getComponentImport(importId);
-    } catch (error) {
-      if (error instanceof ApiError && error.code === 'component_repo.import_not_found') {
-        throw new ApiError(
-          'component_repo.component_processing_failed',
-          { uploadSessionId },
-          error.traceId,
-          400,
-          error,
-        );
-      }
-      throw error;
-    }
-    if (importJob.failure) {
-      throw new ApiError(importJob.failure.code, importJob.failure.params, null, 400);
-    }
-    const processing = recordValue(importJob.metadata.processing);
-    const processingStatus = typeof processing?.status === 'string'
-      ? processing.status
-      : null;
-    if (
-      processingStatus === 'completed'
-      || (processingStatus === null && importJob.status === 'parsed')
-    ) {
-      return getComponentImportCandidate(importId);
-    }
-    if (importJob.status === 'failed') {
-      throw new ApiError(
-        'component_repo.component_processing_failed',
-        { uploadSessionId },
-        null,
-        400,
-      );
-    }
-    await delay(componentImportPollIntervalMs);
+  await waitForTask(taskId);
+  const importJob = await getComponentImport(importId);
+  if (importJob.failure) {
+    throw new ApiError(importJob.failure.code, importJob.failure.params, null, 400);
   }
-  throw new ApiError(
-    'component_repo.component_processing_failed',
-    { uploadSessionId },
-    null,
-    408,
-  );
+  if (!importJob.candidateId) {
+    throw new ApiError('component_repo.component_processing_failed', { uploadSessionId }, null, 400);
+  }
+  return getCandidate(importJob.candidateId);
 }
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
 export async function getCandidate(candidateId: string): Promise<ComponentCandidateResponse> {
   return requestJson<ComponentCandidateResponse>(pathFor('candidateDetail', { candidateId }));
 }
 
-/** Load a parsed candidate snapshot without requiring a draft ComponentVersion. */
-export async function loadCandidatePreview(candidateId: string): Promise<ComponentPreviewResponse> {
-  const url = new URL(pathFor('candidatePreview', { candidateId }), window.location.origin);
-  url.searchParams.set('contentLocale', currentTaskContext().locale);
-  return requestJson<ComponentPreviewResponse>(url.toString(), { method: 'POST' });
-}
-
 export async function listRelations(candidateId: string): Promise<ComponentRelationCandidateResponse[]> {
-  return requestJson<ComponentRelationCandidateResponse[]>(pathFor('candidateRelations', { candidateId }));
+  const response = await requestJson<{ items: ComponentRelationCandidateResponse[] }>(
+    pathFor('candidateRelations', { candidateId }),
+  );
+  return response.items;
 }
 
 export async function detectRelations(candidateId: string): Promise<ComponentRelationCandidateResponse[]> {
-  return requestJson<ComponentRelationCandidateResponse[]>(pathFor('candidateRelationsDetect', { candidateId }), {
+  const accepted = await requestJson<AcceptedTask>(pathFor('candidateRelationsDetect', { candidateId }), {
     method: 'POST',
   });
+  await waitForTask(accepted.taskId);
+  return listRelations(candidateId);
 }
 
 export async function confirmRelation(
@@ -818,43 +882,38 @@ export async function rejectRelation(
   });
 }
 
-export async function listFreeConnectors(candidateId: string): Promise<ComponentFreeConnectorResponse[]> {
-  return requestJson<ComponentFreeConnectorResponse[]>(pathFor('candidateFreeConnectors', { candidateId }));
-}
-
 export async function getConnectorAnalysis(candidateId: string): Promise<ComponentConnectorAnalysisResponse> {
-  return requestJson<ComponentConnectorAnalysisResponse>(
-    pathFor('candidateConnectorSummary', { candidateId }),
-  );
+  const [connectors, externalInterfaces] = await Promise.all([
+    listConnectors(candidateId),
+    listInterfaces(candidateId),
+  ]);
+  return { componentCandidateId: candidateId, connectors, externalInterfaces };
 }
 
 export async function listInterfaces(candidateId: string): Promise<ComponentInterfaceResponse[]> {
-  return requestJson<ComponentInterfaceResponse[]>(pathFor('candidateInterfaces', { candidateId }));
+  const response = await requestJson<{ items: ComponentInterfaceResponse[] }>(
+    pathFor('candidateInterfaces', { candidateId }),
+  );
+  return response.items;
 }
 
 export async function validateCandidate(candidateId: string): Promise<ComponentValidationReportResponse> {
-  return requestJson<ComponentValidationReportResponse>(pathFor('candidateValidate', { candidateId }), {
+  const accepted = await requestJson<AcceptedTask>(pathFor('candidateValidate', { candidateId }), {
     method: 'POST',
   });
+  const task = await waitForTask(accepted.taskId);
+  const reportId = String(task.result.validationReportId ?? '');
+  if (!reportId) throw new ApiError('common.invalid_response');
+  return requestJson<ComponentValidationReportResponse>(pathFor('validationReport', { reportId }));
 }
 
 export async function publishVersion(
   versionId: string,
-  payload: {
-    releaseNote?: string;
-    name?: string;
-    category?: string | null;
-    version?: string;
-  } = {},
 ): Promise<ComponentVersionResponse> {
-  return requestJson<ComponentVersionResponse>(pathFor('componentVersionPublish', { versionId }), {
+  const version = await requestJson<GoComponentVersionResponse>(pathFor('componentVersionPublish', { versionId }), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      ...payload,
-      ...(payload.name ? { contentLocale: currentTaskContext().locale } : {}),
-    }),
   });
+  return componentVersionFromGo(version);
 }
 
 export function componentVersionSourceUrl(versionId: string): string {
@@ -862,7 +921,10 @@ export function componentVersionSourceUrl(versionId: string): string {
 }
 
 export async function downloadComponentVersionSource(versionId: string): Promise<void> {
-  const response = await apiFetch(componentVersionSourceUrl(versionId), await withAuth());
+  const download = await requestJson<{ artifactId: string; url: string; expiresAt: string }>(
+    componentVersionSourceUrl(versionId),
+  );
+  const response = await apiFetch(download.url);
   const blob = await response.blob();
   const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -872,6 +934,79 @@ export async function downloadComponentVersionSource(versionId: string): Promise
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(objectUrl);
+}
+
+async function listConnectors(candidateId: string): Promise<ComponentConnectorResponse[]> {
+  const response = await requestJson<{ items: GoConnector[] }>(
+    pathFor('candidateConnectors', { candidateId }),
+  );
+  return response.items.map((connector) => ({
+    ...connector,
+    connectorId: connector.id,
+    connectorKind: connector.connectorKind ?? '',
+    position: vectorFromGo(connector.position),
+    accessAxis: vectorFromGo(connector.accessAxis),
+  }));
+}
+
+function componentVersionFromGo(version: GoComponentVersionResponse): ComponentVersionResponse {
+  const { previewFailureCode, previewFailureParams, ...rest } = version;
+  return {
+    ...rest,
+    previewFailure: previewFailureCode
+      ? { code: previewFailureCode, params: previewFailureParams ?? {} }
+      : null,
+    deletion: {
+      allowed: version.status === 'draft',
+      reason: null,
+    },
+  };
+}
+
+function componentPreviewFromGo(preview: GoComponentPreview): ComponentVersionPreviewModelResponse {
+  const model = preview.status === 'ready'
+    && preview.artifactId
+    && preview.sha256
+    && preview.fileSize !== null
+    && preview.url
+    ? {
+        artifactId: preview.artifactId,
+        format: 'glb' as const,
+        url: preview.url,
+        sha256: preview.sha256,
+        byteLength: preview.fileSize,
+      }
+    : null;
+  return {
+    versionId: preview.versionId,
+    status: preview.status,
+    model,
+    failure: preview.failure,
+  };
+}
+
+function vectorFromGo(value: number[]): Record<string, number> {
+  return { x: value[0] ?? 0, y: value[1] ?? 0, z: value[2] ?? 0 };
+}
+
+export async function getTask(taskId: string): Promise<ComponentTaskResponse> {
+  return requestJson<ComponentTaskResponse>(pathFor('taskDetail', { taskId }));
+}
+
+export async function waitForTask(taskId: string): Promise<ComponentTaskResponse> {
+  const deadline = Date.now() + componentImportPollTimeoutMs;
+  while (Date.now() < deadline) {
+    const task = await getTask(taskId);
+    if (task.status === 'succeeded') return task;
+    if (task.status === 'failed') {
+      throw new ApiError(task.error?.code ?? 'common.internal_error', task.error?.params ?? {}, null, 400);
+    }
+    if (task.status === 'cancelled') {
+      throw new ApiError('request.failed', {}, null, 409);
+    }
+    await delay(componentImportPollIntervalMs);
+  }
+  throw new ApiError('request.failed', { taskId }, null, 408);
 }
 
 function pathFor(key: keyof ComponentRepoApiConfig, params: Record<string, string>): string {
@@ -899,74 +1034,6 @@ async function fileSpec(file: File): Promise<{
 async function fileSha256(file: File): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-async function uploadComponentImportWithXhr(
-  sourceFile: File,
-  exchangeFile: File | null,
-  onProgress?: (progress: ComponentUploadProgress) => void,
-  target: ComponentImportTarget = {},
-): Promise<ComponentImportParseResponse> {
-  const accessToken = await currentAccessToken();
-  const body = new FormData();
-  body.append('source_file', sourceFile);
-  if (exchangeFile) {
-    body.append('exchange_file', exchangeFile);
-  }
-  appendImportContext(body, target);
-
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open('POST', appConfig.componentRepoApi.componentImports);
-    if (accessToken) {
-      request.setRequestHeader('Authorization', `Bearer ${accessToken}`);
-    }
-    request.upload.addEventListener('progress', (event) => {
-      if (!event.lengthComputable) {
-        return;
-      }
-      const percent = Math.max(3, Math.min(95, Math.round((event.loaded / event.total) * 92)));
-      onProgress?.({ percent, message: tr('componentRepo:uploadingComponentFiles') });
-    });
-    request.addEventListener('load', () => {
-      if (request.status < 200 || request.status >= 300) {
-        reject(xhrApiError(request));
-        return;
-      }
-      try {
-        const result = JSON.parse(request.responseText) as ComponentImportParseResponse;
-        onProgress?.({ percent: 100, message: tr('componentRepo:componentReadyForReview') });
-        resolve(result);
-      } catch {
-        reject(new ApiError('common.invalid_response', {}, request.getResponseHeader('X-Trace-Id'), request.status));
-      }
-    });
-    request.addEventListener('error', () => reject(new ApiError('common.network_error')));
-    request.addEventListener('abort', () => reject(new Error(tr('componentRepo:componentUploadCanceled'))));
-    request.send(body);
-  });
-}
-
-function appendImportContext(body: FormData, target: ComponentImportTarget): void {
-  const taskContext = currentTaskContext();
-  body.append('content_locale', taskContext.locale);
-  body.append('timezone', taskContext.timezone);
-  if (target.targetComponentId) body.append('target_component_id', target.targetComponentId);
-  if (target.baseVersionId) body.append('base_version_id', target.baseVersionId);
-}
-
-function xhrApiError(request: XMLHttpRequest): ApiError {
-  let payload: unknown = null;
-  try {
-    payload = JSON.parse(request.responseText) as unknown;
-  } catch {
-    payload = null;
-  }
-  return apiErrorFromPayload(
-    payload,
-    request.status,
-    request.getResponseHeader('X-Trace-Id'),
-  );
 }
 
 function responseFilename(response: Response): string | null {

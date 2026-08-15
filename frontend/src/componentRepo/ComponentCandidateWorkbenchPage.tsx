@@ -23,10 +23,11 @@ import {
   getComponentVersion,
   listComponentVersions,
   listRelations,
-  loadCandidatePreview,
   loadComponentVersionPreview,
   publishVersion,
   rejectRelation,
+  updateComponent,
+  updateComponentVersion,
   validateCandidate,
   type ComponentCandidateResponse,
   type ComponentPreviewResponse,
@@ -148,29 +149,31 @@ export function ComponentCandidateWorkbenchPage() {
           if (!selectedVersion) throw new Error(tr('componentRepo:noComponentVersions'));
           component = loadedComponent;
           currentVersion = selectedVersion;
+          if (!selectedVersion.componentCandidateId) {
+            throw new Error(tr('componentRepo:candidateIdIsMissing'));
+          }
           candidate = await getCandidate(selectedVersion.componentCandidateId);
           preview = await loadComponentVersionPreview(currentVersion.id);
         } else {
           if (!routeCandidateId) throw new Error(tr('componentRepo:candidateIdIsMissing'));
           candidate = await getCandidate(routeCandidateId);
-          const componentRecordId = String(candidate.reviewDecisions.componentId ?? '');
-          const draftVersionId = String(candidate.reviewDecisions.draftVersionId ?? '');
-          if (componentRecordId && draftVersionId) {
-            [component, currentVersion] = await Promise.all([
-              getComponent(componentRecordId),
-              getComponentVersion(draftVersionId),
-            ]);
-            preview = await loadComponentVersionPreview(currentVersion.id);
-          } else {
-            // Parsed candidates can be previewed directly before a draft version exists.
-            preview = await loadCandidatePreview(candidate.id);
+          if (!candidate.componentId || !candidate.draftVersionId) {
+            throw new Error(tr('componentRepo:draftVersionUnavailable'));
           }
+          [component, currentVersion] = await Promise.all([
+            getComponent(candidate.componentId),
+            getComponentVersion(candidate.draftVersionId),
+          ]);
+          preview = await loadComponentVersionPreview(currentVersion.id);
         }
         if (!active) return;
         setCandidateId(candidate.id);
         setComponentName(component?.name ?? '');
         setComponentCategory(component?.category ?? '');
-        if (currentVersion) setVersion(currentVersion.version);
+        if (currentVersion) {
+          setVersion(currentVersion.version);
+          setReleaseNote(currentVersion.releaseNote ?? '');
+        }
         setState((current) => ({
           ...current,
           candidate,
@@ -245,12 +248,20 @@ export function ComponentCandidateWorkbenchPage() {
         throw new Error(tr('componentRepo:draftVersionUnavailable'));
       }
       if (!componentName.trim()) throw new Error(tr('componentRepo:enterAComponentName'));
-      const publishedVersion = await publishVersion(draftVersionId, {
-        releaseNote: releaseNote.trim(),
+      if (!state.component) {
+        throw new Error(tr('componentRepo:draftVersionUnavailable'));
+      }
+      await updateComponent(state.component.id, {
         name: componentName.trim(),
         category: componentCategory.trim() || null,
-        version: version.trim() || '0.1.0',
+        contentLocale: state.component.contentLocale,
       });
+      const updatedVersion = await updateComponentVersion(draftVersionId, {
+        version: version.trim(),
+        releaseNote: releaseNote.trim() ? releaseNote : null,
+        releaseNoteLocale: releaseNote.trim() ? state.component.contentLocale : null,
+      });
+      const publishedVersion = await publishVersion(updatedVersion.id);
       const component = await getComponent(publishedVersion.componentId);
       setState((current) => ({ ...current, component, currentVersion: publishedVersion, publishedVersion }));
     }, tr('componentRepo:componentVersionPublished'));
@@ -446,7 +457,7 @@ export function ComponentCandidateWorkbenchPage() {
           </label>
           <label className="component-repo-control-field">
             <span>{appConfig.texts.componentRepoReleaseNote}</span>
-            <input disabled={!isEditable} onChange={(event) => setReleaseNote(event.target.value)} value={releaseNote} />
+            <textarea disabled={!isEditable} onChange={(event) => setReleaseNote(event.target.value)} value={releaseNote} />
           </label>
           <div className="component-repo-inline-actions component-repo-publish-actions">
             <button disabled={!isEditable || state.loading} onClick={() => void validate()} type="button">

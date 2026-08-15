@@ -210,10 +210,11 @@ class SupabaseArtifactStorage:
         )
 
     def _auth_headers(self) -> dict[str, str]:
-        return {
-            "apikey": self.api_key,
-            "Authorization": f"Bearer {self.authorization_token or self.api_key}",
-        }
+        authorization = self.authorization_token or self.api_key
+        headers = {"apikey": self.api_key}
+        if not authorization.startswith("sb_secret_"):
+            headers["Authorization"] = f"Bearer {authorization}"
+        return headers
 
 
 def storage_from_config(config: dict, backend_root: Path) -> ArtifactStorage:

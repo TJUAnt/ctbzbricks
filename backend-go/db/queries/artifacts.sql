@@ -7,7 +7,9 @@ INSERT INTO component_repo.upload_sessions (
     sqlc.narg(base_version_id), sqlc.arg(locale), sqlc.arg(timezone),
     sqlc.arg(metadata), sqlc.arg(created_by), sqlc.arg(expires_at)
 )
-RETURNING *;
+RETURNING id, owner_id, status, target_component_id, base_version_id,
+          locale, timezone, failure_code, failure_params, metadata, created_by,
+          created_at, expires_at, completed_at;
 
 -- name: CreateUploadSessionFile :one
 INSERT INTO component_repo.upload_session_files (
@@ -19,21 +21,29 @@ INSERT INTO component_repo.upload_session_files (
     sqlc.arg(expected_sha256), sqlc.arg(storage_provider), sqlc.arg(storage_bucket),
     sqlc.arg(storage_key)
 )
-RETURNING *;
+RETURNING id, upload_session_id, ordinal, artifact_type, original_filename,
+          expected_size, expected_sha256, storage_provider, storage_bucket,
+          storage_key, artifact_id, status, created_at, completed_at;
 
 -- name: GetOwnedUploadSession :one
-SELECT *
+SELECT id, owner_id, status, target_component_id, base_version_id,
+       locale, timezone, failure_code, failure_params, metadata, created_by,
+       created_at, expires_at, completed_at
 FROM component_repo.upload_sessions
 WHERE id = sqlc.arg(session_id) AND owner_id = sqlc.arg(actor_id);
 
 -- name: LockOwnedUploadSession :one
-SELECT *
+SELECT id, owner_id, status, target_component_id, base_version_id,
+       locale, timezone, failure_code, failure_params, metadata, created_by,
+       created_at, expires_at, completed_at
 FROM component_repo.upload_sessions
 WHERE id = sqlc.arg(session_id) AND owner_id = sqlc.arg(actor_id)
 FOR UPDATE;
 
 -- name: ListUploadSessionFiles :many
-SELECT *
+SELECT id, upload_session_id, ordinal, artifact_type, original_filename,
+       expected_size, expected_sha256, storage_provider, storage_bucket,
+       storage_key, artifact_id, status, created_at, completed_at
 FROM component_repo.upload_session_files
 WHERE upload_session_id = sqlc.arg(session_id)
 ORDER BY ordinal, id;
@@ -49,7 +59,10 @@ INSERT INTO component_repo.artifacts (
     sqlc.arg(storage_key), sqlc.arg(sha256), sqlc.arg(file_size), sqlc.arg(mime_type),
     true, 'pending', sqlc.arg(uploaded_by), sqlc.arg(metadata)
 )
-RETURNING *;
+RETURNING id, owner_id, artifact_type, source_kind, original_filename,
+          storage_provider, storage_bucket, storage_key, sha256, file_size,
+          mime_type, immutable, verification_status, verified_at, uploaded_by,
+          uploaded_at, metadata, deleted_at, derived_from_artifact_id;
 
 -- name: MarkUploadSessionFileUploaded :one
 UPDATE component_repo.upload_session_files
@@ -57,24 +70,35 @@ SET artifact_id = sqlc.arg(artifact_id), status = 'uploaded', completed_at = now
 WHERE id = sqlc.arg(file_id)
   AND upload_session_id = sqlc.arg(session_id)
   AND status = 'pending'
-RETURNING *;
+RETURNING id, upload_session_id, ordinal, artifact_type, original_filename,
+          expected_size, expected_sha256, storage_provider, storage_bucket,
+          storage_key, artifact_id, status, created_at, completed_at;
 
 -- name: CompleteUploadSession :one
 UPDATE component_repo.upload_sessions
 SET status = 'completed', completed_at = now(), failure_code = NULL,
     failure_params = NULL, metadata = sqlc.arg(metadata)
 WHERE id = sqlc.arg(session_id) AND owner_id = sqlc.arg(actor_id) AND status = 'pending'
-RETURNING *;
+RETURNING id, owner_id, status, target_component_id, base_version_id,
+          locale, timezone, failure_code, failure_params, metadata, created_by,
+          created_at, expires_at, completed_at;
 
 -- name: GetOwnedArtifact :one
-SELECT *
+SELECT id, owner_id, artifact_type, source_kind, original_filename,
+       storage_provider, storage_bucket, storage_key, sha256, file_size,
+       mime_type, immutable, verification_status, verified_at, uploaded_by,
+       uploaded_at, metadata, deleted_at, derived_from_artifact_id
 FROM component_repo.artifacts
 WHERE id = sqlc.arg(artifact_id)
   AND owner_id = sqlc.arg(actor_id)
   AND deleted_at IS NULL;
 
 -- name: GetVisibleVersionSourceArtifact :one
-SELECT a.*
+SELECT a.id, a.owner_id, a.artifact_type, a.source_kind, a.original_filename,
+       a.storage_provider, a.storage_bucket, a.storage_key, a.sha256, a.file_size,
+       a.mime_type, a.immutable, a.verification_status, a.verified_at,
+       a.uploaded_by, a.uploaded_at, a.metadata, a.deleted_at,
+       a.derived_from_artifact_id
 FROM component_repo.component_versions v
 JOIN component_repo.components c ON c.id = v.component_id
 JOIN component_repo.artifacts a ON a.id = v.source_artifact_id
@@ -91,13 +115,19 @@ WHERE v.id = sqlc.arg(version_id)
 UPDATE component_repo.artifacts
 SET verification_status = 'verified', verified_at = now(), metadata = sqlc.arg(metadata)
 WHERE id = sqlc.arg(artifact_id) AND verification_status = 'pending' AND deleted_at IS NULL
-RETURNING *;
+RETURNING id, owner_id, artifact_type, source_kind, original_filename,
+          storage_provider, storage_bucket, storage_key, sha256, file_size,
+          mime_type, immutable, verification_status, verified_at, uploaded_by,
+          uploaded_at, metadata, deleted_at, derived_from_artifact_id;
 
 -- name: MarkArtifactFailed :one
 UPDATE component_repo.artifacts
 SET verification_status = 'failed', verified_at = NULL, metadata = sqlc.arg(metadata)
 WHERE id = sqlc.arg(artifact_id) AND verification_status = 'pending' AND deleted_at IS NULL
-RETURNING *;
+RETURNING id, owner_id, artifact_type, source_kind, original_filename,
+          storage_provider, storage_bucket, storage_key, sha256, file_size,
+          mime_type, immutable, verification_status, verified_at, uploaded_by,
+          uploaded_at, metadata, deleted_at, derived_from_artifact_id;
 
 -- name: MarkUploadSessionFileVerified :exec
 UPDATE component_repo.upload_session_files
@@ -121,7 +151,9 @@ SET status = 'failed', completed_at = now()
 WHERE upload_session_id = sqlc.arg(session_id) AND status = 'pending';
 
 -- name: ListExpiredUploadSessions :many
-SELECT *
+SELECT id, owner_id, status, target_component_id, base_version_id,
+       locale, timezone, failure_code, failure_params, metadata, created_by,
+       created_at, expires_at, completed_at
 FROM component_repo.upload_sessions
 WHERE status = 'pending' AND expires_at <= sqlc.arg(expired_before)
 ORDER BY expires_at, id

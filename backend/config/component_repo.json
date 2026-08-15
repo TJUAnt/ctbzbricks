@@ -46,7 +46,6 @@
     "component_subscription": "/api/components/{component_id}/subscription",
     "component_preview_first": "/api/component-previews/first",
     "component_preview_model": "/api/component-preview-models/{artifact_id}",
-    "library_item_preview": "/api/library-items/{item_type}/{item_id}/preview",
     "component_detail": "/api/components/{component_id}",
     "component_translation": "/api/components/{component_id}/translations/{locale}",
     "part_translation": "/api/parts/{part_number}/translations/{locale}",

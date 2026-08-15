@@ -34,19 +34,23 @@ func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/components/:componentId/versions", h.listVersions)
 	group.POST("/components/:componentId/versions", h.createVersion)
 	group.GET("/component-versions/:versionId", h.getVersion)
+	group.PATCH("/component-versions/:versionId", h.updateVersion)
 	group.DELETE("/component-versions/:versionId", h.deleteVersion)
 	group.POST("/component-versions/:versionId/publish", h.publishVersion)
 	group.POST("/component-versions/:versionId/deprecate", h.deprecateVersion)
 	group.POST("/component-versions/:versionId/archive", h.archiveVersion)
 
 	group.GET("/component-groups", h.listGroups)
+	group.POST("/component-groups/bootstrap", h.bootstrapGroups)
 	group.POST("/component-groups", h.createGroup)
 	group.PATCH("/component-groups/:groupId", h.updateGroup)
 	group.DELETE("/component-groups/:groupId", h.deleteGroup)
 	group.POST("/component-groups/:groupId/move", h.moveGroup)
 	group.GET("/component-groups/:groupId/components", h.listGroupMembers)
+	group.GET("/component-groups/:groupId/components/search", h.searchGroupComponents)
 	group.POST("/component-groups/:groupId/components", h.addGroupMember)
 	group.DELETE("/component-groups/:groupId/components/:componentId", h.removeGroupMember)
+	group.GET("/components/:componentId/groups", h.listComponentGroupIDs)
 
 	group.PUT("/components/:componentId/subscription", h.subscribe)
 	group.DELETE("/components/:componentId/subscription", h.unsubscribe)
@@ -131,6 +135,17 @@ func (h *Handler) getVersion(c *gin.Context) {
 	h.writeJSON(c, http.StatusOK, result, err)
 }
 
+func (h *Handler) updateVersion(c *gin.Context) {
+	actor, _ := actorFromContext(c)
+	var input UpdateVersionInput
+	if err := decodeJSON(c, &input); err != nil {
+		h.writeError(c, validationError("body"))
+		return
+	}
+	result, err := h.service.UpdateVersion(c.Request.Context(), actor.ID, c.Param("versionId"), input)
+	h.writeJSON(c, http.StatusOK, result, err)
+}
+
 func (h *Handler) deleteVersion(c *gin.Context) {
 	actor, _ := actorFromContext(c)
 	h.writeNoContent(c, h.service.DeleteVersion(c.Request.Context(), actor.ID, c.Param("versionId")))
@@ -160,6 +175,11 @@ func (h *Handler) listGroups(c *gin.Context) {
 	actor, _ := actorFromContext(c)
 	result, err := h.service.ListGroups(c.Request.Context(), actor.ID)
 	h.writeJSON(c, http.StatusOK, gin.H{"items": result}, err)
+}
+
+func (h *Handler) bootstrapGroups(c *gin.Context) {
+	actor, _ := actorFromContext(c)
+	h.writeNoContent(c, h.service.BootstrapGroups(c.Request.Context(), actor.ID))
 }
 
 func (h *Handler) createGroup(c *gin.Context) {
@@ -209,6 +229,26 @@ func (h *Handler) listGroupMembers(c *gin.Context) {
 	}
 	result, err := h.service.ListGroupMembers(c.Request.Context(), actor.ID, c.Param("groupId"), c.Query("locale"), page)
 	h.writeJSON(c, http.StatusOK, result, err)
+}
+
+func (h *Handler) searchGroupComponents(c *gin.Context) {
+	actor, _ := actorFromContext(c)
+	page, err := pageFromQuery(c)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	result, err := h.service.SearchGroupComponents(c.Request.Context(), actor.ID, c.Param("groupId"), ComponentGroupSearchRequest{
+		PageRequest: page, Locale: c.Query("locale"), Query: c.Query("query"), Statuses: c.QueryArray("status"),
+	})
+	h.writeJSON(c, http.StatusOK, result, err)
+}
+
+func (h *Handler) listComponentGroupIDs(c *gin.Context) {
+	actor, _ := actorFromContext(c)
+	componentID := c.Param("componentId")
+	ids, err := h.service.ListComponentGroupIDs(c.Request.Context(), actor.ID, componentID)
+	h.writeJSON(c, http.StatusOK, gin.H{"componentId": componentID, "groupIds": ids}, err)
 }
 
 func (h *Handler) addGroupMember(c *gin.Context) {

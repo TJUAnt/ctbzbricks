@@ -92,6 +92,75 @@ func (q *Queries) ComponentGroupSubtreeDepth(ctx context.Context, arg ComponentG
 	return depth, err
 }
 
+const countComponentGroupStatuses = `-- name: CountComponentGroupStatuses :many
+SELECT c.status, count(*)::bigint AS component_count
+FROM component_repo.component_groups group_record
+JOIN component_repo.components c
+  ON group_record.group_type = 'root'
+  OR EXISTS (
+      SELECT 1 FROM component_repo.component_group_memberships membership
+      WHERE membership.owner_id = group_record.owner_id
+        AND membership.group_id = group_record.id
+        AND membership.component_id = c.id
+  )
+LEFT JOIN LATERAL (
+    SELECT translation_record.id, translation_record.name
+    FROM component_repo.component_translations translation_record
+    WHERE translation_record.component_id = c.id
+      AND translation_record.locale = $1
+      AND translation_record.translation_status = 'reviewed'
+    LIMIT 1
+) translation ON c.content_kind = 'official'
+WHERE group_record.id = $2
+  AND group_record.owner_id = $3
+  AND c.deleted_at IS NULL
+  AND (c.owner_id = $3 OR c.status = 'active')
+  AND (
+      $4::text = ''
+      OR CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END ILIKE '%' || $4 || '%'
+      OR c.id::text ILIKE '%' || $4 || '%'
+  )
+GROUP BY c.status
+ORDER BY c.status
+`
+
+type CountComponentGroupStatusesParams struct {
+	Locale      string
+	GroupID     pgtype.UUID
+	OwnerID     pgtype.UUID
+	SearchQuery string
+}
+
+type CountComponentGroupStatusesRow struct {
+	Status         string
+	ComponentCount int64
+}
+
+func (q *Queries) CountComponentGroupStatuses(ctx context.Context, arg CountComponentGroupStatusesParams) ([]CountComponentGroupStatusesRow, error) {
+	rows, err := q.db.Query(ctx, countComponentGroupStatuses,
+		arg.Locale,
+		arg.GroupID,
+		arg.OwnerID,
+		arg.SearchQuery,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountComponentGroupStatusesRow{}
+	for rows.Next() {
+		var i CountComponentGroupStatusesRow
+		if err := rows.Scan(&i.Status, &i.ComponentCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createComponentGroup = `-- name: CreateComponentGroup :one
 INSERT INTO component_repo.component_groups (
     id, owner_id, parent_group_id, group_type, name, normalized_name,
@@ -280,11 +349,20 @@ SELECT c.id, c.owner_id, c.content_kind,
            WHERE subscription.owner_id = $2
              AND subscription.component_id = c.id
        ) AS subscribed,
-       membership.added_at
-FROM component_repo.component_group_memberships membership
-JOIN component_repo.component_groups g
-  ON g.id = membership.group_id AND g.owner_id = membership.owner_id
-JOIN component_repo.components c ON c.id = membership.component_id
+       COALESCE(membership.added_at, c.created_at)::timestamptz AS added_at
+FROM component_repo.component_groups g
+JOIN component_repo.components c
+  ON g.group_type = 'root'
+  OR EXISTS (
+      SELECT 1 FROM component_repo.component_group_memberships membership_filter
+      WHERE membership_filter.owner_id = g.owner_id
+        AND membership_filter.group_id = g.id
+        AND membership_filter.component_id = c.id
+  )
+LEFT JOIN component_repo.component_group_memberships membership
+  ON membership.owner_id = g.owner_id
+ AND membership.group_id = g.id
+ AND membership.component_id = c.id
 LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
     FROM component_repo.component_translations t
@@ -293,11 +371,11 @@ LEFT JOIN LATERAL (
       AND t.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON c.content_kind = 'official'
-WHERE membership.owner_id = $2
-  AND membership.group_id = $3
+WHERE g.owner_id = $2
+  AND g.id = $3
   AND c.deleted_at IS NULL
   AND (c.owner_id = $2 OR c.status = 'active')
-ORDER BY membership.added_at DESC, c.id
+ORDER BY COALESCE(membership.added_at, c.created_at) DESC, c.id
 LIMIT $5 OFFSET $4
 `
 
@@ -373,6 +451,43 @@ func (q *Queries) ListComponentGroupMembers(ctx context.Context, arg ListCompone
 	return items, nil
 }
 
+const listOwnedComponentGroupIDsForComponent = `-- name: ListOwnedComponentGroupIDsForComponent :many
+SELECT membership.group_id
+FROM component_repo.component_group_memberships membership
+JOIN component_repo.component_groups group_record
+  ON group_record.id = membership.group_id
+ AND group_record.owner_id = membership.owner_id
+WHERE membership.owner_id = $1
+  AND membership.component_id = $2
+  AND group_record.group_type = 'custom'
+ORDER BY group_record.sort_order, group_record.created_at, group_record.id
+`
+
+type ListOwnedComponentGroupIDsForComponentParams struct {
+	OwnerID     pgtype.UUID
+	ComponentID pgtype.UUID
+}
+
+func (q *Queries) ListOwnedComponentGroupIDsForComponent(ctx context.Context, arg ListOwnedComponentGroupIDsForComponentParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listOwnedComponentGroupIDsForComponent, arg.OwnerID, arg.ComponentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var group_id pgtype.UUID
+		if err := rows.Scan(&group_id); err != nil {
+			return nil, err
+		}
+		items = append(items, group_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOwnedComponentGroups = `-- name: ListOwnedComponentGroups :many
 WITH RECURSIVE group_tree AS (
     SELECT g.id, g.owner_id, g.parent_group_id, g.group_type, g.name,
@@ -389,23 +504,38 @@ WITH RECURSIVE group_tree AS (
       ON parent.id = child.parent_group_id AND parent.owner_id = child.owner_id
 )
 SELECT id, owner_id, parent_group_id, group_type, name, normalized_name,
-       content_locale, sort_order, created_at, updated_at, depth
+       content_locale, sort_order, created_at, updated_at, depth,
+       (CASE WHEN group_type = 'root' THEN (
+           SELECT count(*)::bigint
+           FROM component_repo.components component
+           WHERE component.deleted_at IS NULL
+             AND (component.owner_id = $1 OR component.status = 'active')
+       ) ELSE (
+           SELECT count(*)::bigint
+           FROM component_repo.component_group_memberships membership
+           JOIN component_repo.components component ON component.id = membership.component_id
+           WHERE membership.owner_id = $1
+             AND membership.group_id = group_tree.id
+             AND component.deleted_at IS NULL
+             AND (component.owner_id = $1 OR component.status = 'active')
+       ) END)::bigint AS direct_component_count
 FROM group_tree
 ORDER BY depth, parent_group_id NULLS FIRST, sort_order, id
 `
 
 type ListOwnedComponentGroupsRow struct {
-	ID             pgtype.UUID
-	OwnerID        pgtype.UUID
-	ParentGroupID  pgtype.UUID
-	GroupType      string
-	Name           *string
-	NormalizedName *string
-	ContentLocale  *string
-	SortOrder      int32
-	CreatedAt      pgtype.Timestamptz
-	UpdatedAt      pgtype.Timestamptz
-	Depth          int32
+	ID                   pgtype.UUID
+	OwnerID              pgtype.UUID
+	ParentGroupID        pgtype.UUID
+	GroupType            string
+	Name                 *string
+	NormalizedName       *string
+	ContentLocale        *string
+	SortOrder            int32
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+	Depth                int32
+	DirectComponentCount int64
 }
 
 func (q *Queries) ListOwnedComponentGroups(ctx context.Context, ownerID pgtype.UUID) ([]ListOwnedComponentGroupsRow, error) {
@@ -429,6 +559,7 @@ func (q *Queries) ListOwnedComponentGroups(ctx context.Context, ownerID pgtype.U
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Depth,
+			&i.DirectComponentCount,
 		); err != nil {
 			return nil, err
 		}
@@ -501,6 +632,137 @@ func (q *Queries) RemoveComponentGroupMembership(ctx context.Context, arg Remove
 	var group_id pgtype.UUID
 	err := row.Scan(&group_id)
 	return group_id, err
+}
+
+const searchComponentGroupComponents = `-- name: SearchComponentGroupComponents :many
+SELECT c.id, c.owner_id, c.content_kind,
+       (CASE WHEN translation.id IS NULL THEN c.content_locale ELSE translation.locale END)::text AS selected_content_locale,
+       (CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END)::text AS selected_name,
+       COALESCE(CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END, '')::text AS selected_description,
+       (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
+       (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
+       c.category, c.status, c.current_version_id, c.logical_width_stud,
+       c.logical_depth_stud, c.logical_height_plate, c.metadata, c.created_at, c.updated_at,
+       (c.content_kind = 'official' AND c.content_locale <> $1
+        AND translation.id IS NULL)::boolean AS translation_missing,
+       EXISTS (
+           SELECT 1 FROM component_repo.component_subscriptions subscription
+           WHERE subscription.owner_id = $2
+             AND subscription.component_id = c.id
+       ) AS subscribed,
+       count(*) OVER()::bigint AS total_count
+FROM component_repo.component_groups group_record
+JOIN component_repo.components c
+  ON group_record.group_type = 'root'
+  OR EXISTS (
+      SELECT 1 FROM component_repo.component_group_memberships membership
+      WHERE membership.owner_id = group_record.owner_id
+        AND membership.group_id = group_record.id
+        AND membership.component_id = c.id
+  )
+LEFT JOIN LATERAL (
+    SELECT translation_record.id, translation_record.locale, translation_record.name,
+           translation_record.description, translation_record.tags
+    FROM component_repo.component_translations translation_record
+    WHERE translation_record.component_id = c.id
+      AND translation_record.locale = $1
+      AND translation_record.translation_status = 'reviewed'
+    LIMIT 1
+) translation ON c.content_kind = 'official'
+WHERE group_record.id = $3
+  AND group_record.owner_id = $2
+  AND c.deleted_at IS NULL
+  AND (c.owner_id = $2 OR c.status = 'active')
+  AND (cardinality($4::text[]) = 0 OR c.status = ANY($4::text[]))
+  AND (
+      $5::text = ''
+      OR CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END ILIKE '%' || $5 || '%'
+      OR c.id::text ILIKE '%' || $5 || '%'
+  )
+ORDER BY c.updated_at DESC, c.id
+LIMIT $7 OFFSET $6
+`
+
+type SearchComponentGroupComponentsParams struct {
+	Locale        string
+	OwnerID       pgtype.UUID
+	GroupID       pgtype.UUID
+	StatusFilters []string
+	SearchQuery   string
+	PageOffset    int32
+	PageSize      int32
+}
+
+type SearchComponentGroupComponentsRow struct {
+	ID                    pgtype.UUID
+	OwnerID               pgtype.UUID
+	ContentKind           string
+	SelectedContentLocale string
+	SelectedName          string
+	SelectedDescription   string
+	HasDescription        bool
+	SelectedTags          []string
+	Category              *string
+	Status                string
+	CurrentVersionID      pgtype.UUID
+	LogicalWidthStud      pgtype.Numeric
+	LogicalDepthStud      pgtype.Numeric
+	LogicalHeightPlate    pgtype.Numeric
+	Metadata              []byte
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	TranslationMissing    bool
+	Subscribed            bool
+	TotalCount            int64
+}
+
+func (q *Queries) SearchComponentGroupComponents(ctx context.Context, arg SearchComponentGroupComponentsParams) ([]SearchComponentGroupComponentsRow, error) {
+	rows, err := q.db.Query(ctx, searchComponentGroupComponents,
+		arg.Locale,
+		arg.OwnerID,
+		arg.GroupID,
+		arg.StatusFilters,
+		arg.SearchQuery,
+		arg.PageOffset,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchComponentGroupComponentsRow{}
+	for rows.Next() {
+		var i SearchComponentGroupComponentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.ContentKind,
+			&i.SelectedContentLocale,
+			&i.SelectedName,
+			&i.SelectedDescription,
+			&i.HasDescription,
+			&i.SelectedTags,
+			&i.Category,
+			&i.Status,
+			&i.CurrentVersionID,
+			&i.LogicalWidthStud,
+			&i.LogicalDepthStud,
+			&i.LogicalHeightPlate,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TranslationMissing,
+			&i.Subscribed,
+			&i.TotalCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateOwnedComponentGroup = `-- name: UpdateOwnedComponentGroup :one

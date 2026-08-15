@@ -2,46 +2,22 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=dev-env.sh
+source "${SCRIPT_DIR}/dev-env.sh"
+ctbz_load_dev_environment
+ctbz_require_database_url
 
-HOST="${BACKEND_HOST:-127.0.0.1}"
-PORT="${BACKEND_PORT:-8000}"
-APP_MODULE="${BACKEND_APP_MODULE:-src.api.main:app}"
-RELOAD="${BACKEND_RELOAD:-1}"
-
-if [[ -n "${PYTHON_BIN:-}" ]]; then
-  PYTHON_EXECUTABLE="${PYTHON_BIN}"
-elif [[ -x "${PROJECT_ROOT}/.venv-app/bin/python" ]]; then
-  PYTHON_EXECUTABLE="${PROJECT_ROOT}/.venv-app/bin/python"
-elif [[ -x "${PROJECT_ROOT}/.venv/bin/python" ]]; then
-  PYTHON_EXECUTABLE="${PROJECT_ROOT}/.venv/bin/python"
-else
-  PYTHON_EXECUTABLE="python3"
+if [[ -z "${AUTH_JWT_SECRET:-}" && -z "${AUTH_JWKS_URL:-}" && -z "${AUTH_JWT_ISSUER:-}" ]]; then
+  echo "warning: JWT verification is not configured; protected /api/v1 routes will fail closed" >&2
 fi
 
-if [[ ! -f "${PROJECT_ROOT}/backend/src/.env" && ! -f "${PROJECT_ROOT}/backend/.env" ]]; then
-  echo "warning: backend/src/.env or backend/.env not found; database config must come from shell env" >&2
-fi
+ctbz_go_cache
 
-export PYTHONPATH="${PROJECT_ROOT}/backend${PYTHONPATH:+:${PYTHONPATH}}"
+echo "Go backend: http://${GO_BACKEND_HOST}:${GO_BACKEND_PORT}"
+echo "Environment: ${APP_ENV}"
+echo "Storage provider: ${STORAGE_PROVIDER}"
+echo "Shared env: $([[ -f "${CTBZ_SHARED_ENV_FILE}" ]] && echo loaded || echo missing)"
+echo "Go env: $([[ -f "${CTBZ_GO_ENV_FILE}" ]] && echo loaded || echo missing)"
 
-ARGS=(
-  -m uvicorn
-  "${APP_MODULE}"
-  --host "${HOST}"
-  --port "${PORT}"
-)
-
-if [[ "${RELOAD}" == "1" || "${RELOAD}" == "true" || "${RELOAD}" == "yes" ]]; then
-  ARGS+=(
-    --reload
-    --reload-dir "${PROJECT_ROOT}/backend/src"
-    --reload-dir "${PROJECT_ROOT}/backend/config"
-  )
-fi
-
-echo "Backend: http://${HOST}:${PORT}"
-echo "Python: ${PYTHON_EXECUTABLE}"
-echo "Storage provider: ${COMPONENT_REPO_STORAGE_PROVIDER:-configured default}"
-cd "${PROJECT_ROOT}"
-exec "${PYTHON_EXECUTABLE}" "${ARGS[@]}"
+cd "${CTBZ_PROJECT_ROOT}/backend-go"
+exec go run ./cmd/api

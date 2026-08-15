@@ -28,7 +28,7 @@ def test_runtime_schema_alignment_upgrades_legacy_tables(
     config.set_main_option("prepend_sys_path", str(BACKEND_ROOT))
     command.upgrade(config, "head")
 
-    assert current_revision(engine) == "20260803_0021"
+    assert current_revision(engine) == "20260809_0022"
     assert_schema_columns_are_aligned(engine)
     assert_legacy_failures_are_structured(engine)
     assert {

@@ -11,7 +11,6 @@ import { useAppTranslation } from '../i18n';
 import {
   deleteComponentVersion,
   downloadComponentVersionSource,
-  type ComponentVersionDeleteResponse,
   type ComponentVersionResponse,
 } from './componentRepoApi';
 
@@ -23,10 +22,7 @@ export function ComponentVersionActions({
 }: {
   componentName: string;
   isOnlyVersion: boolean;
-  onDeleted: (
-    result: ComponentVersionDeleteResponse,
-    version: ComponentVersionResponse,
-  ) => void;
+  onDeleted: (version: ComponentVersionResponse) => void;
   version: ComponentVersionResponse;
 }) {
   const tr = useAppTranslation();
@@ -68,9 +64,9 @@ export function ComponentVersionActions({
     setDeleting(true);
     setError(null);
     try {
-      const result = await deleteComponentVersion(version.id);
+      await deleteComponentVersion(version);
       setConfirming(false);
-      onDeleted(result, version);
+      onDeleted(version);
     } catch (deleteError) {
       setError(
         deleteError instanceof Error

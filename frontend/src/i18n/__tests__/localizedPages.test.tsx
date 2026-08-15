@@ -22,7 +22,7 @@ const pages = [
   { component: <LegoDesignPage />, english: 'LEGO Design', chinese: 'LEGO 设计图' },
   { component: <ComponentRepoPage />, english: 'Component Library', chinese: '组件仓库' },
   { component: <PartSearchPage />, english: 'Part search', chinese: '零件搜索' },
-  { component: <PartViewerPage />, english: '3D Component Viewer', chinese: '组件 3D 查看器' },
+  { component: <PartViewerPage />, english: '3D Part Viewer', chinese: '零件 3D 查看器' },
 ];
 
 describe('localized page shells', () => {
@@ -38,13 +38,13 @@ describe('localized page shells', () => {
     expect(renderPage(component)).toContain(english);
   });
 
-  it('selects the Part detail shell from the REST resource type', async () => {
+  it('selects the immutable Part detail shell from its library version and number', async () => {
     await i18n.changeLanguage('en-US');
     const markup = renderToStaticMarkup(
       <I18nextProvider i18n={i18n}>
-        <MemoryRouter initialEntries={['/library/part/10247.dat']}>
+        <MemoryRouter initialEntries={['/parts/00000000-0000-0000-0000-000000000001/10247.dat']}>
           <Routes>
-            <Route element={<PartViewerPage />} path="/library/:itemType/:itemId" />
+            <Route element={<PartViewerPage />} path="/parts/:partLibraryVersionId/:ldrawPartNum" />
           </Routes>
         </MemoryRouter>
       </I18nextProvider>,

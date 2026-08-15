@@ -29,7 +29,6 @@ import {
   type ComponentConnectorAnalysisResponse,
   type ComponentConnectorResponse,
   type ComponentGroupTreeResponse,
-  type ComponentPreviewPartAvailability,
   type ComponentRelationCandidateResponse,
   type ComponentResponse,
   type ComponentVersionPartsResponse,
@@ -59,10 +58,9 @@ type ComponentDetailState = {
 type PartSummary = {
   key: string;
   partRef: string;
-  imageUrl: string | null;
   name: string;
   quantity: number;
-  availability: ComponentPreviewPartAvailability;
+  partLibraryVersionId: string | null;
 };
 
 type ConnectorPartGroup = {
@@ -142,7 +140,8 @@ export function ComponentDetailPage() {
         ]);
         const version = preferredDetailVersion(component, versions);
         if (!version) throw new Error(trRef.current('componentRepo:noComponentVersions'));
-        const connectorAnalysisPromise = getConnectorAnalysis(version.componentCandidateId)
+        const connectorAnalysisPromise = version.componentCandidateId
+          ? getConnectorAnalysis(version.componentCandidateId)
           .then((connectorAnalysis) => ({
             connectorAnalysis,
             connectorError: null as string | null,
@@ -152,7 +151,8 @@ export function ComponentDetailPage() {
             connectorError: analysisError instanceof Error
               ? analysisError.message
               : appConfig.texts.loadFailed,
-          }));
+          }))
+          : Promise.resolve({ connectorAnalysis: null, connectorError: null });
         const partDetailsPromise = loadComponentVersionParts(version.id)
           .then((partDetails) => ({ partDetails, failed: false }))
           .catch(() => ({ partDetails: null, failed: true }));
@@ -168,7 +168,9 @@ export function ComponentDetailPage() {
         }));
         const [preview, relations] = await Promise.all([
           loadComponentVersionPreview(version.id),
-          listRelations(version.componentCandidateId),
+          version.componentCandidateId
+            ? listRelations(version.componentCandidateId)
+            : Promise.resolve([]),
         ]);
         if (!active) return;
         setState({
@@ -225,6 +227,8 @@ export function ComponentDetailPage() {
     () => (state.partDetails?.parts ?? []).map((part) => ({
       ...part,
       key: part.partRef,
+      name: part.name ?? part.partRef,
+      partLibraryVersionId: state.partDetails?.partLibraryVersionId ?? null,
     })),
     [state.partDetails?.parts],
   );
@@ -266,7 +270,7 @@ export function ComponentDetailPage() {
       && !isAuthLoading
       && (
         !isAuthConfigured
-        || state.component.createdBy === `auth:${user?.id}`
+        || state.component.ownerId === user?.id
       ),
   );
   const publish = async () => {
@@ -482,14 +486,10 @@ export function ComponentDetailPage() {
                   <ComponentVersionActions
                     componentName={state.component.name}
                     isOnlyVersion={state.versions.length === 1}
-                    onDeleted={(result, deletedVersion) => {
+                    onDeleted={(deletedVersion) => {
                       setActionNotice(tr('componentRepo:versionDeleted', {
                         version: deletedVersion.version,
                       }));
-                      if (result.componentDeleted) {
-                        navigate(routeFor('componentRepo'));
-                        return;
-                      }
                       setRefreshToken((current) => current + 1);
                     }}
                     version={version}
@@ -534,35 +534,25 @@ function DetailMetric({
 }
 
 function PartSummaryCard({ part }: { part: PartSummary }) {
-  const tr = useAppTranslation();
-  const cardContent = (
+  const content = (
     <>
-      <PartCardImage src={part.imageUrl} />
+      <PartCardImage src={null} />
       <span className="component-detail-part-card-copy">
         <strong>{part.name}</strong>
         <small>{part.partRef}</small>
-        {part.availability !== 'ready' ? (
-          <span className="component-detail-part-card-availability">
-            {tr('componentRepo:partExcludedFromCalculation')}
-          </span>
-        ) : null}
         <em>×{part.quantity}</em>
       </span>
     </>
   );
-  if (part.availability !== 'ready') {
-    return (
-      <article className="component-detail-part-card is-unavailable">
-        {cardContent}
-      </article>
-    );
+  if (!part.partLibraryVersionId) {
+    return <article className="component-detail-part-card">{content}</article>;
   }
   return (
     <Link
       className="component-detail-part-card"
-      to={`/library/part/${encodeURIComponent(part.partRef)}`}
+      to={`/parts/${encodeURIComponent(part.partLibraryVersionId)}/${encodeURIComponent(part.partRef)}`}
     >
-      {cardContent}
+      {content}
     </Link>
   );
 }

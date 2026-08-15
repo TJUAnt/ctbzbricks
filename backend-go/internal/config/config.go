@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -23,6 +24,12 @@ type Config struct {
 	Auth        AuthConfig
 	Storage     StorageConfig
 	Worker      WorkerConfig
+	Import      ImportConfig
+	PartPreview PartPreviewConfig
+}
+
+type PartPreviewConfig struct {
+	LDrawRoot string
 }
 
 type HTTPConfig struct {
@@ -54,10 +61,16 @@ type DatabaseConfig struct {
 type WorkerConfig struct {
 	ID                  string
 	HealthCheckInterval time.Duration
+	PollInterval        time.Duration
+	LeaseDuration       time.Duration
+	HeartbeatInterval   time.Duration
+	RetryDelay          time.Duration
+	Concurrency         int
 }
 
 type AuthConfig struct {
 	JWTSecret   string
+	JWKSURL     string
 	JWTIssuer   string
 	JWTAudience string
 }
@@ -67,12 +80,18 @@ type StorageConfig struct {
 	Bucket           string
 	KeyPrefix        string
 	SupabaseURL      string
-	APIKey           string
-	Authorization    string
+	PublishableKey   string
+	ServiceRoleKey   string
 	RequestTimeout   time.Duration
 	SignedURLTTL     time.Duration
 	UploadSessionTTL time.Duration
 	MaxArtifactBytes int64
+}
+
+type ImportConfig struct {
+	ParserVersion  string
+	SnapshotSchema string
+	MaxAttempts    int32
 }
 
 type lookupFunc func(string) string
@@ -97,6 +116,20 @@ func load(lookup lookupFunc) (Config, error) {
 	jwtSecret := strings.TrimSpace(lookup("AUTH_JWT_SECRET"))
 	if jwtSecret != "" && len(jwtSecret) < 32 {
 		return Config{}, errors.New("AUTH_JWT_SECRET must contain at least 32 bytes")
+	}
+	jwtIssuer := strings.TrimRight(strings.TrimSpace(lookup("AUTH_JWT_ISSUER")), "/")
+	jwksURL := strings.TrimSpace(lookup("AUTH_JWKS_URL"))
+	if jwksURL == "" && jwtIssuer != "" {
+		jwksURL = jwtIssuer + "/.well-known/jwks.json"
+	}
+	if jwksURL != "" {
+		parsedJWKSURL, parseErr := url.Parse(jwksURL)
+		if parseErr != nil || parsedJWKSURL.Scheme == "" || parsedJWKSURL.Host == "" {
+			return Config{}, errors.New("AUTH_JWKS_URL must be an absolute URL")
+		}
+		if environment != TestEnvironment && parsedJWKSURL.Scheme != "https" {
+			return Config{}, errors.New("AUTH_JWKS_URL must use https outside tests")
+		}
 	}
 
 	httpPort, err := intValue(lookup, "GO_BACKEND_PORT", 8080, 1, 65535)
@@ -163,12 +196,35 @@ func load(lookup lookupFunc) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	workerPollInterval, err := durationValue(lookup, "WORKER_POLL_INTERVAL", 500*time.Millisecond)
+	if err != nil {
+		return Config{}, err
+	}
+	workerLeaseDuration, err := durationValue(lookup, "WORKER_LEASE_DURATION", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	workerHeartbeatInterval, err := durationValue(lookup, "WORKER_HEARTBEAT_INTERVAL", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if workerHeartbeatInterval*2 >= workerLeaseDuration {
+		return Config{}, errors.New("WORKER_HEARTBEAT_INTERVAL must be less than half WORKER_LEASE_DURATION")
+	}
+	workerRetryDelay, err := durationValue(lookup, "WORKER_RETRY_DELAY", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	workerConcurrency, err := intValue(lookup, "WORKER_CONCURRENCY", 4, 1, 128)
+	if err != nil {
+		return Config{}, err
+	}
 	storageProvider := strings.ToLower(valueOrDefault(lookup, "STORAGE_PROVIDER", "disabled"))
 	if storageProvider != "disabled" && storageProvider != "supabase" {
 		return Config{}, errors.New("STORAGE_PROVIDER must be disabled or supabase")
 	}
 	storageBucket := valueOrDefault(lookup, "STORAGE_BUCKET", "component-artifacts")
-	storagePrefix := strings.Trim(strings.TrimSpace(lookup("STORAGE_KEY_PREFIX")), "/")
+	storagePrefix := strings.Trim(strings.TrimSpace(valueOrDefault(lookup, "STORAGE_KEY_PREFIX", "component-repo")), "/")
 	if storageBucket == "" || strings.ContainsAny(storageBucket, "/\\") {
 		return Config{}, errors.New("STORAGE_BUCKET must be a bucket name without path separators")
 	}
@@ -176,10 +232,16 @@ func load(lookup lookupFunc) (Config, error) {
 		return Config{}, errors.New("STORAGE_KEY_PREFIX contains an invalid path segment")
 	}
 	storageURL := strings.TrimRight(strings.TrimSpace(lookup("SUPABASE_URL")), "/")
-	storageAPIKey := strings.TrimSpace(lookup("SUPABASE_STORAGE_API_KEY"))
-	storageAuthorization := strings.TrimSpace(lookup("SUPABASE_STORAGE_AUTHORIZATION"))
-	if storageProvider == "supabase" && (storageURL == "" || storageAPIKey == "") {
-		return Config{}, errors.New("SUPABASE_URL and SUPABASE_STORAGE_API_KEY are required for supabase storage")
+	storagePublishableKey := strings.TrimSpace(lookup("SUPABASE_PUBLISHABLE_KEY"))
+	storageServiceRoleKey := strings.TrimSpace(lookup("SUPABASE_STORAGE_SERVICE_ROLE_KEY"))
+	if storageServiceRoleKey == "" {
+		storageServiceRoleKey = strings.TrimSpace(lookup("SUPABASE_SECRET_KEY"))
+	}
+	if storageProvider == "supabase" && (storageURL == "" || storagePublishableKey == "") {
+		return Config{}, errors.New("SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are required for supabase storage")
+	}
+	if strings.HasPrefix(storageServiceRoleKey, "sb_publishable_") {
+		return Config{}, errors.New("server-side Supabase Storage key must not be a publishable key")
 	}
 	storageRequestTimeout, err := durationValue(lookup, "STORAGE_REQUEST_TIMEOUT", 30*time.Second)
 	if err != nil {
@@ -194,6 +256,18 @@ func load(lookup lookupFunc) (Config, error) {
 		return Config{}, err
 	}
 	maxArtifactBytes, err := int64Value(lookup, "STORAGE_MAX_ARTIFACT_BYTES", 512*1024*1024, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	importParserVersion := strings.TrimSpace(valueOrDefault(lookup, "COMPONENT_IMPORT_PARSER_VERSION", "component-repo-ldraw-parser-v1"))
+	importSnapshotSchema := strings.TrimSpace(valueOrDefault(lookup, "COMPONENT_IMPORT_SNAPSHOT_SCHEMA", "component-repo-v1"))
+	if importParserVersion == "" || len(importParserVersion) > 128 {
+		return Config{}, errors.New("COMPONENT_IMPORT_PARSER_VERSION must be between 1 and 128 bytes")
+	}
+	if importSnapshotSchema == "" || len(importSnapshotSchema) > 128 {
+		return Config{}, errors.New("COMPONENT_IMPORT_SNAPSHOT_SCHEMA must be between 1 and 128 bytes")
+	}
+	importMaxAttempts, err := int32Value(lookup, "COMPONENT_IMPORT_MAX_ATTEMPTS", 3, 1)
 	if err != nil {
 		return Config{}, err
 	}
@@ -222,7 +296,8 @@ func load(lookup lookupFunc) (Config, error) {
 		},
 		Auth: AuthConfig{
 			JWTSecret:   jwtSecret,
-			JWTIssuer:   strings.TrimSpace(lookup("AUTH_JWT_ISSUER")),
+			JWKSURL:     jwksURL,
+			JWTIssuer:   jwtIssuer,
 			JWTAudience: strings.TrimSpace(lookup("AUTH_JWT_AUDIENCE")),
 		},
 		Storage: StorageConfig{
@@ -230,8 +305,8 @@ func load(lookup lookupFunc) (Config, error) {
 			Bucket:           storageBucket,
 			KeyPrefix:        storagePrefix,
 			SupabaseURL:      storageURL,
-			APIKey:           storageAPIKey,
-			Authorization:    storageAuthorization,
+			PublishableKey:   storagePublishableKey,
+			ServiceRoleKey:   storageServiceRoleKey,
 			RequestTimeout:   storageRequestTimeout,
 			SignedURLTTL:     signedURLTTL,
 			UploadSessionTTL: uploadSessionTTL,
@@ -240,7 +315,18 @@ func load(lookup lookupFunc) (Config, error) {
 		Worker: WorkerConfig{
 			ID:                  strings.TrimSpace(lookup("WORKER_ID")),
 			HealthCheckInterval: workerHealthCheckInterval,
+			PollInterval:        workerPollInterval,
+			LeaseDuration:       workerLeaseDuration,
+			HeartbeatInterval:   workerHeartbeatInterval,
+			RetryDelay:          workerRetryDelay,
+			Concurrency:         workerConcurrency,
 		},
+		Import: ImportConfig{
+			ParserVersion:  importParserVersion,
+			SnapshotSchema: importSnapshotSchema,
+			MaxAttempts:    importMaxAttempts,
+		},
+		PartPreview: PartPreviewConfig{LDrawRoot: strings.TrimSpace(lookup("LDRAW_ROOT"))},
 	}, nil
 }
 

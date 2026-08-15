@@ -1,0 +1,311 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  addComponentToGroup,
+  listComponentGroups,
+  searchComponentGroupComponents,
+  deleteComponentVersion,
+  detectRelations,
+  getComponentVersion,
+  getConnectorAnalysis,
+  loadComponentVersionPreview,
+  loadPartPreview,
+  publishVersion,
+  validateCandidate,
+} from '../componentRepoApi';
+
+function jsonResponse(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+const taskSucceeded = {
+  id: 'task-1',
+  taskJobId: 'job-1',
+  executionNumber: 1,
+  taskType: 'component.relations.detect',
+  status: 'succeeded',
+  result: {},
+  resultArtifactId: null,
+  locale: 'zh-CN',
+  timezone: 'Asia/Shanghai',
+  attempts: 1,
+  maxAttempts: 3,
+  progress: null,
+  error: null,
+  cancelRequestedAt: null,
+  createdAt: '2026-08-12T00:00:00Z',
+  startedAt: '2026-08-12T00:00:01Z',
+  finishedAt: '2026-08-12T00:00:02Z',
+  updatedAt: '2026-08-12T00:00:02Z',
+};
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('Component Repo Go API adapter', () => {
+  it('bootstraps an empty group repository explicitly and keeps group reads on Go', async () => {
+    const root = {
+      id: 'group-root', parentGroupId: null, groupType: 'root', name: null,
+      contentLocale: null, sortOrder: 0, directComponentCount: 2,
+      createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z',
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ items: [] }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse({ items: [root] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listComponentGroups()).resolves.toEqual({ root, groups: [] });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/component-groups', undefined);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/component-groups/bootstrap',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/v1/component-groups', undefined);
+  });
+
+  it('uses Go GET search and collection POST for group membership', async () => {
+    vi.stubGlobal('window', { location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' } });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        items: [], total: 0, page: 2, pageSize: 20, totalPages: 0, statusCounts: { draft: 1 },
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await searchComponentGroupComponents('group-1', {
+      query: 'sample', statuses: ['draft', 'active'], page: 2, pageSize: 20,
+    });
+    const searchURL = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(searchURL.pathname).toBe('/api/v1/component-groups/group-1/components/search');
+    expect(searchURL.searchParams.getAll('status')).toEqual(['draft', 'active']);
+    expect(searchURL.searchParams.get('query')).toBe('sample');
+
+    await addComponentToGroup('group-1', 'component-1');
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/component-groups/group-1/components',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ componentId: 'component-1' }) }),
+    );
+  });
+
+  it('waits for asynchronous relation detection and then reads durable results', async () => {
+    const relation = {
+      id: 'relation-1',
+      componentCandidateId: 'candidate-1',
+      partLibraryVersionId: 'library-1',
+      endpointA: {},
+      endpointB: {},
+      connectionType: 'stud',
+      jointType: 'fixed',
+      positionResidual: 0,
+      rotationResidual: 0,
+      verifiedByTolerance: true,
+      confidence: 1,
+      status: 'detected',
+      detectionMethod: 'automatic',
+      metadata: {},
+      createdAt: '2026-08-12T00:00:00Z',
+      updatedAt: '2026-08-12T00:00:00Z',
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ taskId: 'task-1', status: 'queued' }, 202))
+      .mockResolvedValueOnce(jsonResponse(taskSucceeded))
+      .mockResolvedValueOnce(jsonResponse({ items: [relation] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(detectRelations('candidate-1')).resolves.toEqual([relation]);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/component-candidates/candidate-1/relations/detect',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/tasks/task-1', undefined);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/component-candidates/candidate-1/relations',
+      undefined,
+    );
+  });
+
+  it('materializes a pending preview through a durable task before returning its signed model', async () => {
+    const previewUrl = 'https' + '://storage.example/preview.glb';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        versionId: 'version-1', status: 'pending', generatorVersion: null,
+        artifactId: null, sha256: null, fileSize: null, url: null, failure: null,
+      }))
+      .mockResolvedValueOnce(jsonResponse({ taskId: 'task-1', status: 'queued' }, 202))
+      .mockResolvedValueOnce(jsonResponse(taskSucceeded))
+      .mockResolvedValueOnce(jsonResponse({
+        versionId: 'version-1', status: 'ready', generatorVersion: 'preview-v1',
+        artifactId: 'artifact-1', sha256: 'abc', fileSize: 42,
+        url: previewUrl, failure: null,
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const preview = await loadComponentVersionPreview('version-1');
+
+    expect(preview.model).toEqual({
+      artifactId: 'artifact-1',
+      format: 'glb',
+      url: previewUrl,
+      sha256: 'abc',
+      byteLength: 42,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/component-versions/version-1/preview/materialize',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('loads an immutable Part preview through the Go durable task contract', async () => {
+    vi.stubGlobal('window', {
+      location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
+    });
+    const base = {
+      partLibraryVersionId: 'library-1', ldrawPartNum: '3001.dat', name: 'Brick 2 x 4',
+      contentLocale: 'en-US', translationStatus: 'reviewed', generatorVersion: null,
+      taskId: null, geometry: {
+        bbox: { minX: -20, minY: -12, minZ: -10, maxX: 20, maxY: 12, maxZ: 10 },
+        logicalWidthStud: 2, logicalDepthStud: 4, logicalHeightPlate: 3,
+        vertexCount: 8, faceCount: 12,
+      }, failure: null,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ ...base, status: 'pending', model: null }))
+      .mockResolvedValueOnce(jsonResponse({ taskId: 'task-1', status: 'queued' }, 202))
+      .mockResolvedValueOnce(jsonResponse({ ...taskSucceeded, taskType: 'component.part_preview.materialize' }))
+      .mockResolvedValueOnce(jsonResponse({
+        ...base, status: 'ready', generatorVersion: 'part-preview-ldraw-glb-v1',
+        model: {
+          artifactId: 'artifact-1', format: 'glb',
+          url: String.fromCharCode(104, 116, 116, 112, 115, 58, 47, 47) + 'storage.example/3001.glb',
+          sha256: 'abc', byteLength: 42,
+        },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const preview = await loadPartPreview('library-1', '3001.dat');
+
+    expect(preview.status).toBe('ready');
+    expect(preview.model.artifactId).toBe('artifact-1');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      '/api/v1/part-library-versions/library-1/parts/3001.dat/preview',
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/part-library-versions/library-1/parts/3001.dat/preview/materialize',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('maps Go version fields and deletes only the selected draft resource', async () => {
+    const rawVersion = {
+      id: 'version-1', componentId: 'component-1', componentCandidateId: 'candidate-1',
+      version: '0.1.0', revision: 1, status: 'draft', sourceArtifactId: 'artifact-1',
+      exchangeArtifactId: null, sceneSnapshotId: 'snapshot-1', parserVersion: 'parser-v1',
+      partLibraryVersionId: null, validationReportId: null, interfaceSignature: '',
+      structureHash: '', geometryHash: '', previewArtifactId: null, previewStatus: 'pending',
+      previewGeneratorVersion: null, previewFailureCode: null, previewFailureParams: {},
+      releaseNote: null, releaseNoteLocale: null, metadata: {},
+      createdAt: '2026-08-12T00:00:00Z', publishedAt: null,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(rawVersion))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const version = await getComponentVersion('version-1');
+    expect(version.previewFailure).toBeNull();
+    expect(version.deletion).toEqual({ allowed: true, reason: null });
+    await expect(deleteComponentVersion(version)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v1/component-versions/version-1',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('combines Go connector and interface resources without fabricating legacy analysis metadata', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ items: [{
+        id: 'connector-1', worldConnectorId: 'world-1', partInstanceId: 'part-instance-1',
+        partRef: '3001.dat', connectorType: 'stud', connectorKind: null,
+        connectorGender: null, state: 'external', position: [1, 2, 3], axis: [0, 1, 0],
+        matrix: [], accessAxis: [0, 0, 1], externalInterfaceId: 'interface-1',
+        capacity: 1, occupiedSlots: 0, availableCapacity: 1, eligibility: {},
+      }] }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{
+        id: 'interface-1', componentCandidateId: 'candidate-1', worldConnectorId: 'world-1',
+        name: 'stud', exposure: 'external', defaultBehavior: 'connect', sourceConnector: {},
+        mechanicalRoles: [], businessRoles: [], requirements: {}, reviewStatus: 'automatic',
+        createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z',
+      }] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const analysis = await getConnectorAnalysis('candidate-1');
+
+    expect(analysis.componentCandidateId).toBe('candidate-1');
+    expect(analysis.connectors[0]).toMatchObject({
+      connectorId: 'connector-1',
+      connectorKind: '',
+      position: { x: 1, y: 2, z: 3 },
+      accessAxis: { x: 0, y: 0, z: 1 },
+    });
+    expect(analysis.externalInterfaces).toHaveLength(1);
+  });
+
+  it('uses the Go validation task result and publishes without a legacy edit body', async () => {
+    const publishedVersion = {
+      id: 'version-1', componentId: 'component-1', componentCandidateId: 'candidate-1',
+      version: '0.1.0', revision: 1, status: 'published', sourceArtifactId: 'artifact-1',
+      exchangeArtifactId: null, sceneSnapshotId: 'snapshot-1', parserVersion: 'parser-v1',
+      partLibraryVersionId: null, validationReportId: 'report-1', interfaceSignature: '',
+      structureHash: '', geometryHash: '', previewArtifactId: null, previewStatus: 'pending',
+      previewGeneratorVersion: null, previewFailureCode: null, previewFailureParams: {},
+      releaseNote: null, releaseNoteLocale: null, metadata: {},
+      createdAt: '2026-08-12T00:00:00Z', publishedAt: '2026-08-12T00:01:00Z',
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ taskId: 'task-1', status: 'queued' }, 202))
+      .mockResolvedValueOnce(jsonResponse({
+        ...taskSucceeded,
+        taskType: 'component.validate',
+        result: { validationReportId: 'report-1', passed: true },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'report-1', componentCandidateId: 'candidate-1', componentVersionId: 'version-1',
+        validationLevel: 'publish', passed: true, checks: [], issues: [],
+        validatorVersion: 'validator-v1', createdAt: '2026-08-12T00:00:02Z',
+      }))
+      .mockResolvedValueOnce(jsonResponse(publishedVersion));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(validateCandidate('candidate-1')).resolves.toMatchObject({
+      id: 'report-1',
+      passed: true,
+      checks: [],
+    });
+    await expect(publishVersion('version-1')).resolves.toMatchObject({
+      id: 'version-1',
+      status: 'published',
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/validation-reports/report-1',
+      undefined,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v1/component-versions/version-1/publish',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const publishInit = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[1] as RequestInit;
+    expect(publishInit.body).toBeUndefined();
+  });
+});

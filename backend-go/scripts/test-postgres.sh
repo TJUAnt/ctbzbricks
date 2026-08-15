@@ -45,9 +45,12 @@ export TEST_DATABASE_URL="$isolated_database_url"
 export APP_ENV=test
 
 go run ./cmd/migrate up
+go run ./cmd/migrate down
+go run ./cmd/migrate up
 go run ./cmd/migrate up
 go run ./cmd/migrate version
-go test -p=1 -tags=integration ./internal/database ./internal/component ./internal/artifact ./internal/httpapi
+go test -p=1 -tags=integration ./internal/database ./internal/component ./internal/artifact ./internal/task ./internal/worker ./internal/ingestion ./internal/workbench ./internal/httpapi
+(cd ../backend && ../.venv-app/bin/python -m pytest tests/test_go_component_import_worker.py -q)
 
 before_schema="$test_root/schema-before.sql"
 after_schema="$test_root/schema-after.sql"

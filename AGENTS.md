@@ -17,7 +17,7 @@ At the beginning of implementation, identify the migration phase being changed. 
 - Go is the system backend; Python remains only for explicit algorithm-worker responsibilities after a domain migrates.
 - Build a modular monolith first: Gin API plus independently runnable Workers. Do not introduce a business gateway or Component Repo microservice without a new approved decision.
 - New Go persistence is PostgreSQL-only and uses `sqlc` with `pgx/v5`/`pgxpool`. Do not add MySQL compatibility or an ORM alongside sqlc.
-- `sqlc` generates data-access code but does not own migrations. Migration authority is assigned by PostgreSQL schema/domain: Goose exclusively owns `component_repo`; Alembic temporarily owns unmigrated legacy objects in `public`. Never let both tools evolve the same schema object, table, sequence, function, or policy.
+- `sqlc` generates data-access code but does not own migrations. Migration authority is assigned by PostgreSQL schema/domain: Goose exclusively owns `component_repo`; Alembic temporarily owns unmigrated legacy objects in `public` and the already-established Supabase policies in the provider-owned `storage` schema. Goose must not manage `storage`, Alembic must not manage `component_repo`, and no object may have two authorities.
 - API and Worker startup must not run DDL, schema repair, or data backfills.
 - Gin handlers perform bounded HTTP work. File parsing, geometry, search, dynamic programming, validation, and derived-asset generation run as persistent tasks when they can be long-running.
 - Task state is durable in PostgreSQL. In-memory goroutines, process-local queues, and request background callbacks are not authoritative task systems.

@@ -16,6 +16,7 @@ if [[ ! -d "${FRONTEND_DIR}/node_modules" ]]; then
 fi
 
 echo "Frontend: http://${HOST}:${PORT}"
-echo "API proxy: /api -> ${BACKEND_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}}"
+echo "Go API proxy: /api/v1 -> ${GO_BACKEND_URL:-http://${GO_BACKEND_HOST:-127.0.0.1}:${GO_BACKEND_PORT:-8080}}"
+echo "Legacy API proxy: /api -> ${BACKEND_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}}"
 cd "${FRONTEND_DIR}"
 exec "${NPM_EXECUTABLE}" run dev -- --host "${HOST}" --port "${PORT}"

@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { errorMessage, requestJson } from '../api/client';
 import { useAppTranslation } from '../i18n';
 import { formatNumber } from '../i18n/formatters';
+import { getActivePartLibraryVersion } from '../componentRepo/componentRepoApi';
 
 type RecallCandidate = {
   candidateType: 'part' | 'component' | 'submodel';
@@ -71,9 +72,14 @@ const useRecallStore = create<RecallState>((set, get) => ({
 export function PartSearchPage() {
   const tr = useAppTranslation();
   const state = useRecallStore();
+  const [partLibraryVersionId, setPartLibraryVersionId] = React.useState<string | null>(null);
+  const [libraryError, setLibraryError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     void state.recall(1);
+    void getActivePartLibraryVersion()
+      .then((library) => setPartLibraryVersionId(library.id))
+      .catch((error: unknown) => setLibraryError(errorMessage(error, 'common.unknown')));
   }, []);
 
   return (
@@ -130,6 +136,11 @@ export function PartSearchPage() {
               {state.error}
             </div>
           ) : null}
+          {libraryError ? (
+            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {libraryError}
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -144,7 +155,11 @@ export function PartSearchPage() {
         ) : null}
         <div className={`grid gap-3 sm:grid-cols-2 ${recallGridColumns[columnsPerRow]}`}>
           {(state.response?.candidates ?? []).map((candidate) => (
-            <CandidateCard candidate={candidate} key={`${candidate.candidateType}:${candidate.candidateId}`} />
+            <CandidateCard
+              candidate={candidate}
+              key={`${candidate.candidateType}:${candidate.candidateId}`}
+              partLibraryVersionId={partLibraryVersionId}
+            />
           ))}
         </div>
         {state.response && state.response.totalPages > 1 ? (
@@ -175,14 +190,16 @@ export function PartSearchPage() {
   );
 }
 
-function CandidateCard({ candidate }: { candidate: RecallCandidate }) {
+function CandidateCard({
+  candidate,
+  partLibraryVersionId,
+}: {
+  candidate: RecallCandidate;
+  partLibraryVersionId: string | null;
+}) {
   const isComponent = candidate.candidateType === 'component' || candidate.candidateType === 'submodel';
-  const itemType = isComponent ? 'component' : 'part';
-  return (
-    <Link
-      className="block overflow-hidden rounded-xl border border-zinc-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2"
-      to={`/library/${itemType}/${encodeURIComponent(candidate.candidateId)}`}
-    >
+  const content = (
+    <>
       <div className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-zinc-50">
         <CandidateImage
           alt={candidate.name ?? candidate.candidateId}
@@ -194,6 +211,21 @@ function CandidateCard({ candidate }: { candidate: RecallCandidate }) {
         {candidate.name ?? candidate.candidateId}
       </h2>
       <div className="mt-1 break-all text-xs text-zinc-400">{candidate.candidateId}</div>
+    </>
+  );
+  const className = "block overflow-hidden rounded-xl border border-zinc-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2";
+  if (isComponent) {
+    return <Link className={className} to={`/component-repo/components/${encodeURIComponent(candidate.candidateId)}`}>{content}</Link>;
+  }
+  if (!partLibraryVersionId) {
+    return <article aria-disabled="true" className={`${className} opacity-60`}>{content}</article>;
+  }
+  return (
+    <Link
+      className={className}
+      to={`/parts/${encodeURIComponent(partLibraryVersionId)}/${encodeURIComponent(candidate.candidateId)}`}
+    >
+      {content}
     </Link>
   );
 }

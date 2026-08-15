@@ -1,23 +1,18 @@
 $ErrorActionPreference = "Stop"
 
-function Require-ConfigValue($Value, $Name) {
-  if ($null -eq $Value -or $Value -eq "") {
-    throw "Missing required configuration: $Name"
-  }
-  return $Value
+. (Join-Path $PSScriptRoot "dev-env.ps1")
+Import-CtbzDevEnvironment
+Assert-CtbzDatabaseUrl
+Set-CtbzGoCache
+
+if (-not $env:AUTH_JWT_SECRET -and -not $env:AUTH_JWKS_URL -and -not $env:AUTH_JWT_ISSUER) {
+  Write-Warning "JWT verification is not configured; protected /api/v1 routes will fail closed"
 }
 
-$scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
-$projectRoot = Split-Path -Parent $scriptDirectory
-$configPath = Join-Path $scriptDirectory "dev.config.json"
-$config = Get-Content -Path $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$backendDirectory = Join-Path $projectRoot (Require-ConfigValue $config.backend.workingDirectory "backend.workingDirectory")
+Write-Host "Go backend: http://$($env:GO_BACKEND_HOST):$($env:GO_BACKEND_PORT)"
+Write-Host "Environment: $($env:APP_ENV)"
+Write-Host "Storage provider: $($env:STORAGE_PROVIDER)"
 
-Set-Location $backendDirectory
-$env:PYTHONPATH = Require-ConfigValue $config.backend.pythonPath "backend.pythonPath"
-
-& (Require-ConfigValue $config.backend.pythonExecutable "backend.pythonExecutable") `
-  -m uvicorn `
-  (Require-ConfigValue $config.backend.module "backend.module") `
-  --host (Require-ConfigValue $config.backend.host "backend.host") `
-  --port (Require-ConfigValue $config.backend.port "backend.port")
+Set-Location (Join-Path $script:CtbzProjectRoot "backend-go")
+& go run ./cmd/api
+exit $LASTEXITCODE

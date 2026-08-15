@@ -5,6 +5,7 @@
 > 原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)
 > 进度：[go_migration_progress.md](./go_migration_progress.md)
 > G2 schema 决策：[go_component_schema_baseline.md](./go_component_schema_baseline.md)
+> G8 前端切换清单：[go_g8_frontend_cutover_inventory.md](./go_g8_frontend_cutover_inventory.md)
 
 ## 1. 范围与假设
 
@@ -203,6 +204,13 @@ POST   /api/v1/tasks/:taskId/cancel
 
 API DTO 在实现前可以继续细化；本计划不要求保持旧字段兼容。
 
+创建 ComponentVersion 时，客户端只提交 `componentCandidateId` 和版本展示元数据。
+`sourceArtifactId`、`exchangeArtifactId`、`sceneSnapshotId`、`parserVersion`、
+`partLibraryVersionId`、`interfaceSignature`、`structureHash` 和 `geometryHash`
+必须由服务端沿 Candidate -> SceneSnapshot -> Import -> Artifact 的已验证来源链取得，
+客户端不得分别指定。解析和这些签名/hash 的计算继续由异步 Worker 完成；Gin
+只执行有界的来源查询与版本事务写入。
+
 ## 6. 任务类型与 Worker 路由
 
 首批任务类型：
@@ -265,7 +273,7 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - 编写 Goose baseline；
 - 编写 sqlc query schema 输入；
 - PostgreSQL 集成测试；
-- 将 `component_repo` schema 的 authority 从 Alembic 边界中剥离并交给 Goose；legacy `public` 域暂由 Alembic 管理；
+- 将 `component_repo` schema 的 authority 从 Alembic 边界中剥离并交给 Goose；legacy `public` 域及 provider-owned Supabase `storage` policy 暂由 Alembic 管理；
 - 开发数据 reset/reseed runbook。
 
 验收：
@@ -312,6 +320,7 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - artifact immutable 规则；
 - 下载/签名 URL；
 - 部分失败补偿和过期上传清理。
+- 禁止 authenticated 客户端删除 Artifact 对象，由服务端 Worker 使用专用凭据执行失败补偿与过期清理。
 
 验收：
 
@@ -319,6 +328,7 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - 上传完成不重复下载正文；
 - hash 在唯一必要正文读取中验证；
 - 原始 artifact 不被派生 artifact 替代或覆盖。
+- source artifact 的结构字段与终态校验状态受数据库约束保护，且 authenticated Storage policy 不授予删除权限。
 
 ### G5：持久化任务系统
 
@@ -326,18 +336,19 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 
 交付：
 
-- `tasks`、`task_events`、`outbox_events`；
+- `task_jobs`、`tasks`、`task_events`、`outbox_events`；
 - 创建、领取、续租、完成、失败、取消和重试；
-- 幂等 key 与最大尝试次数；
+- 通用 Logical Job / Execution / Attempt 模型、确定性 input hash 与最大尝试次数；
 - progress/error `code + params`；
 - locale/timezone 冻结；
 - Go Worker 执行框架；
-- Python Worker 语言无关消费协议。
+- Python Worker 语言无关消费协议，详见 [go_task_protocol.md](./go_task_protocol.md)。
 
 验收：
 
 - Worker 崩溃后 lease 到期可恢复；
-- 同一幂等任务不会生成重复业务结果；
+- 并发提交相同 Logical Job 只产生一个 active Execution；
+- queued/running 和成功 Execution 可复用，failed/cancelled 后创建同一 Job 的下一次 Execution；
 - 任务重试不重复创建 artifact 或版本；
 - API 重启不丢失任务。
 
@@ -350,7 +361,8 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - upload complete 原子创建 import 与 parse task；
 - Python parser Worker adapter；
 - scene snapshot、BOM 和 parse issues 写入；
-- Candidate 与 Draft ComponentVersion；
+- Candidate 与 Draft ComponentVersion；Worker 在 Candidate 上物化版本创建所需的
+  interface/structure/geometry 签名，API 不同步重新解析或计算；
 - 结构化失败和重试；
 - parser version 与 part library version 冻结。
 
@@ -373,6 +385,7 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - validation task/report；
 - version-addressed GLB materialize task；
 - signed preview URL 和 locale-aware Part BOM 分离加载。
+- relation、validation、preview 都使用业务 logical key、权威输入 hash 和算法版本接入 G5 通用调度模型；preview generation 只表达派生缓存物化代次，不再承担任务去重职责。
 
 验收：
 
@@ -381,6 +394,7 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - 验证失败阻止发布；
 - GET 不隐式生成 GLB；
 - 缓存丢失可以幂等重建。
+- 相同输入的 active/succeeded 计算被复用；终态失败或派生缓存丢失创建同一 Logical Job 的下一次 Execution。
 
 ### G8：前端切换与 Python 组件 API 删除
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"strings"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
@@ -22,8 +21,6 @@ const (
 	maxPageSize     = 100
 	maxGroupDepth   = 5
 )
-
-var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type Service struct {
 	pool *pgxpool.Pool
@@ -186,17 +183,25 @@ func (s *Service) CreateVersion(ctx context.Context, actor pgtype.UUID, componen
 			}
 			return ComponentVersion{}, err
 		}
-		owned, err := q.VersionInputsOwnedByActor(ctx, db.VersionInputsOwnedByActorParams{
-			SourceArtifactID: params.SourceArtifactID, ActorID: actor,
-			ExchangeArtifactID: params.ExchangeArtifactID, SceneSnapshotID: params.SceneSnapshotID,
-			ComponentCandidateID: params.ComponentCandidateID,
+		source, err := q.GetOwnedVersionCandidateSource(ctx, db.GetOwnedVersionCandidateSourceParams{
+			CandidateID: params.ComponentCandidateID,
+			ActorID:     actor,
+			ComponentID: componentUUID,
 		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ComponentVersion{}, apierror.New("component_repo.version_source_not_found_failed", http.StatusNotFound, nil)
+		}
 		if err != nil {
 			return ComponentVersion{}, err
 		}
-		if !owned {
-			return ComponentVersion{}, apierror.New("component_repo.version_source_not_found_failed", http.StatusNotFound, nil)
-		}
+		params.SourceArtifactID = source.SourceArtifactID
+		params.ExchangeArtifactID = source.ExchangeArtifactID
+		params.SceneSnapshotID = source.SceneSnapshotID
+		params.ParserVersion = source.ParserVersion
+		params.PartLibraryVersionID = source.PartLibraryVersionID
+		params.InterfaceSignature = source.InterfaceSignature
+		params.StructureHash = source.StructureHash
+		params.GeometryHash = source.GeometryHash
 		row, err := q.CreateComponentVersion(ctx, params)
 		if err != nil {
 			return ComponentVersion{}, mapDatabaseError(err, "component_repo.version_conflict")
@@ -266,6 +271,10 @@ func (s *Service) PublishVersion(ctx context.Context, actor pgtype.UUID, version
 			return ComponentVersion{}, err
 		}
 		if _, err := q.PublishComponentVersion(ctx, id); err != nil {
+			var databaseError *pgconn.PgError
+			if errors.As(err, &databaseError) && strings.Contains(databaseError.Message, "publish validation report") {
+				return ComponentVersion{}, apierror.New("component_repo.publish_validation_failed", http.StatusConflict, map[string]any{"versionId": versionID})
+			}
 			return ComponentVersion{}, err
 		}
 		if err := q.SetComponentCurrentVersion(ctx, db.SetComponentCurrentVersionParams{VersionID: id, ComponentID: locked.ComponentID, ActorID: actor}); err != nil {
@@ -311,21 +320,169 @@ func (s *Service) DeleteVersion(ctx context.Context, actor pgtype.UUID, versionI
 	return err
 }
 
-func (s *Service) ListGroups(ctx context.Context, actor pgtype.UUID) ([]Group, error) {
-	return withTx(ctx, s.pool, func(q *db.Queries) ([]Group, error) {
-		if _, err := ensureRoot(ctx, q, actor); err != nil {
-			return nil, err
+func (s *Service) UpdateVersion(ctx context.Context, actor pgtype.UUID, versionID string, input UpdateVersionInput) (ComponentVersion, error) {
+	id, err := resourceID(versionID, "versionId")
+	if err != nil {
+		return ComponentVersion{}, err
+	}
+	if input.Version == nil && input.Revision == nil && !input.ReleaseNote.Set && !input.ReleaseNoteLocale.Set {
+		return ComponentVersion{}, validationError("body")
+	}
+	versionLabel := ""
+	if input.Version != nil {
+		versionLabel = strings.TrimSpace(*input.Version)
+		if versionLabel == "" || len(versionLabel) > 64 {
+			return ComponentVersion{}, validationError("version")
 		}
-		rows, err := q.ListOwnedComponentGroups(ctx, actor)
-		if err != nil {
-			return nil, err
+	}
+	if input.Revision != nil && *input.Revision < 1 {
+		return ComponentVersion{}, validationError("revision")
+	}
+	if input.ReleaseNote.Set != input.ReleaseNoteLocale.Set {
+		return ComponentVersion{}, validationError("releaseNoteLocale")
+	}
+	var releaseNote, releaseNoteLocale *string
+	if input.ReleaseNote.Set {
+		releaseNote = input.ReleaseNote.Value
+		releaseNoteLocale = input.ReleaseNoteLocale.Value
+		if (releaseNote == nil) != (releaseNoteLocale == nil) {
+			return ComponentVersion{}, validationError("releaseNoteLocale")
 		}
-		groups := make([]Group, 0, len(rows))
-		for _, row := range rows {
-			groups = append(groups, groupFromList(row))
+		if releaseNoteLocale != nil {
+			normalized, ok := NormalizeLocale(*releaseNoteLocale)
+			if !ok {
+				return ComponentVersion{}, validationError("releaseNoteLocale")
+			}
+			releaseNoteLocale = &normalized
 		}
-		return groups, nil
+	}
+	row, err := s.q.UpdateOwnedDraftComponentVersion(ctx, db.UpdateOwnedDraftComponentVersionParams{
+		SetVersionLabel: input.Version != nil, VersionLabel: versionLabel,
+		SetRevision: input.Revision != nil, Revision: int32Value(input.Revision),
+		SetReleaseNote: input.ReleaseNote.Set, ReleaseNote: releaseNote, ReleaseNoteLocale: releaseNoteLocale,
+		VersionID: id, ActorID: actor,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ComponentVersion{}, notFound("component_repo.version_not_found", "versionId", versionID)
+	}
+	if err != nil {
+		return ComponentVersion{}, mapDatabaseError(err, "component_repo.version_conflict")
+	}
+	return versionFromDB(row), nil
+}
+
+func (s *Service) BootstrapGroups(ctx context.Context, actor pgtype.UUID) error {
+	_, err := withTx(ctx, s.pool, func(q *db.Queries) (struct{}, error) {
+		_, err := ensureRoot(ctx, q, actor)
+		return struct{}{}, err
+	})
+	return err
+}
+
+func (s *Service) ListGroups(ctx context.Context, actor pgtype.UUID) ([]Group, error) {
+	rows, err := s.q.ListOwnedComponentGroups(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	groups := make([]Group, 0, len(rows))
+	for _, row := range rows {
+		groups = append(groups, groupFromList(row))
+	}
+	return groups, nil
+}
+
+func (s *Service) ListComponentGroupIDs(ctx context.Context, actor pgtype.UUID, componentID string) ([]string, error) {
+	id, err := resourceID(componentID, "componentId")
+	if err != nil {
+		return nil, err
+	}
+	visible, err := s.q.ComponentIsVisible(ctx, db.ComponentIsVisibleParams{ComponentID: id, ActorID: actor})
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
+		return nil, notFound("component_repo.component_not_found", "componentId", componentID)
+	}
+	rows, err := s.q.ListOwnedComponentGroupIDsForComponent(ctx, db.ListOwnedComponentGroupIDsForComponentParams{
+		OwnerID: actor, ComponentID: id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, uuidutil.String(row))
+	}
+	return ids, nil
+}
+
+func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, groupID string, input ComponentGroupSearchRequest) (ComponentGroupSearchPage, error) {
+	id, err := resourceID(groupID, "groupId")
+	if err != nil {
+		return ComponentGroupSearchPage{}, err
+	}
+	if _, err := s.q.GetOwnedComponentGroup(ctx, db.GetOwnedComponentGroupParams{GroupID: id, OwnerID: actor}); errors.Is(err, pgx.ErrNoRows) {
+		return ComponentGroupSearchPage{}, notFound("component_repo.group_not_found", "groupId", groupID)
+	} else if err != nil {
+		return ComponentGroupSearchPage{}, err
+	}
+	query := strings.TrimSpace(input.Query)
+	if len(query) > 200 {
+		return ComponentGroupSearchPage{}, validationError("query")
+	}
+	if len(input.Statuses) > 16 {
+		return ComponentGroupSearchPage{}, validationError("statuses")
+	}
+	statuses := make([]string, 0, len(input.Statuses))
+	seenStatuses := make(map[string]struct{}, len(input.Statuses))
+	for _, status := range input.Statuses {
+		if status == "" || len(status) > 32 {
+			return ComponentGroupSearchPage{}, validationError("statuses")
+		}
+		if _, exists := seenStatuses[status]; exists {
+			continue
+		}
+		seenStatuses[status] = struct{}{}
+		statuses = append(statuses, status)
+	}
+	page := normalizePage(input.PageRequest)
+	locale := displayLocale(input.Locale)
+	rows, err := s.q.SearchComponentGroupComponents(ctx, db.SearchComponentGroupComponentsParams{
+		Locale: locale, OwnerID: actor, GroupID: id, StatusFilters: statuses, SearchQuery: query,
+		PageOffset: int32((page.Page - 1) * page.PageSize), PageSize: int32(page.PageSize),
+	})
+	if err != nil {
+		return ComponentGroupSearchPage{}, err
+	}
+	items := make([]Component, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, componentFromGroupSearch(row))
+	}
+	counts, err := s.q.CountComponentGroupStatuses(ctx, db.CountComponentGroupStatusesParams{
+		Locale: locale, GroupID: id, OwnerID: actor, SearchQuery: query,
+	})
+	if err != nil {
+		return ComponentGroupSearchPage{}, err
+	}
+	statusCounts := make(map[string]int64, len(counts))
+	for _, count := range counts {
+		statusCounts[count.Status] = count.ComponentCount
+	}
+	var total int64
+	if len(statuses) == 0 {
+		for _, count := range statusCounts {
+			total += count
+		}
+	} else {
+		for _, status := range statuses {
+			total += statusCounts[status]
+		}
+	}
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(page.PageSize) - 1) / int64(page.PageSize))
+	}
+	return ComponentGroupSearchPage{Items: items, Total: total, Page: page.Page, PageSize: page.PageSize, TotalPages: totalPages, StatusCounts: statusCounts}, nil
 }
 
 func (s *Service) CreateGroup(ctx context.Context, actor pgtype.UUID, input CreateGroupInput) (Group, error) {
@@ -634,31 +791,12 @@ func versionCreateParams(actor, componentID pgtype.UUID, input CreateVersionInpu
 	if err != nil {
 		return db.CreateComponentVersionParams{}, err
 	}
-	source, err := resourceID(input.SourceArtifactID, "sourceArtifactId")
+	candidate, err := resourceID(input.ComponentCandidateID, "componentCandidateId")
 	if err != nil {
 		return db.CreateComponentVersionParams{}, err
 	}
-	snapshot, err := resourceID(input.SceneSnapshotID, "sceneSnapshotId")
-	if err != nil {
-		return db.CreateComponentVersionParams{}, err
-	}
-	candidate, err := optionalResourceID(input.ComponentCandidateID, "componentCandidateId")
-	if err != nil {
-		return db.CreateComponentVersionParams{}, err
-	}
-	exchange, err := optionalResourceID(input.ExchangeArtifactID, "exchangeArtifactId")
-	if err != nil {
-		return db.CreateComponentVersionParams{}, err
-	}
-	partLibrary, err := optionalResourceID(input.PartLibraryVersionID, "partLibraryVersionId")
-	if err != nil {
-		return db.CreateComponentVersionParams{}, err
-	}
-	if strings.TrimSpace(input.Version) == "" || input.Revision < 1 || strings.TrimSpace(input.ParserVersion) == "" {
+	if strings.TrimSpace(input.Version) == "" || input.Revision < 1 {
 		return db.CreateComponentVersionParams{}, validationError("version")
-	}
-	if !sha256Pattern.MatchString(input.InterfaceSignature) || !sha256Pattern.MatchString(input.StructureHash) || !sha256Pattern.MatchString(input.GeometryHash) {
-		return db.CreateComponentVersionParams{}, validationError("hash")
 	}
 	if (input.ReleaseNote == nil) != (input.ReleaseNoteLocale == nil) {
 		return db.CreateComponentVersionParams{}, validationError("releaseNoteLocale")
@@ -680,19 +818,9 @@ func versionCreateParams(actor, componentID pgtype.UUID, input CreateVersionInpu
 	return db.CreateComponentVersionParams{
 		ID: id, ComponentID: componentID, ComponentCandidateID: candidate,
 		VersionLabel: strings.TrimSpace(input.Version), Revision: input.Revision,
-		SourceArtifactID: source, ExchangeArtifactID: exchange, SceneSnapshotID: snapshot,
-		ParserVersion: strings.TrimSpace(input.ParserVersion), PartLibraryVersionID: partLibrary,
-		InterfaceSignature: input.InterfaceSignature, StructureHash: input.StructureHash,
-		GeometryHash: input.GeometryHash, ReleaseNote: input.ReleaseNote,
-		ReleaseNoteLocale: input.ReleaseNoteLocale, Metadata: metadata, CreatedBy: actor,
+		ReleaseNote: input.ReleaseNote, ReleaseNoteLocale: input.ReleaseNoteLocale,
+		Metadata: metadata, CreatedBy: actor,
 	}, nil
-}
-
-func optionalResourceID(value *string, field string) (pgtype.UUID, error) {
-	if value == nil {
-		return pgtype.UUID{}, nil
-	}
-	return resourceID(*value, field)
 }
 
 func optionalParent(ctx context.Context, q *db.Queries, actor pgtype.UUID, value *string) (pgtype.UUID, error) {

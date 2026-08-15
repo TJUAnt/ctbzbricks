@@ -6,7 +6,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 
-EXPECTED_DATABASE_REVISION = "20260803_0021"
+EXPECTED_DATABASE_REVISION = "20260809_0022"
 
 
 class DatabaseSchemaError(RuntimeError):

@@ -350,17 +350,7 @@ class ComponentRepoApiTest(unittest.TestCase):
                 config["routes"]["component_version_preview"]
             ]["get"]
             self.assertEqual(version_preview_operation["summary"], "Get one Component version GLB")
-            item_preview_operation = openapi["paths"][
-                config["routes"]["library_item_preview"]
-            ]["get"]
-            self.assertEqual(
-                item_preview_operation["summary"],
-                "Get a Component or Part preview by type and ID",
-            )
-            self.assertEqual(
-                {parameter["name"] for parameter in item_preview_operation["parameters"]},
-                {"item_type", "item_id", "contentLocale"},
-            )
+            self.assertNotIn("/api/library-items/{item_type}/{item_id}/preview", openapi["paths"])
             client = TestClient(app)
 
             empty_preview_response = client.get(
@@ -427,63 +417,11 @@ class ComponentRepoApiTest(unittest.TestCase):
             app.include_router(create_component_repo_router(config))
             client = TestClient(app)
 
-            part_preview_response = client.post(
-                config["routes"]["library_item_preview"].format(
-                    item_type="part",
-                    item_id="male.dat",
-                ),
+            removed_part_preview_response = client.get(
+                "/api/library-items/part/male.dat/preview",
                 params={"contentLocale": "en-US"},
             )
-            self.assertEqual(part_preview_response.status_code, 200)
-            self.assertEqual(part_preview_response.json()["source"]["kind"], "part")
-            self.assertEqual(part_preview_response.json()["source"]["id"], "male.dat")
-            self.assertEqual(part_preview_response.json()["partCount"], 1)
-            self.assertEqual(part_preview_response.json()["parts"][0]["partRef"], "male.dat")
-            self.assertEqual(part_preview_response.json()["model"]["format"], "glb")
-            self.assertEqual(part_preview_response.json()["model"]["compression"], "meshopt")
-            self.assertNotIn("meshes", part_preview_response.json())
-            cached_part_preview_response = client.get(
-                config["routes"]["library_item_preview"].format(
-                    item_type="part",
-                    item_id="male.dat",
-                ),
-                params={"contentLocale": "en-US"},
-            )
-            self.assertEqual(cached_part_preview_response.status_code, 200)
-            self.assertEqual(
-                cached_part_preview_response.json()["model"]["artifactId"],
-                part_preview_response.json()["model"]["artifactId"],
-            )
-            part_model_response = client.get(part_preview_response.json()["model"]["url"])
-            self.assertEqual(part_model_response.status_code, 200)
-            self.assertEqual(part_model_response.content[:4], b"glTF")
-            self.assertIn(b"EXT_meshopt_compression", part_model_response.content)
-
-            missing_item_response = client.get(
-                config["routes"]["library_item_preview"].format(
-                    item_type="part",
-                    item_id="missing.dat",
-                ),
-                params={"contentLocale": "en-US"},
-            )
-            self.assertEqual(missing_item_response.status_code, 404)
-            self.assertEqual(
-                missing_item_response.json()["error"]["code"],
-                "component_repo.library_item_not_found",
-            )
-
-            unsupported_item_response = client.get(
-                config["routes"]["library_item_preview"].format(
-                    item_type="submodel",
-                    item_id="demo",
-                ),
-                params={"contentLocale": "en-US"},
-            )
-            self.assertEqual(unsupported_item_response.status_code, 400)
-            self.assertEqual(
-                unsupported_item_response.json()["error"]["code"],
-                "component_repo.preview_type_unsupported",
-            )
+            self.assertEqual(removed_part_preview_response.status_code, 404)
 
             response = client.post(
                 config["routes"]["component_imports"],
@@ -564,23 +502,6 @@ class ComponentRepoApiTest(unittest.TestCase):
             self.assertEqual(
                 explicit_candidate_preview_response.json()["partCount"],
                 2,
-            )
-
-            component_item_preview_response = client.get(
-                config["routes"]["library_item_preview"].format(
-                    item_type="component",
-                    item_id=parse_payload["component"]["id"],
-                ),
-                params={"contentLocale": "zh-CN"},
-            )
-            self.assertEqual(component_item_preview_response.status_code, 200)
-            self.assertEqual(
-                component_item_preview_response.json()["source"]["id"],
-                parse_payload["component"]["id"],
-            )
-            self.assertEqual(
-                component_item_preview_response.json()["versionId"],
-                parse_payload["version"]["id"],
             )
 
             candidate_preview_response = client.get(

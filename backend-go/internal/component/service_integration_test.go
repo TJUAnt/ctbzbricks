@@ -4,14 +4,18 @@ package component
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -50,39 +54,66 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 		t.Fatalf("cross-user update code = %q, error = %v", errorCode(err), err)
 	}
 
-	seedVersionDependencies(t, pool, actorA)
-	_, err = pool.Exec(ctx, `
-		INSERT INTO component_repo.artifacts
-			(id, owner_id, artifact_type, source_kind, original_filename, storage_provider,
-			 storage_bucket, storage_key, sha256, file_size, mime_type, uploaded_by)
-		VALUES
-			('20000000-0000-0000-0000-000000000013', $1, 'ldraw', 'source', 'foreign.ldr',
-			 'test', 'test', 'g3/foreign.ldr', repeat('4', 64), 1, 'text/plain', $1)`, actorB)
-	if err != nil {
-		t.Fatalf("seed foreign artifact: %v", err)
-	}
+	seedVersionDependencies(t, pool, actorA, actorB, created.ID)
 	_, err = service.CreateVersion(ctx, actorA, created.ID, CreateVersionInput{
-		Version: "forbidden", Revision: 1,
-		SourceArtifactID: "20000000-0000-0000-0000-000000000013",
-		SceneSnapshotID:  "20000000-0000-0000-0000-000000000012", ParserVersion: "g3-fixture",
-		InterfaceSignature: strings.Repeat("1", 64), StructureHash: strings.Repeat("2", 64), GeometryHash: strings.Repeat("3", 64),
+		ComponentCandidateID: "20000000-0000-0000-0000-000000000023",
+		Version:              "forbidden",
+		Revision:             1,
 	})
 	if errorCode(err) != "component_repo.version_source_not_found_failed" {
-		t.Fatalf("foreign version input code = %q, error = %v", errorCode(err), err)
+		t.Fatalf("foreign candidate code = %q, error = %v", errorCode(err), err)
+	}
+	_, err = service.CreateVersion(ctx, actorA, created.ID, CreateVersionInput{
+		ComponentCandidateID: "20000000-0000-0000-0000-000000000033",
+		Version:              "unverified",
+		Revision:             1,
+	})
+	if errorCode(err) != "component_repo.version_source_not_found_failed" {
+		t.Fatalf("unverified candidate code = %q, error = %v", errorCode(err), err)
 	}
 	version, err := service.CreateVersion(ctx, actorA, created.ID, CreateVersionInput{
-		Version: "1.0.0", Revision: 1,
-		SourceArtifactID: "20000000-0000-0000-0000-000000000010",
-		SceneSnapshotID:  "20000000-0000-0000-0000-000000000012",
-		ParserVersion:    "g3-fixture", InterfaceSignature: strings.Repeat("1", 64),
-		StructureHash: strings.Repeat("2", 64), GeometryHash: strings.Repeat("3", 64),
+		ComponentCandidateID: "20000000-0000-0000-0000-000000000013",
+		Version:              "1.0.0",
+		Revision:             1,
 	})
 	if err != nil {
 		t.Fatalf("create draft version: %v", err)
 	}
+	if version.ComponentCandidateID == nil || *version.ComponentCandidateID != "20000000-0000-0000-0000-000000000013" ||
+		version.SourceArtifactID != "20000000-0000-0000-0000-000000000010" ||
+		version.SceneSnapshotID != "20000000-0000-0000-0000-000000000012" ||
+		version.ParserVersion != "g3-fixture" || version.InterfaceSignature != strings.Repeat("1", 64) ||
+		version.StructureHash != strings.Repeat("2", 64) || version.GeometryHash != strings.Repeat("3", 64) {
+		t.Fatalf("version source was not derived from candidate: %+v", version)
+	}
+	releaseNote := "保留用户原文"
+	releaseLocale := "zh"
+	updatedVersion, err := service.UpdateVersion(ctx, actorA, version.ID, UpdateVersionInput{
+		Version: pointer("1.0.1"), ReleaseNote: OptionalString{Set: true, Value: &releaseNote},
+		ReleaseNoteLocale: OptionalString{Set: true, Value: &releaseLocale},
+	})
+	if err != nil || updatedVersion.Version != "1.0.1" || updatedVersion.ReleaseNote == nil ||
+		*updatedVersion.ReleaseNote != releaseNote || updatedVersion.ReleaseNoteLocale == nil || *updatedVersion.ReleaseNoteLocale != "zh-CN" {
+		t.Fatalf("update draft version: %+v, %v", updatedVersion, err)
+	}
+	_, err = pool.Exec(ctx, `
+		INSERT INTO component_repo.component_versions
+			(id, component_id, component_candidate_id, version_label, source_artifact_id,
+			 scene_snapshot_id, parser_version, interface_signature, structure_hash,
+			 geometry_hash, created_by)
+		VALUES
+			('20000000-0000-0000-0000-000000000040', $1,
+			 '20000000-0000-0000-0000-000000000013', 'invalid-lineage',
+			 '20000000-0000-0000-0000-000000000030',
+			 '20000000-0000-0000-0000-000000000012', 'g3-fixture', repeat('1', 64),
+			 repeat('2', 64), repeat('3', 64), $2)`, created.ID, actorA)
+	if databaseCode(err) != "23514" {
+		t.Fatalf("database accepted mismatched version lineage: %v", err)
+	}
 	if _, err := service.GetVersion(ctx, actorB, version.ID); errorCode(err) != "component_repo.version_not_found" {
 		t.Fatalf("cross-user draft version read code = %q", errorCode(err))
 	}
+	seedPassingPublishValidation(t, ctx, pool, actorA, version.ID)
 	published, err := service.PublishVersion(ctx, actorA, version.ID)
 	if err != nil || published.Status != "published" || published.PublishedAt == nil {
 		t.Fatalf("publish version: %+v, %v", published, err)
@@ -98,6 +129,40 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	testOfficialTranslationSelection(t, service, pool, actorA)
 	testGroupsMembershipsAndSubscriptions(t, service, actorA, actorB, created.ID)
 	testStablePagination(t, service, actorA)
+}
+
+func seedPassingPublishValidation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, actor pgtype.UUID, versionID string) {
+	t.Helper()
+	versionUUID := mustUUID(t, versionID)
+	candidateUUID := mustUUID(t, "20000000-0000-0000-0000-000000000013")
+	payload := json.RawMessage(`{"candidateId":"20000000-0000-0000-0000-000000000013","versionId":"` + versionID + `","validationLevel":"publish","validatorVersion":"component-repo-validator-v1"}`)
+	queue := task.NewService(pool)
+	created, _, err := queue.Enqueue(ctx, task.EnqueueInput{OwnerID: actor, TaskType: task.ComponentValidateType, Payload: payload, Locale: "zh-CN", Timezone: "Asia/Shanghai", CreatedBy: actor, IdempotencyKey: "g3-publish-validation", MaxAttempts: 1})
+	if err != nil {
+		t.Fatalf("enqueue validation fixture: %v", err)
+	}
+	claimed, ok, err := queue.Claim(ctx, "g3-validation-worker", []string{task.ComponentValidateType}, time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim validation fixture: %v", err)
+	}
+	if err := queue.Complete(ctx, "g3-validation-worker", claimed, task.Result{Payload: json.RawMessage(`{"passed":true}`)}); err != nil {
+		t.Fatalf("complete validation fixture: %v", err)
+	}
+	reportID := mustUUID(t, "20000000-0000-0000-0000-000000000041")
+	_, err = pool.Exec(ctx, `
+		INSERT INTO component_repo.validation_reports (
+			id, component_candidate_id, component_version_id, owner_id, task_id,
+			validation_level, passed, checks, issues, validator_version,
+			interface_signature, structure_hash, geometry_hash)
+		VALUES ($1, $2, $3, $4, $5, 'publish', true, '[]', '[]',
+			'component-repo-validator-v1', repeat('1',64), repeat('2',64), repeat('3',64))`,
+		reportID, candidateUUID, versionUUID, actor, mustUUID(t, created.ID))
+	if err != nil {
+		t.Fatalf("seed validation report: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE component_repo.component_versions SET validation_report_id=$1 WHERE id=$2`, reportID, versionUUID); err != nil {
+		t.Fatalf("attach validation report: %v", err)
+	}
 }
 
 func testOfficialTranslationSelection(t *testing.T, service *Service, pool *pgxpool.Pool, reviewer pgtype.UUID) {
@@ -140,20 +205,35 @@ func testGroupsMembershipsAndSubscriptions(t *testing.T, service *Service, actor
 	t.Helper()
 	ctx := context.Background()
 	groups, err := service.ListGroups(ctx, actorA)
-	if err != nil || len(groups) != 1 || groups[0].GroupType != "root" || groups[0].Name != nil {
-		t.Fatalf("root group: %+v, %v", groups, err)
+	if err != nil || len(groups) != 0 {
+		t.Fatalf("initial group list must be read-only and empty: %+v, %v", groups, err)
 	}
-	parentID := groups[0].ID
-	var firstID string
-	for depth := 1; depth <= maxGroupDepth; depth++ {
+	if err := service.BootstrapGroups(ctx, actorA); err != nil {
+		t.Fatalf("bootstrap root group: %v", err)
+	}
+	groups, err = service.ListGroups(ctx, actorA)
+	if err != nil || len(groups) != 1 || groups[0].GroupType != "root" || groups[0].DirectComponentCount < 1 {
+		t.Fatalf("explicitly bootstrapped root: %+v, %v", groups, err)
+	}
+	first, err := service.CreateGroup(ctx, actorA, CreateGroupInput{
+		Name: "Level 1", ContentLocale: "en-US", SortOrder: 1,
+	})
+	if err != nil {
+		t.Fatalf("create first group: %v", err)
+	}
+	groups, err = service.ListGroups(ctx, actorA)
+	if err != nil || len(groups) != 2 || groups[0].GroupType != "root" || groups[0].Name != nil {
+		t.Fatalf("root group after mutation: %+v, %v", groups, err)
+	}
+	rootID := groups[0].ID
+	parentID := first.ID
+	firstID := first.ID
+	for depth := 2; depth <= maxGroupDepth; depth++ {
 		group, err := service.CreateGroup(ctx, actorA, CreateGroupInput{
 			ParentGroupID: &parentID, Name: "Level " + string(rune('0'+depth)), ContentLocale: "en-US", SortOrder: int32(depth),
 		})
 		if err != nil {
 			t.Fatalf("create group depth %d: %v", depth, err)
-		}
-		if depth == 1 {
-			firstID = group.ID
 		}
 		parentID = group.ID
 	}
@@ -165,15 +245,19 @@ func testGroupsMembershipsAndSubscriptions(t *testing.T, service *Service, actor
 	if _, err := service.MoveGroup(ctx, actorA, firstID, MoveGroupInput{ParentGroupID: parentID}); errorCode(err) != "component_repo.group_cycle" {
 		t.Fatalf("cycle error code = %q, error = %v", errorCode(err), err)
 	}
-	otherRoot, err := service.ListGroups(ctx, actorB)
-	if err != nil {
-		t.Fatalf("actor B root: %v", err)
+	if _, err := service.CreateGroup(ctx, actorB, CreateGroupInput{
+		Name: "Other user group", ContentLocale: "en-US",
+	}); err != nil {
+		t.Fatalf("create actor B group: %v", err)
 	}
-	if _, err := service.MoveGroup(ctx, actorB, firstID, MoveGroupInput{ParentGroupID: otherRoot[0].ID}); errorCode(err) != "component_repo.group_not_found" {
+	otherGroups, err := service.ListGroups(ctx, actorB)
+	if err != nil || len(otherGroups) < 1 {
+		t.Fatalf("actor B groups: %+v, %v", otherGroups, err)
+	}
+	if _, err := service.MoveGroup(ctx, actorB, firstID, MoveGroupInput{ParentGroupID: otherGroups[0].ID}); errorCode(err) != "component_repo.group_not_found" {
 		t.Fatalf("cross-user group move code = %q", errorCode(err))
 	}
 
-	rootID := groups[0].ID
 	concurrent := make(chan error, 2)
 	var wait sync.WaitGroup
 	for i := 0; i < 2; i++ {
@@ -202,6 +286,16 @@ func testGroupsMembershipsAndSubscriptions(t *testing.T, service *Service, actor
 
 	if err := service.AddGroupMember(ctx, actorA, firstID, componentID); err != nil {
 		t.Fatalf("add group member: %v", err)
+	}
+	groupIDs, err := service.ListComponentGroupIDs(ctx, actorA, componentID)
+	if err != nil || len(groupIDs) != 1 || groupIDs[0] != firstID {
+		t.Fatalf("component group ids: %+v, %v", groupIDs, err)
+	}
+	search, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN", Query: "用户", Statuses: []string{"active"},
+	})
+	if err != nil || search.Total != 1 || len(search.Items) != 1 || search.Items[0].ID != componentID || search.StatusCounts["active"] != 1 {
+		t.Fatalf("group component search: %+v, %v", search, err)
 	}
 	members, err := service.ListGroupMembers(ctx, actorA, firstID, "zh-CN", PageRequest{})
 	if err != nil || len(members.Items) != 1 || members.Items[0].ID != componentID {
@@ -240,36 +334,114 @@ func testStablePagination(t *testing.T, service *Service, actor pgtype.UUID) {
 	}
 }
 
-func seedVersionDependencies(t *testing.T, pool *pgxpool.Pool, actor pgtype.UUID) {
+func seedVersionDependencies(t *testing.T, pool *pgxpool.Pool, actorA, actorB pgtype.UUID, componentID string) {
 	t.Helper()
 	ctx := context.Background()
 	_, err := pool.Exec(ctx, `
 		INSERT INTO component_repo.artifacts
 			(id, owner_id, artifact_type, source_kind, original_filename, storage_provider,
-			 storage_bucket, storage_key, sha256, file_size, mime_type, uploaded_by)
+			 storage_bucket, storage_key, sha256, file_size, mime_type, immutable,
+			 verification_status, verified_at, uploaded_by)
 		VALUES
 			('20000000-0000-0000-0000-000000000010', $1, 'ldraw', 'source', 'fixture.ldr',
-			 'test', 'test', 'g3/fixture.ldr', repeat('0', 64), 1, 'text/plain', $1)`, actor)
+			 'test', 'test', 'g3/fixture.ldr', repeat('0', 64), 1, 'text/plain', true,
+			 'verified', now(), $1),
+			('20000000-0000-0000-0000-000000000020', $2, 'ldraw', 'source', 'foreign.ldr',
+			 'test', 'test', 'g3/foreign.ldr', repeat('4', 64), 1, 'text/plain', true,
+			 'verified', now(), $2),
+			('20000000-0000-0000-0000-000000000030', $1, 'ldraw', 'source', 'pending.ldr',
+			 'test', 'test', 'g3/pending.ldr', repeat('5', 64), 1, 'text/plain', true,
+			 'pending', NULL, $1)`, actorA, actorB)
 	if err != nil {
-		t.Fatalf("seed source artifact: %v", err)
+		t.Fatalf("seed source artifacts: %v", err)
+	}
+	_, err = pool.Exec(ctx, `
+		INSERT INTO component_repo.upload_sessions
+			(id, owner_id, status, target_component_id, locale, timezone, created_by, expires_at, completed_at)
+		VALUES
+			('20000000-0000-0000-0000-000000000014', $1, 'completed', $3, 'zh-CN', 'Asia/Shanghai', $1, now() + interval '1 hour', now()),
+			('20000000-0000-0000-0000-000000000024', $2, 'completed', $3, 'en-US', 'UTC', $2, now() + interval '1 hour', now()),
+			('20000000-0000-0000-0000-000000000034', $1, 'completed', $3, 'en-US', 'UTC', $1, now() + interval '1 hour', now())`, actorA, actorB, componentID)
+	if err != nil {
+		t.Fatalf("seed import upload sessions: %v", err)
+	}
+	_, err = pool.Exec(ctx, `
+		INSERT INTO component_repo.tasks
+			(id, owner_id, task_type, payload, locale, timezone, created_by)
+		VALUES
+			('20000000-0000-0000-0000-000000000016', $1, 'component.artifact.verify',
+			 '{"artifactId":"20000000-0000-0000-0000-000000000010"}', 'zh-CN', 'Asia/Shanghai', $1),
+			('20000000-0000-0000-0000-000000000015', $1, 'component.import.parse',
+			 '{"importId":"20000000-0000-0000-0000-000000000011","parserVersion":"g3-fixture","snapshotSchema":"1"}', 'zh-CN', 'Asia/Shanghai', $1),
+			('20000000-0000-0000-0000-000000000026', $2, 'component.artifact.verify',
+			 '{"artifactId":"20000000-0000-0000-0000-000000000020"}', 'en-US', 'UTC', $2),
+			('20000000-0000-0000-0000-000000000025', $2, 'component.import.parse',
+			 '{"importId":"20000000-0000-0000-0000-000000000021","parserVersion":"g3-foreign","snapshotSchema":"1"}', 'en-US', 'UTC', $2),
+			('20000000-0000-0000-0000-000000000036', $1, 'component.artifact.verify',
+			 '{"artifactId":"20000000-0000-0000-0000-000000000030"}', 'en-US', 'UTC', $1),
+			('20000000-0000-0000-0000-000000000035', $1, 'component.import.parse',
+			 '{"importId":"20000000-0000-0000-0000-000000000031","parserVersion":"g3-pending","snapshotSchema":"1"}', 'en-US', 'UTC', $1)`, actorA, actorB)
+	if err != nil {
+		t.Fatalf("seed import parse tasks: %v", err)
+	}
+	_, err = pool.Exec(ctx, `
+		INSERT INTO component_repo.task_dependencies (task_id, prerequisite_task_id, owner_id)
+		VALUES
+			('20000000-0000-0000-0000-000000000015', '20000000-0000-0000-0000-000000000016', $1),
+			('20000000-0000-0000-0000-000000000025', '20000000-0000-0000-0000-000000000026', $2),
+			('20000000-0000-0000-0000-000000000035', '20000000-0000-0000-0000-000000000036', $1)`, actorA, actorB)
+	if err != nil {
+		t.Fatalf("seed task dependencies: %v", err)
 	}
 	_, err = pool.Exec(ctx, `
 		INSERT INTO component_repo.imports
-			(id, owner_id, source_artifact_id, locale, timezone, created_by)
+			(id, owner_id, source_artifact_id, target_component_id, status, parser_version,
+			 locale, timezone, created_by, upload_session_id, parse_task_id)
 		VALUES
 			('20000000-0000-0000-0000-000000000011', $1,
-			 '20000000-0000-0000-0000-000000000010', 'zh-CN', 'Asia/Shanghai', $1)`, actor)
+			 '20000000-0000-0000-0000-000000000010', $3, 'succeeded', 'g3-fixture',
+			 'zh-CN', 'Asia/Shanghai', $1,
+			 '20000000-0000-0000-0000-000000000014', '20000000-0000-0000-0000-000000000015'),
+			('20000000-0000-0000-0000-000000000021', $2,
+			 '20000000-0000-0000-0000-000000000020', $3, 'succeeded', 'g3-foreign',
+			 'en-US', 'UTC', $2,
+			 '20000000-0000-0000-0000-000000000024', '20000000-0000-0000-0000-000000000025'),
+			('20000000-0000-0000-0000-000000000031', $1,
+			 '20000000-0000-0000-0000-000000000030', $3, 'succeeded', 'g3-pending',
+			 'en-US', 'UTC', $1,
+			 '20000000-0000-0000-0000-000000000034', '20000000-0000-0000-0000-000000000035')`, actorA, actorB, componentID)
 	if err != nil {
-		t.Fatalf("seed import: %v", err)
+		t.Fatalf("seed imports: %v", err)
 	}
 	_, err = pool.Exec(ctx, `
 		INSERT INTO component_repo.scene_snapshots
 			(id, import_id, schema_version, parser_version, document, bom, parse_issues)
 		VALUES
 			('20000000-0000-0000-0000-000000000012',
-			 '20000000-0000-0000-0000-000000000011', '1', 'g3-fixture', '{}', '[]', '[]')`)
+			 '20000000-0000-0000-0000-000000000011', '1', 'g3-fixture', '{}', '{}', '[]'),
+			('20000000-0000-0000-0000-000000000022',
+			 '20000000-0000-0000-0000-000000000021', '1', 'g3-foreign', '{}', '{}', '[]'),
+			('20000000-0000-0000-0000-000000000032',
+			 '20000000-0000-0000-0000-000000000031', '1', 'g3-pending', '{}', '{}', '[]')`)
 	if err != nil {
-		t.Fatalf("seed version dependencies: %v", err)
+		t.Fatalf("seed scene snapshots: %v", err)
+	}
+	_, err = pool.Exec(ctx, `
+		INSERT INTO component_repo.candidates
+			(id, owner_id, import_id, scene_snapshot_id, summary,
+			 interface_signature, structure_hash, geometry_hash)
+		VALUES
+			('20000000-0000-0000-0000-000000000013', $1,
+			 '20000000-0000-0000-0000-000000000011',
+			 '20000000-0000-0000-0000-000000000012', '{}', repeat('1', 64), repeat('2', 64), repeat('3', 64)),
+			('20000000-0000-0000-0000-000000000023', $2,
+			 '20000000-0000-0000-0000-000000000021',
+			 '20000000-0000-0000-0000-000000000022', '{}', repeat('1', 64), repeat('2', 64), repeat('3', 64)),
+			('20000000-0000-0000-0000-000000000033', $1,
+			 '20000000-0000-0000-0000-000000000031',
+			 '20000000-0000-0000-0000-000000000032', '{}', repeat('1', 64), repeat('2', 64), repeat('3', 64))`, actorA, actorB)
+	if err != nil {
+		t.Fatalf("seed candidates: %v", err)
 	}
 }
 
@@ -299,6 +471,14 @@ func errorCode(err error) string {
 	var publicError *apierror.Error
 	if errors.As(err, &publicError) {
 		return publicError.Code
+	}
+	return ""
+}
+
+func databaseCode(err error) string {
+	var databaseError *pgconn.PgError
+	if errors.As(err, &databaseError) {
+		return databaseError.Code
 	}
 	return ""
 }

@@ -20,6 +20,8 @@ import (
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/config"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -88,6 +90,16 @@ func TestG3HTTPAuthenticationAndErrorContract(t *testing.T) {
 	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil || created.ID == "" {
 		t.Fatalf("decode created component: %+v, %v", created, err)
 	}
+	clientSelectedVersionSource := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/components/"+created.ID+"/versions", strings.NewReader(`{
+		"componentCandidateId":"30000000-0000-0000-0000-000000000010",
+		"version":"1.0.0","revision":1,
+		"sourceArtifactId":"30000000-0000-0000-0000-000000000011"
+	}`))
+	request.Header.Set("Authorization", "Bearer "+actorAToken)
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(clientSelectedVersionSource, request)
+	assertPublicError(t, clientSelectedVersionSource, http.StatusUnprocessableEntity, "request.validation_failed")
 
 	unknownField := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/components", strings.NewReader(`{
@@ -106,6 +118,59 @@ func TestG3HTTPAuthenticationAndErrorContract(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+actorBToken)
 	router.ServeHTTP(crossUser, request)
 	assertPublicError(t, crossUser, http.StatusNotFound, "component_repo.component_not_found")
+}
+
+func TestG5TaskHTTPContract(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is required for PostgreSQL integration tests")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect PostgreSQL: %v", err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `TRUNCATE component_repo.tasks, component_repo.outbox_events RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("reset task HTTP fixtures: %v", err)
+	}
+
+	cfg := testConfig()
+	cfg.Auth = config.AuthConfig{JWTSecret: integrationJWTSecret, JWTIssuer: "g3-test", JWTAudience: "authenticated"}
+	router := NewApplicationRouter(cfg, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	actorID, _ := uuidutil.Parse("30000000-0000-0000-0000-000000000001")
+	created, _, err := task.NewService(pool).Enqueue(ctx, task.EnqueueInput{
+		OwnerID: actorID, TaskType: task.ArtifactVerifyType,
+		Payload: json.RawMessage(`{"artifactId":"30000000-0000-0000-0000-000000000099"}`),
+		Locale:  "en-US", Timezone: "UTC", CreatedBy: actorID,
+		IdempotencyKey: "http-task", MaxAttempts: 3, AvailableAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("enqueue HTTP task fixture: %v", err)
+	}
+	actorToken := integrationToken(t, uuidutil.String(actorID))
+
+	get := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+created.ID, nil)
+	request.Header.Set("Authorization", "Bearer "+actorToken)
+	router.ServeHTTP(get, request)
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"status":"queued"`) || strings.Contains(get.Body.String(), `"payload"`) {
+		t.Fatalf("task GET status/body = %d %s", get.Code, get.Body.String())
+	}
+
+	other := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+created.ID, nil)
+	request.Header.Set("Authorization", "Bearer "+integrationToken(t, "30000000-0000-0000-0000-000000000002"))
+	router.ServeHTTP(other, request)
+	assertPublicError(t, other, http.StatusNotFound, "request.not_found")
+
+	cancel := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/cancel", nil)
+	request.Header.Set("Authorization", "Bearer "+actorToken)
+	router.ServeHTTP(cancel, request)
+	if cancel.Code != http.StatusOK || !strings.Contains(cancel.Body.String(), `"status":"cancelled"`) {
+		t.Fatalf("task cancel status/body = %d %s", cancel.Code, cancel.Body.String())
+	}
 }
 
 func assertPublicError(t *testing.T, recorder *httptest.ResponseRecorder, status int, code string) {

@@ -71,9 +71,9 @@ type Artifact struct {
 }
 
 type UploadCompletion struct {
-	UploadSessionID string     `json:"uploadSessionId"`
-	Status          string     `json:"status"`
-	Artifacts       []Artifact `json:"artifacts"`
+	ImportID string `json:"importId"`
+	TaskID   string `json:"taskId"`
+	Status   string `json:"status"`
 }
 
 type Download struct {

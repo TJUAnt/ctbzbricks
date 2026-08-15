@@ -2,6 +2,15 @@
 
 资源版本只追加、不复用。前端资源内容由 SHA-256 锁定，服务端导出版本写入每个正式产物。
 
+## frontend-2026.08.14.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：931
+- 内容哈希：`a1a6a2b1e255eb291ebba2639d2ca4fa43b1683e69080c0aeb943d605b3f9285`
+- Component Repo 新增 Part Library 不可用、Part 不存在和 Part preview 无法物化三类结构化错误文案。
+- Part Library 版本 ID、LDraw Part 编号、Artifact ID、任务状态与几何数值保持机器数据，不翻译。
+
 ## frontend-2026.08.05.2
 
 - 生产语言：`zh-CN`、`en-US`

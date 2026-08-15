@@ -39,8 +39,27 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.HTTP.RequestTimeout != 30*time.Second {
 		t.Fatalf("request timeout = %s", cfg.HTTP.RequestTimeout)
 	}
-	if cfg.Storage.Provider != "disabled" || cfg.Storage.Bucket != "component-artifacts" {
+	if cfg.Storage.Provider != "disabled" || cfg.Storage.Bucket != "component-artifacts" || cfg.Storage.KeyPrefix != "component-repo" {
 		t.Fatalf("unexpected storage defaults: %+v", cfg.Storage)
+	}
+	if cfg.Worker.PollInterval != 500*time.Millisecond || cfg.Worker.LeaseDuration != 30*time.Second ||
+		cfg.Worker.HeartbeatInterval != 10*time.Second || cfg.Worker.Concurrency != 4 {
+		t.Fatalf("unexpected worker defaults: %+v", cfg.Worker)
+	}
+	if cfg.Import.ParserVersion != "component-repo-ldraw-parser-v1" ||
+		cfg.Import.SnapshotSchema != "component-repo-v1" || cfg.Import.MaxAttempts != 3 {
+		t.Fatalf("unexpected import defaults: %+v", cfg.Import)
+	}
+}
+
+func TestLoadValidatesWorkerLeaseTiming(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{
+		"DATABASE_URL":              "postgresql://localhost/brickbuilder",
+		"WORKER_LEASE_DURATION":     "10s",
+		"WORKER_HEARTBEAT_INTERVAL": "5s",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "HEARTBEAT_INTERVAL") {
+		t.Fatalf("expected worker lease timing error, got %v", err)
 	}
 }
 
@@ -86,6 +105,30 @@ func TestLoadRejectsShortJWTSecret(t *testing.T) {
 	}
 }
 
+func TestLoadDerivesJWKSURLFromIssuer(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{
+		"DATABASE_URL":    "postgresql://localhost/brickbuilder",
+		"AUTH_JWT_ISSUER": "https://project.supabase.co/auth/v1/",
+	}))
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Auth.JWTIssuer != "https://project.supabase.co/auth/v1" ||
+		cfg.Auth.JWKSURL != "https://project.supabase.co/auth/v1/.well-known/jwks.json" {
+		t.Fatalf("unexpected auth config: %+v", cfg.Auth)
+	}
+}
+
+func TestLoadRejectsInsecureJWKSURLOutsideTests(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{
+		"DATABASE_URL":  "postgresql://localhost/brickbuilder",
+		"AUTH_JWKS_URL": "http://keys.example/jwks.json",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "AUTH_JWKS_URL") {
+		t.Fatalf("expected JWKS URL error, got %v", err)
+	}
+}
+
 func TestLoadValidatesSupabaseStorage(t *testing.T) {
 	_, err := load(mapLookup(map[string]string{
 		"DATABASE_URL":     "postgresql://localhost/brickbuilder",
@@ -96,21 +139,74 @@ func TestLoadValidatesSupabaseStorage(t *testing.T) {
 	}
 
 	cfg, err := load(mapLookup(map[string]string{
-		"DATABASE_URL":               "postgresql://localhost/brickbuilder",
-		"STORAGE_PROVIDER":           "supabase",
-		"STORAGE_BUCKET":             "artifacts",
-		"STORAGE_KEY_PREFIX":         "/component-repo/",
-		"SUPABASE_URL":               "https://example.supabase.co/",
-		"SUPABASE_STORAGE_API_KEY":   "service-key",
-		"STORAGE_UPLOAD_SESSION_TTL": "45m",
-		"STORAGE_SIGNED_URL_TTL":     "5m",
-		"STORAGE_MAX_ARTIFACT_BYTES": "2048",
+		"DATABASE_URL":                      "postgresql://localhost/brickbuilder",
+		"STORAGE_PROVIDER":                  "supabase",
+		"STORAGE_BUCKET":                    "artifacts",
+		"STORAGE_KEY_PREFIX":                "/component-repo/",
+		"SUPABASE_URL":                      "https://example.supabase.co/",
+		"SUPABASE_PUBLISHABLE_KEY":          "publishable-key",
+		"SUPABASE_STORAGE_SERVICE_ROLE_KEY": "service-key",
+		"STORAGE_UPLOAD_SESSION_TTL":        "45m",
+		"STORAGE_SIGNED_URL_TTL":            "5m",
+		"STORAGE_MAX_ARTIFACT_BYTES":        "2048",
 	}))
 	if err != nil {
 		t.Fatalf("load Supabase storage: %v", err)
 	}
 	if cfg.Storage.KeyPrefix != "component-repo" || cfg.Storage.UploadSessionTTL != 45*time.Minute || cfg.Storage.MaxArtifactBytes != 2048 {
 		t.Fatalf("unexpected Supabase storage config: %+v", cfg.Storage)
+	}
+	if cfg.Storage.PublishableKey != "publishable-key" || cfg.Storage.ServiceRoleKey != "service-key" {
+		t.Fatalf("unexpected Supabase credentials")
+	}
+
+	secretKey, err := load(mapLookup(map[string]string{
+		"DATABASE_URL":             "postgresql://localhost/brickbuilder",
+		"STORAGE_PROVIDER":         "supabase",
+		"SUPABASE_URL":             "https://example.supabase.co",
+		"SUPABASE_PUBLISHABLE_KEY": "sb_publishable_browser",
+		"SUPABASE_SECRET_KEY":      "sb_secret_worker",
+	}))
+	if err != nil {
+		t.Fatalf("load modern Supabase secret key: %v", err)
+	}
+	if secretKey.Storage.ServiceRoleKey != "sb_secret_worker" {
+		t.Fatalf("modern secret key was not selected")
+	}
+
+	apiOnly, err := load(mapLookup(map[string]string{
+		"DATABASE_URL":             "postgresql://localhost/brickbuilder",
+		"STORAGE_PROVIDER":         "supabase",
+		"SUPABASE_URL":             "https://example.supabase.co",
+		"SUPABASE_PUBLISHABLE_KEY": "publishable-key",
+	}))
+	if err != nil {
+		t.Fatalf("load API-only Supabase storage: %v", err)
+	}
+	if apiOnly.Storage.ServiceRoleKey != "" {
+		t.Fatal("API-only storage unexpectedly configured a service-role credential")
+	}
+
+	_, err = load(mapLookup(map[string]string{
+		"DATABASE_URL":                      "postgresql://localhost/brickbuilder",
+		"STORAGE_PROVIDER":                  "supabase",
+		"SUPABASE_URL":                      "https://example.supabase.co",
+		"SUPABASE_PUBLISHABLE_KEY":          "sb_publishable_browser",
+		"SUPABASE_STORAGE_SERVICE_ROLE_KEY": "sb_publishable_not_server",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "must not be a publishable key") {
+		t.Fatalf("expected publishable service-role rejection, got %v", err)
+	}
+
+	_, err = load(mapLookup(map[string]string{
+		"DATABASE_URL":             "postgresql://localhost/brickbuilder",
+		"STORAGE_PROVIDER":         "supabase",
+		"SUPABASE_URL":             "https://example.supabase.co",
+		"SUPABASE_PUBLISHABLE_KEY": "sb_publishable_browser",
+		"SUPABASE_SECRET_KEY":      "sb_publishable_not_server",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "must not be a publishable key") {
+		t.Fatalf("expected publishable secret-key rejection, got %v", err)
 	}
 }
 

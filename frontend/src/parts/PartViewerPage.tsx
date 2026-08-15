@@ -9,8 +9,9 @@ import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.j
 
 import { apiFetch, errorMessage } from '../api/client';
 import {
-  loadLibraryItemPreview,
+  loadPartPreview,
   type ComponentPreviewResponse,
+  type ReadyPartPreviewResponse,
 } from '../componentRepo/componentRepoApi';
 import { resolvedLocale, useAppTranslation } from '../i18n';
 import { formatNumber } from '../i18n/formatters';
@@ -23,7 +24,7 @@ export type ComponentSceneConnector = {
 };
 type ViewerState =
   | { status: 'loading'; preview: null; error: null }
-  | { status: 'ready'; preview: ComponentPreviewResponse; error: null }
+  | { status: 'ready'; preview: ReadyPartPreviewResponse; error: null }
   | { status: 'error'; preview: null; error: string };
 
 const CREASE_ANGLE_RADIANS = Math.PI / 3;
@@ -32,14 +33,10 @@ const EDGE_THRESHOLD_DEGREES = 42;
 export function PartViewerPage() {
   const tr = useAppTranslation();
   const locale = resolvedLocale();
-  const { itemType: rawItemType, itemId } = useParams<{
-    itemType: string;
-    itemId: string;
+  const { partLibraryVersionId, ldrawPartNum } = useParams<{
+    partLibraryVersionId: string;
+    ldrawPartNum: string;
   }>();
-  const itemType = rawItemType === 'part' || rawItemType === 'component'
-    ? rawItemType
-    : null;
-  const isPart = itemType === 'part';
   const resetViewRef = React.useRef<(() => void) | null>(null);
   const [state, setState] = React.useState<ViewerState>({
     status: 'loading',
@@ -53,7 +50,7 @@ export function PartViewerPage() {
   React.useEffect(() => {
     let active = true;
     setState({ status: 'loading', preview: null, error: null });
-    if (!itemType || !itemId) {
+    if (!partLibraryVersionId || !ldrawPartNum) {
       setState({
         status: 'error',
         preview: null,
@@ -63,7 +60,7 @@ export function PartViewerPage() {
         active = false;
       };
     }
-    void loadLibraryItemPreview(itemType, itemId)
+    void loadPartPreview(partLibraryVersionId, ldrawPartNum)
       .then((preview) => {
         if (active) setState({ status: 'ready', preview, error: null });
       })
@@ -79,7 +76,7 @@ export function PartViewerPage() {
     return () => {
       active = false;
     };
-  }, [itemId, itemType, locale, tr]);
+  }, [ldrawPartNum, partLibraryVersionId, locale, tr]);
 
   const preview = state.preview;
 
@@ -93,10 +90,10 @@ export function PartViewerPage() {
           <div>
             <span className="part-viewer-eyebrow">{tr('partSearch:viewerLibraryBadge')}</span>
             <h1>
-              {tr(isPart ? 'partSearch:viewerPartTitle' : 'partSearch:viewerComponentTitle')}
+              {tr('partSearch:viewerPartTitle')}
             </h1>
             <p>
-              {tr(isPart ? 'partSearch:viewerPartSubtitle' : 'partSearch:viewerDatabaseSubtitle')}
+              {tr('partSearch:viewerPartSubtitle')}
             </p>
           </div>
         </div>
@@ -112,7 +109,7 @@ export function PartViewerPage() {
 
       <section className="part-viewer-layout">
         <div className="part-viewer-stage">
-          {preview ? <ComponentScene preview={preview} registerReset={registerReset} /> : null}
+          {preview ? <ComponentScene preview={{ model: preview.model }} registerReset={registerReset} /> : null}
           {state.status === 'loading' ? (
             <div className="part-viewer-stage-state">
               <span className="part-viewer-spinner" aria-hidden="true" />
@@ -151,14 +148,14 @@ export function PartViewerPage() {
               <span>{tr('partSearch:viewerSelectedItem')}</span>
             </div>
             <strong>
-              {preview ? previewName(preview.source.name) : tr('partSearch:viewerItemLoading')}
+              {preview ? preview.name : tr('partSearch:viewerItemLoading')}
             </strong>
-            {preview ? <small>{preview.source.id}</small> : null}
+            {preview ? <small>{preview.ldrawPartNum}</small> : null}
             <div className="part-viewer-status-row">
               <span>{tr('partSearch:viewerStatus')}</span>
               <em>
                 {preview
-                  ? itemStatusLabel(preview.source.kind, preview.source.status, tr)
+                  ? tr('partSearch:viewerReady')
                   : tr('partSearch:viewerItemLoading')}
               </em>
             </div>
@@ -173,17 +170,17 @@ export function PartViewerPage() {
               <DimensionRow
                 label={tr('partSearch:length')}
                 unit={tr('partSearch:stud')}
-                value={preview?.logicalSize.widthStud}
+                value={preview?.geometry.logicalWidthStud}
               />
               <DimensionRow
                 label={tr('partSearch:width')}
                 unit={tr('partSearch:stud')}
-                value={preview?.logicalSize.depthStud}
+                value={preview?.geometry.logicalDepthStud}
               />
               <DimensionRow
                 label={tr('partSearch:height')}
                 unit={tr('partSearch:plateUnit')}
-                value={preview?.logicalSize.heightPlate}
+                value={preview?.geometry.logicalHeightPlate}
               />
             </dl>
           </section>
@@ -192,12 +189,12 @@ export function PartViewerPage() {
             <div className="part-viewer-card-title">
               <Layers3 aria-hidden="true" />
               <span>
-                {tr(isPart ? 'partSearch:viewerPartGeometry' : 'partSearch:viewerStructure')}
+                {tr('partSearch:viewerPartGeometry')}
               </span>
             </div>
-            <strong>{formatNumber(preview?.partCount ?? 0)}</strong>
+            <strong>{formatNumber(preview?.geometry.faceCount ?? 0)}</strong>
             <p>
-              {tr(isPart ? 'partSearch:viewerMeshCount' : 'partSearch:viewerPartCount')}
+              {tr('partSearch:viewerMeshCount')}
             </p>
           </section>
 
@@ -208,40 +205,13 @@ export function PartViewerPage() {
             </div>
             <strong>{tr('partSearch:viewerRendererValue')}</strong>
             <p>
-              {tr(
-                isPart
-                  ? 'partSearch:viewerPartRendererDescription'
-                  : 'partSearch:viewerDatabaseRendererDescription',
-              )}
+              {tr('partSearch:viewerPartRendererDescription')}
             </p>
           </section>
         </aside>
       </section>
     </main>
   );
-}
-
-function itemStatusLabel(
-  kind: ComponentPreviewResponse['source']['kind'],
-  status: string,
-  tr: ReturnType<typeof useAppTranslation>,
-): string {
-  if (kind === 'part') return tr('partSearch:viewerReady');
-  if (status === 'uploaded') return tr('componentRepo:uploaded');
-  if (status === 'parsing') return tr('componentRepo:parsing');
-  if (status === 'parsed' || status === 'pending_review') {
-    return tr('componentRepo:pendingReview');
-  }
-  if (status === 'in_review') return tr('componentRepo:inReview');
-  if (status === 'active') return tr('componentRepo:published');
-  if (status === 'draft') return tr('componentRepo:draft');
-  if (status === 'archived') return tr('componentRepo:archived');
-  if (status === 'failed') return tr('componentRepo:failed');
-  return tr('partSearch:viewerUnknownStatus');
-}
-
-function previewName(name: string): string {
-  return name.replace(/\.(io|ldr|mpd)$/i, '');
 }
 
 function DimensionRow({

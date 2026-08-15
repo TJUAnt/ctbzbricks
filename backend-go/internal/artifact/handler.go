@@ -47,19 +47,19 @@ func (h *Handler) createUploadSession(c *gin.Context) {
 
 func (h *Handler) completeUploadSession(c *gin.Context) {
 	actor, _ := auth.ActorFromGin(c)
-	result, err := h.service.CompleteUploadSession(c.Request.Context(), actor.ID, c.Param("sessionId"))
-	h.writeJSON(c, http.StatusOK, result, err)
+	result, err := h.service.CompleteUploadSession(c.Request.Context(), actor.ID, actor.AccessToken(), c.Param("sessionId"))
+	h.writeJSON(c, http.StatusAccepted, result, err)
 }
 
 func (h *Handler) createDownload(c *gin.Context) {
 	actor, _ := auth.ActorFromGin(c)
-	result, err := h.service.CreateDownload(c.Request.Context(), actor.ID, c.Param("artifactId"))
+	result, err := h.service.CreateDownload(c.Request.Context(), actor.ID, actor.AccessToken(), c.Param("artifactId"))
 	h.writeJSON(c, http.StatusOK, result, err)
 }
 
 func (h *Handler) createVersionSourceDownload(c *gin.Context) {
 	actor, _ := auth.ActorFromGin(c)
-	result, err := h.service.CreateVersionSourceDownload(c.Request.Context(), actor.ID, c.Param("versionId"))
+	result, err := h.service.CreateVersionSourceDownload(c.Request.Context(), actor.ID, actor.AccessToken(), c.Param("versionId"))
 	h.writeJSON(c, http.StatusOK, result, err)
 }
 

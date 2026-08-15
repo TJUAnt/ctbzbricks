@@ -44,7 +44,6 @@ import {
   type ComponentGroupTreeResponse,
   type ComponentResponse,
   type ComponentVersionResponse,
-  type ComponentVersionDeleteResponse,
 } from './componentRepoApi';
 import { ComponentVersionActions } from './ComponentVersionActions';
 
@@ -383,17 +382,13 @@ export function ComponentRepoPage() {
                   {selectedComponent?.id === item.id ? (
                     <VersionDropdown
                       component={item.data}
-                      onDeleted={(result, deletedVersion) => {
+                      onDeleted={(deletedVersion) => {
                         setVersions((current) => current.filter(
                           (version) => version.id !== deletedVersion.id,
                         ));
                         setActionNotice(tr('componentRepo:versionDeleted', {
                           version: deletedVersion.version,
                         }));
-                        if (result.componentDeleted) {
-                          setSelectedComponent(null);
-                          refreshLibrary();
-                        }
                       }}
                       state={versionState}
                       versions={versions}
@@ -1149,10 +1144,7 @@ export function ComponentUploadDialog({
 
 function VersionDropdown({ component, onDeleted, state, versions }: {
   component: ComponentResponse;
-  onDeleted: (
-    result: ComponentVersionDeleteResponse,
-    version: ComponentVersionResponse,
-  ) => void;
+  onDeleted: (version: ComponentVersionResponse) => void;
   state: 'idle' | 'loading' | 'error';
   versions: ComponentVersionResponse[];
 }) {
@@ -1217,9 +1209,9 @@ function buildLibraryItems(components: ComponentResponse[]): LibraryItem[] {
 function statusesForFilter(filter: LibraryFilter): string[] | null {
   if (filter === 'all') return null;
   if (filter === 'processing') return ['uploaded', 'parsing'];
-  if (filter === 'review') return ['parsed', 'pending_review', 'draft'];
-  if (filter === 'published') return ['active', 'published'];
-  return ['failed', 'blocked', 'rejected'];
+  if (filter === 'review') return ['draft'];
+  if (filter === 'published') return ['active'];
+  return ['archived'];
 }
 
 function sumStatuses(counts: Record<string, number>, statuses: string[]): number {

@@ -124,6 +124,17 @@ def test_supabase_user_token_replaces_publishable_key_only_for_authorization() -
     }
 
 
+def test_supabase_secret_key_is_not_sent_as_bearer_authorization() -> None:
+    storage = SupabaseArtifactStorage(
+        supabase_url="https://project.supabase.co",
+        api_key="sb_secret_worker",
+        bucket="component-artifacts",
+        authorization_token="sb_secret_worker",
+    )
+
+    assert storage._auth_headers() == {"apikey": "sb_secret_worker"}
+
+
 def test_storage_config_prefers_publishable_key(
     tmp_path,
     monkeypatch,

@@ -25,7 +25,7 @@ func traceMiddleware() gin.HandlerFunc {
 
 func authenticationMiddleware(verifier auth.TokenVerifier) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		actor, err := verifier.VerifyAuthorization(c.GetHeader("Authorization"))
+		actor, err := verifier.VerifyAuthorization(c.Request.Context(), c.GetHeader("Authorization"))
 		if err != nil {
 			apierror.Write(c, apierror.New(auth.FailureCode(err), http.StatusUnauthorized, nil))
 			return

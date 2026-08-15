@@ -21,7 +21,11 @@ func TestRunChecksDatabaseAndStopsWithContext(t *testing.T) {
 	pinger := &countingPinger{}
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, "worker-test", 5*time.Millisecond, pinger, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		done <- Run(ctx, "worker-test", Options{
+			PollInterval: 5 * time.Millisecond, LeaseDuration: 50 * time.Millisecond,
+			HeartbeatInterval: 10 * time.Millisecond, RetryDelay: 5 * time.Millisecond,
+			MaintenanceInterval: 5 * time.Millisecond, Concurrency: 1,
+		}, pinger, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}()
 
 	deadline := time.After(time.Second)

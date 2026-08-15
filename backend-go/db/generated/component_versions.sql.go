@@ -31,7 +31,7 @@ RETURNING id, component_id, component_candidate_id, version_label, revision, sta
           structure_hash, geometry_hash, preview_artifact_id, preview_status,
           preview_generator_version, preview_failure_code, preview_failure_params,
           release_note, release_note_locale, metadata, created_by, created_at,
-          published_at, deleted_at, deleted_by
+          published_at, deleted_at, deleted_by, preview_task_id, preview_generation
 `
 
 type CreateComponentVersionParams struct {
@@ -104,6 +104,8 @@ func (q *Queries) CreateComponentVersion(ctx context.Context, arg CreateComponen
 		&i.PublishedAt,
 		&i.DeletedAt,
 		&i.DeletedBy,
+		&i.PreviewTaskID,
+		&i.PreviewGeneration,
 	)
 	return i, err
 }
@@ -127,6 +129,94 @@ func (q *Queries) DeprecateOtherPublishedVersions(ctx context.Context, arg Depre
 	return err
 }
 
+const getOwnedVersionCandidateSource = `-- name: GetOwnedVersionCandidateSource :one
+SELECT candidate.id AS component_candidate_id,
+       import_job.source_artifact_id,
+       import_job.exchange_artifact_id,
+       snapshot.id AS scene_snapshot_id,
+       snapshot.parser_version,
+       import_job.part_library_version_id,
+       COALESCE(candidate.interface_signature, '')::text AS interface_signature,
+       COALESCE(candidate.structure_hash, '')::text AS structure_hash,
+       COALESCE(candidate.geometry_hash, '')::text AS geometry_hash
+FROM component_repo.candidates candidate
+JOIN component_repo.scene_snapshots snapshot
+  ON snapshot.id = candidate.scene_snapshot_id
+ AND snapshot.import_id = candidate.import_id
+JOIN component_repo.imports import_job
+  ON import_job.id = candidate.import_id
+ AND import_job.owner_id = candidate.owner_id
+JOIN component_repo.artifacts source_artifact
+  ON source_artifact.id = import_job.source_artifact_id
+ AND source_artifact.owner_id = candidate.owner_id
+LEFT JOIN component_repo.artifacts exchange_artifact
+  ON exchange_artifact.id = import_job.exchange_artifact_id
+ AND exchange_artifact.owner_id = candidate.owner_id
+WHERE candidate.id = $1
+  AND candidate.owner_id = $2
+  AND candidate.status IN ('pending_review', 'accepted')
+  AND import_job.status = 'succeeded'
+  AND import_job.target_component_id = $3
+  AND import_job.parser_version = snapshot.parser_version
+  AND candidate.interface_signature IS NOT NULL
+  AND candidate.structure_hash IS NOT NULL
+  AND candidate.geometry_hash IS NOT NULL
+  AND source_artifact.source_kind = 'source'
+  AND source_artifact.immutable
+  AND source_artifact.verification_status = 'verified'
+  AND source_artifact.deleted_at IS NULL
+  AND (
+      import_job.exchange_artifact_id IS NULL
+      OR (
+          exchange_artifact.immutable
+          AND exchange_artifact.verification_status = 'verified'
+          AND exchange_artifact.deleted_at IS NULL
+          AND (
+              exchange_artifact.source_kind = 'source'
+              OR (
+                  exchange_artifact.source_kind = 'derived'
+                  AND exchange_artifact.derived_from_artifact_id = source_artifact.id
+              )
+          )
+      )
+  )
+`
+
+type GetOwnedVersionCandidateSourceParams struct {
+	CandidateID pgtype.UUID
+	ActorID     pgtype.UUID
+	ComponentID pgtype.UUID
+}
+
+type GetOwnedVersionCandidateSourceRow struct {
+	ComponentCandidateID pgtype.UUID
+	SourceArtifactID     pgtype.UUID
+	ExchangeArtifactID   pgtype.UUID
+	SceneSnapshotID      pgtype.UUID
+	ParserVersion        string
+	PartLibraryVersionID pgtype.UUID
+	InterfaceSignature   string
+	StructureHash        string
+	GeometryHash         string
+}
+
+func (q *Queries) GetOwnedVersionCandidateSource(ctx context.Context, arg GetOwnedVersionCandidateSourceParams) (GetOwnedVersionCandidateSourceRow, error) {
+	row := q.db.QueryRow(ctx, getOwnedVersionCandidateSource, arg.CandidateID, arg.ActorID, arg.ComponentID)
+	var i GetOwnedVersionCandidateSourceRow
+	err := row.Scan(
+		&i.ComponentCandidateID,
+		&i.SourceArtifactID,
+		&i.ExchangeArtifactID,
+		&i.SceneSnapshotID,
+		&i.ParserVersion,
+		&i.PartLibraryVersionID,
+		&i.InterfaceSignature,
+		&i.StructureHash,
+		&i.GeometryHash,
+	)
+	return i, err
+}
+
 const getVisibleComponentVersion = `-- name: GetVisibleComponentVersion :one
 SELECT v.id, v.component_id, v.component_candidate_id, v.version_label, v.revision,
        v.status, v.source_artifact_id, v.exchange_artifact_id, v.scene_snapshot_id,
@@ -135,7 +225,8 @@ SELECT v.id, v.component_id, v.component_candidate_id, v.version_label, v.revisi
        v.preview_artifact_id, v.preview_status, v.preview_generator_version,
        v.preview_failure_code, v.preview_failure_params, v.release_note,
        v.release_note_locale, v.metadata, v.created_by, v.created_at,
-       v.published_at, v.deleted_at, v.deleted_by
+       v.published_at, v.deleted_at, v.deleted_by, v.preview_task_id,
+       v.preview_generation
 FROM component_repo.component_versions v
 JOIN component_repo.components c ON c.id = v.component_id
 WHERE v.id = $1
@@ -181,6 +272,8 @@ func (q *Queries) GetVisibleComponentVersion(ctx context.Context, arg GetVisible
 		&i.PublishedAt,
 		&i.DeletedAt,
 		&i.DeletedBy,
+		&i.PreviewTaskID,
+		&i.PreviewGeneration,
 	)
 	return i, err
 }
@@ -193,7 +286,8 @@ SELECT v.id, v.component_id, v.component_candidate_id, v.version_label, v.revisi
        v.preview_artifact_id, v.preview_status, v.preview_generator_version,
        v.preview_failure_code, v.preview_failure_params, v.release_note,
        v.release_note_locale, v.metadata, v.created_by, v.created_at,
-       v.published_at, v.deleted_at, v.deleted_by
+       v.published_at, v.deleted_at, v.deleted_by, v.preview_task_id,
+       v.preview_generation
 FROM component_repo.component_versions v
 JOIN component_repo.components c ON c.id = v.component_id
 WHERE v.component_id = $1
@@ -254,6 +348,8 @@ func (q *Queries) ListVisibleComponentVersions(ctx context.Context, arg ListVisi
 			&i.PublishedAt,
 			&i.DeletedAt,
 			&i.DeletedBy,
+			&i.PreviewTaskID,
+			&i.PreviewGeneration,
 		); err != nil {
 			return nil, err
 		}
@@ -365,59 +461,90 @@ func (q *Queries) TransitionOwnedComponentVersion(ctx context.Context, arg Trans
 	return id, err
 }
 
-const versionInputsOwnedByActor = `-- name: VersionInputsOwnedByActor :one
-SELECT (
-    EXISTS (
-        SELECT 1 FROM component_repo.artifacts artifact
-        WHERE artifact.id = $1
-          AND artifact.owner_id = $2
-          AND artifact.deleted_at IS NULL
-    )
-    AND (
-        $3::uuid IS NULL
-        OR EXISTS (
-            SELECT 1 FROM component_repo.artifacts artifact
-            WHERE artifact.id = $3
-              AND artifact.owner_id = $2
-              AND artifact.deleted_at IS NULL
-        )
-    )
-    AND EXISTS (
-        SELECT 1
-        FROM component_repo.scene_snapshots snapshot
-        JOIN component_repo.imports import_job ON import_job.id = snapshot.import_id
-        WHERE snapshot.id = $4
-          AND import_job.owner_id = $2
-    )
-    AND (
-        $5::uuid IS NULL
-        OR EXISTS (
-            SELECT 1 FROM component_repo.candidates candidate
-            WHERE candidate.id = $5
-              AND candidate.owner_id = $2
-              AND candidate.scene_snapshot_id = $4
-        )
-    )
-)::boolean AS owned
+const updateOwnedDraftComponentVersion = `-- name: UpdateOwnedDraftComponentVersion :one
+UPDATE component_repo.component_versions version
+SET version_label = CASE WHEN $1::boolean THEN $2::text ELSE version_label END,
+    revision = CASE WHEN $3::boolean THEN $4::integer ELSE revision END,
+    release_note = CASE WHEN $5::boolean THEN $6::text ELSE release_note END,
+    release_note_locale = CASE WHEN $5::boolean THEN $7::text ELSE release_note_locale END
+FROM component_repo.components component
+WHERE version.id = $8
+  AND version.component_id = component.id
+  AND component.owner_id = $9
+  AND component.content_kind = 'user'
+  AND component.deleted_at IS NULL
+  AND version.deleted_at IS NULL
+  AND version.status = 'draft'
+RETURNING version.id, version.component_id, version.component_candidate_id,
+          version.version_label, version.revision, version.status,
+          version.source_artifact_id, version.exchange_artifact_id,
+          version.scene_snapshot_id, version.parser_version,
+          version.part_library_version_id, version.validation_report_id,
+          version.interface_signature, version.structure_hash, version.geometry_hash,
+          version.preview_artifact_id, version.preview_status,
+          version.preview_generator_version, version.preview_failure_code,
+          version.preview_failure_params, version.release_note,
+          version.release_note_locale, version.metadata, version.created_by,
+          version.created_at, version.published_at, version.deleted_at,
+          version.deleted_by, version.preview_task_id, version.preview_generation
 `
 
-type VersionInputsOwnedByActorParams struct {
-	SourceArtifactID     pgtype.UUID
-	ActorID              pgtype.UUID
-	ExchangeArtifactID   pgtype.UUID
-	SceneSnapshotID      pgtype.UUID
-	ComponentCandidateID pgtype.UUID
+type UpdateOwnedDraftComponentVersionParams struct {
+	SetVersionLabel   bool
+	VersionLabel      string
+	SetRevision       bool
+	Revision          int32
+	SetReleaseNote    bool
+	ReleaseNote       *string
+	ReleaseNoteLocale *string
+	VersionID         pgtype.UUID
+	ActorID           pgtype.UUID
 }
 
-func (q *Queries) VersionInputsOwnedByActor(ctx context.Context, arg VersionInputsOwnedByActorParams) (bool, error) {
-	row := q.db.QueryRow(ctx, versionInputsOwnedByActor,
-		arg.SourceArtifactID,
+func (q *Queries) UpdateOwnedDraftComponentVersion(ctx context.Context, arg UpdateOwnedDraftComponentVersionParams) (ComponentRepoComponentVersion, error) {
+	row := q.db.QueryRow(ctx, updateOwnedDraftComponentVersion,
+		arg.SetVersionLabel,
+		arg.VersionLabel,
+		arg.SetRevision,
+		arg.Revision,
+		arg.SetReleaseNote,
+		arg.ReleaseNote,
+		arg.ReleaseNoteLocale,
+		arg.VersionID,
 		arg.ActorID,
-		arg.ExchangeArtifactID,
-		arg.SceneSnapshotID,
-		arg.ComponentCandidateID,
 	)
-	var owned bool
-	err := row.Scan(&owned)
-	return owned, err
+	var i ComponentRepoComponentVersion
+	err := row.Scan(
+		&i.ID,
+		&i.ComponentID,
+		&i.ComponentCandidateID,
+		&i.VersionLabel,
+		&i.Revision,
+		&i.Status,
+		&i.SourceArtifactID,
+		&i.ExchangeArtifactID,
+		&i.SceneSnapshotID,
+		&i.ParserVersion,
+		&i.PartLibraryVersionID,
+		&i.ValidationReportID,
+		&i.InterfaceSignature,
+		&i.StructureHash,
+		&i.GeometryHash,
+		&i.PreviewArtifactID,
+		&i.PreviewStatus,
+		&i.PreviewGeneratorVersion,
+		&i.PreviewFailureCode,
+		&i.PreviewFailureParams,
+		&i.ReleaseNote,
+		&i.ReleaseNoteLocale,
+		&i.Metadata,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.PublishedAt,
+		&i.DeletedAt,
+		&i.DeletedBy,
+		&i.PreviewTaskID,
+		&i.PreviewGeneration,
+	)
+	return i, err
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/component"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/config"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -29,15 +30,27 @@ import (
 var sha256Pattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
 type Service struct {
-	pool   *pgxpool.Pool
-	q      *db.Queries
-	store  storage.Store
-	config config.StorageConfig
-	now    func() time.Time
+	pool    *pgxpool.Pool
+	q       *db.Queries
+	store   storage.Store
+	config  config.StorageConfig
+	imports config.ImportConfig
+	now     func() time.Time
 }
 
 func NewService(pool *pgxpool.Pool, store storage.Store, cfg config.StorageConfig) *Service {
-	return &Service{pool: pool, q: db.New(pool), store: store, config: cfg, now: time.Now}
+	return &Service{
+		pool: pool, q: db.New(pool), store: store, config: cfg,
+		imports: config.ImportConfig{
+			ParserVersion: "component-repo-ldraw-parser-v1", SnapshotSchema: "component-repo-v1", MaxAttempts: 3,
+		},
+		now: time.Now,
+	}
+}
+
+func (s *Service) WithImportConfig(cfg config.ImportConfig) *Service {
+	s.imports = cfg
+	return s
 }
 
 func (s *Service) CreateUploadSession(ctx context.Context, actor pgtype.UUID, input CreateUploadSessionInput) (UploadSession, error) {
@@ -129,7 +142,7 @@ func (s *Service) CreateUploadSession(ctx context.Context, actor pgtype.UUID, in
 	})
 }
 
-func (s *Service) CompleteUploadSession(ctx context.Context, actor pgtype.UUID, sessionID string) (UploadCompletion, error) {
+func (s *Service) CompleteUploadSession(ctx context.Context, actor pgtype.UUID, accessToken, sessionID string) (UploadCompletion, error) {
 	id, err := parseUUID(sessionID, "sessionId")
 	if err != nil {
 		return UploadCompletion{}, err
@@ -158,7 +171,7 @@ func (s *Service) CompleteUploadSession(ctx context.Context, actor pgtype.UUID, 
 		if file.StorageProvider != s.store.Provider() || file.StorageBucket != s.store.Bucket() {
 			return UploadCompletion{}, storageError()
 		}
-		metadata, headErr := s.store.Head(ctx, file.StorageKey)
+		metadata, headErr := s.store.HeadForUser(ctx, file.StorageKey, accessToken)
 		if headErr != nil {
 			if errors.Is(headErr, storage.ErrNotFound) {
 				return UploadCompletion{}, s.failAndCompensate(ctx, actor, id, files)
@@ -189,6 +202,7 @@ func (s *Service) CompleteUploadSession(ctx context.Context, actor pgtype.UUID, 
 			return UploadCompletion{}, err
 		}
 		artifacts := make([]db.ComponentRepoArtifact, 0, len(lockedFiles))
+		verificationTasks := make([]db.ComponentRepoTask, 0, len(lockedFiles))
 		for _, file := range lockedFiles {
 			if file.ExpectedSha256 == nil {
 				return UploadCompletion{}, validationError("sha256")
@@ -212,15 +226,81 @@ func (s *Service) CompleteUploadSession(ctx context.Context, actor pgtype.UUID, 
 			}); err != nil {
 				return UploadCompletion{}, err
 			}
+			verificationPayload, _ := json.Marshal(map[string]string{"artifactId": uuidutil.String(file.ID)})
+			verificationTask, _, err := task.EnqueueWithQueries(ctx, q, task.EnqueueInput{
+				OwnerID: actor, TaskType: task.ArtifactVerifyType, Payload: verificationPayload,
+				Locale: locked.Locale, Timezone: locked.Timezone, CreatedBy: actor,
+				IdempotencyKey: "artifact:" + uuidutil.String(file.ID), MaxAttempts: 3,
+				AvailableAt: s.now().UTC(),
+			})
+			if err != nil {
+				return UploadCompletion{}, err
+			}
+			verificationTasks = append(verificationTasks, verificationTask)
 			artifacts = append(artifacts, artifactRow)
 		}
-		sessionMetadata, _ := json.Marshal(map[string]any{"verification": map[string]any{"status": "pending"}})
+		if len(artifacts) == 0 {
+			return UploadCompletion{}, validationError("files")
+		}
+		importID, err := uuidutil.New()
+		if err != nil {
+			return UploadCompletion{}, err
+		}
+		parsePayload, _ := json.Marshal(map[string]string{
+			"importId": uuidutil.String(importID), "parserVersion": s.imports.ParserVersion,
+			"snapshotSchema": s.imports.SnapshotSchema,
+		})
+		parseTask, _, err := task.EnqueueWithQueries(ctx, q, task.EnqueueInput{
+			OwnerID: actor, TaskType: task.ImportParseType, Payload: parsePayload,
+			Locale: locked.Locale, Timezone: locked.Timezone, CreatedBy: actor,
+			IdempotencyKey: "import:" + uuidutil.String(importID), MaxAttempts: s.imports.MaxAttempts,
+			AvailableAt: s.now().UTC(),
+		})
+		if err != nil {
+			return UploadCompletion{}, err
+		}
+		for _, prerequisite := range verificationTasks {
+			if err := q.CreateTaskDependency(ctx, db.CreateTaskDependencyParams{
+				TaskID: parseTask.ID, PrerequisiteTaskID: prerequisite.ID, OwnerID: actor,
+			}); err != nil {
+				return UploadCompletion{}, err
+			}
+		}
+		var exchangeID pgtype.UUID
+		if len(artifacts) > 1 {
+			exchangeID = artifacts[1].ID
+		}
+		partLibraryID, err := q.GetActivePartLibraryVersion(ctx)
+		if errors.Is(err, pgx.ErrNoRows) {
+			partLibraryID = pgtype.UUID{}
+		} else if err != nil {
+			return UploadCompletion{}, err
+		}
+		importMetadata, _ := json.Marshal(map[string]any{
+			"uploadMethod": "direct_storage", "snapshotSchema": s.imports.SnapshotSchema,
+		})
+		parserVersion := s.imports.ParserVersion
+		if _, err := q.CreateComponentImport(ctx, db.CreateComponentImportParams{
+			ID: importID, OwnerID: actor, SourceArtifactID: artifacts[0].ID,
+			ExchangeArtifactID: exchangeID, TargetComponentID: locked.TargetComponentID,
+			BaseVersionID: locked.BaseVersionID, ParserVersion: &parserVersion,
+			PartLibraryVersionID: partLibraryID, Locale: locked.Locale, Timezone: locked.Timezone,
+			Metadata: importMetadata, CreatedBy: actor, UploadSessionID: id, ParseTaskID: parseTask.ID,
+		}); err != nil {
+			return UploadCompletion{}, err
+		}
+		sessionMetadata, _ := json.Marshal(map[string]any{
+			"importId": uuidutil.String(importID), "taskId": uuidutil.String(parseTask.ID),
+			"verification": map[string]any{"status": "pending"},
+		})
 		if _, err := q.CompleteUploadSession(ctx, db.CompleteUploadSessionParams{
 			Metadata: sessionMetadata, SessionID: id, ActorID: actor,
 		}); err != nil {
 			return UploadCompletion{}, err
 		}
-		return completionFromRows(id, artifacts), nil
+		return UploadCompletion{
+			ImportID: uuidutil.String(importID), TaskID: uuidutil.String(parseTask.ID), Status: parseTask.Status,
+		}, nil
 	})
 }
 
@@ -286,7 +366,7 @@ func (s *Service) VerifyOwnedArtifact(ctx context.Context, actor pgtype.UUID, ar
 	return artifactFromDB(updated), err
 }
 
-func (s *Service) CreateDownload(ctx context.Context, actor pgtype.UUID, artifactID string) (Download, error) {
+func (s *Service) CreateDownload(ctx context.Context, actor pgtype.UUID, accessToken, artifactID string) (Download, error) {
 	id, err := parseUUID(artifactID, "artifactId")
 	if err != nil {
 		return Download{}, err
@@ -298,10 +378,10 @@ func (s *Service) CreateDownload(ctx context.Context, actor pgtype.UUID, artifac
 	if err != nil {
 		return Download{}, err
 	}
-	return s.signArtifact(ctx, row, "component_repo.artifact_not_found_failed", "artifactId", artifactID)
+	return s.signArtifact(ctx, accessToken, row, "component_repo.artifact_not_found_failed", "artifactId", artifactID)
 }
 
-func (s *Service) CreateVersionSourceDownload(ctx context.Context, actor pgtype.UUID, versionID string) (Download, error) {
+func (s *Service) CreateVersionSourceDownload(ctx context.Context, actor pgtype.UUID, accessToken, versionID string) (Download, error) {
 	id, err := parseUUID(versionID, "versionId")
 	if err != nil {
 		return Download{}, err
@@ -313,14 +393,14 @@ func (s *Service) CreateVersionSourceDownload(ctx context.Context, actor pgtype.
 	if err != nil {
 		return Download{}, err
 	}
-	return s.signArtifact(ctx, row, "component_repo.version_source_not_found_failed", "versionId", versionID)
+	return s.signArtifact(ctx, accessToken, row, "component_repo.version_source_not_found_failed", "versionId", versionID)
 }
 
-func (s *Service) signArtifact(ctx context.Context, row db.ComponentRepoArtifact, unavailableCode, parameter, value string) (Download, error) {
+func (s *Service) signArtifact(ctx context.Context, accessToken string, row db.ComponentRepoArtifact, unavailableCode, parameter, value string) (Download, error) {
 	if row.VerificationStatus != "verified" || row.StorageProvider != s.store.Provider() || row.StorageBucket != s.store.Bucket() {
 		return Download{}, conflict(unavailableCode, parameter, value)
 	}
-	url, err := s.store.SignDownload(ctx, row.StorageKey, s.config.SignedURLTTL)
+	url, err := s.store.SignDownloadForUser(ctx, row.StorageKey, s.config.SignedURLTTL, accessToken)
 	if err != nil {
 		return Download{}, storageError()
 	}
@@ -387,11 +467,11 @@ func (s *Service) prepareTarget(actor, sessionID pgtype.UUID, ordinal int32, rol
 	if err != nil {
 		return uploadTargetData{}, err
 	}
-	parts := []string{}
+	parts := []string{uuidutil.String(actor)}
 	if s.config.KeyPrefix != "" {
 		parts = append(parts, s.config.KeyPrefix)
 	}
-	parts = append(parts, "owners", uuidutil.String(actor), "uploads", uuidutil.String(sessionID), role, uuidutil.String(id)+extension)
+	parts = append(parts, "uploads", uuidutil.String(sessionID), role, uuidutil.String(id)+extension)
 	return uploadTargetData{id: id, ordinal: ordinal, artifactType: artifactType, filename: filename,
 		key: strings.Join(parts, "/"), sha256: strings.ToLower(spec.SHA256), size: spec.FileSize}, nil
 }
@@ -426,30 +506,19 @@ func (s *Service) completedResult(ctx context.Context, actor, sessionID pgtype.U
 }
 
 func completionFromQueries(ctx context.Context, q *db.Queries, actor, sessionID pgtype.UUID) (UploadCompletion, error) {
-	files, err := q.ListUploadSessionFiles(ctx, sessionID)
+	importJob, err := q.GetOwnedImportByUploadSession(ctx, db.GetOwnedImportByUploadSessionParams{
+		UploadSessionID: sessionID, ActorID: actor,
+	})
 	if err != nil {
 		return UploadCompletion{}, err
 	}
-	artifacts := make([]db.ComponentRepoArtifact, 0, len(files))
-	for _, file := range files {
-		if !file.ArtifactID.Valid {
-			continue
-		}
-		row, err := q.GetOwnedArtifact(ctx, db.GetOwnedArtifactParams{ArtifactID: file.ArtifactID, ActorID: actor})
-		if err != nil {
-			return UploadCompletion{}, err
-		}
-		artifacts = append(artifacts, row)
+	parseTask, err := q.GetOwnedTask(ctx, db.GetOwnedTaskParams{TaskID: importJob.ParseTaskID, ActorID: actor})
+	if err != nil {
+		return UploadCompletion{}, err
 	}
-	return completionFromRows(sessionID, artifacts), nil
-}
-
-func completionFromRows(sessionID pgtype.UUID, rows []db.ComponentRepoArtifact) UploadCompletion {
-	artifacts := make([]Artifact, 0, len(rows))
-	for _, row := range rows {
-		artifacts = append(artifacts, artifactFromDB(row))
-	}
-	return UploadCompletion{UploadSessionID: uuidutil.String(sessionID), Status: "completed", Artifacts: artifacts}
+	return UploadCompletion{
+		ImportID: uuidutil.String(importJob.ID), TaskID: uuidutil.String(parseTask.ID), Status: parseTask.Status,
+	}, nil
 }
 
 func sessionFromDB(row db.ComponentRepoUploadSession, files []db.ComponentRepoUploadSessionFile) UploadSession {

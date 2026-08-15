@@ -71,7 +71,6 @@ from src.component_repo.component_service import (
     first_component_preview,
     get_component,
     get_component_version,
-    library_item_preview,
     list_component_versions,
     list_components,
     publish_component_version,
@@ -1030,88 +1029,6 @@ def create_component_repo_router(config: dict) -> APIRouter:
         if preview is None:
             raise DomainError(
                 "component_repo.preview_empty",
-                http_status=404,
-            )
-        return preview_with_model(
-            request,
-            config,
-            preview,
-            current_user,
-            materialize=request.method == "POST",
-        )
-
-    @router.get(
-        config["routes"]["library_item_preview"],
-        response_model=ComponentPreviewResponse,
-        summary="Get a Component or Part preview by type and ID",
-        description=(
-            "Returns one explicit library resource with a cached meshopt-compressed GLB. "
-            "Component resources use their current or newest version snapshot; Part "
-            "resources use an identity transform. Use POST to materialize a missing cache."
-        ),
-        response_description="The requested Component assembly or standalone Part preview.",
-        responses={
-            400: {"description": "The item type or content locale is unsupported."},
-            404: {"description": "The requested Component or Part does not exist."},
-            409: {"description": "Required Part mesh geometry is unavailable."},
-        },
-    )
-    @router.post(
-        config["routes"]["library_item_preview"],
-        response_model=ComponentPreviewResponse,
-        summary="Materialize a Component or Part preview by type and ID",
-        description=(
-            "Idempotently creates the current user's GLB cache when missing, then "
-            "returns the same preview contract as GET."
-        ),
-    )
-    def get_library_item_preview(
-        request: Request,
-        item_type: str = Path(
-            ...,
-            description="Machine item type: component or part.",
-        ),
-        item_id: str = Path(
-            ...,
-            description="Component UUID or LDraw Part number such as 10247.dat.",
-        ),
-        contentLocale: str = Query(
-            ...,
-            description="BCP 47 locale for official item content; geometry is locale-neutral.",
-        ),
-        current_user: CurrentUser | None = Depends(optional_current_user),
-    ) -> dict:
-        try:
-            preview = library_item_preview(
-                request.app.state.db_engine,
-                config,
-                item_type,
-                item_id,
-                contentLocale,
-            )
-        except ValueError as error:
-            error_code = str(error)
-            if error_code == "component_repo.preview_type_unsupported":
-                raise DomainError(
-                    error_code,
-                    params={"itemType": item_type},
-                    http_status=400,
-                ) from error
-            if error_code == "request.locale_unsupported":
-                raise DomainError(
-                    error_code,
-                    params={"locale": contentLocale},
-                    http_status=400,
-                ) from error
-            raise DomainError(
-                "component_repo.preview_unavailable",
-                params={"itemType": item_type, "itemId": item_id},
-                http_status=409,
-            ) from error
-        if preview is None:
-            raise DomainError(
-                "component_repo.library_item_not_found",
-                params={"itemType": item_type, "itemId": item_id},
                 http_status=404,
             )
         return preview_with_model(

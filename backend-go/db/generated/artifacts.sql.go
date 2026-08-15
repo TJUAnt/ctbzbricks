@@ -16,7 +16,9 @@ UPDATE component_repo.upload_sessions
 SET status = 'completed', completed_at = now(), failure_code = NULL,
     failure_params = NULL, metadata = $1
 WHERE id = $2 AND owner_id = $3 AND status = 'pending'
-RETURNING id, owner_id, status, target_component_id, base_version_id, locale, timezone, failure_code, failure_params, metadata, created_by, created_at, expires_at, completed_at
+RETURNING id, owner_id, status, target_component_id, base_version_id,
+          locale, timezone, failure_code, failure_params, metadata, created_by,
+          created_at, expires_at, completed_at
 `
 
 type CompleteUploadSessionParams struct {
@@ -58,7 +60,10 @@ INSERT INTO component_repo.artifacts (
     $7, $8, $9, $10,
     true, 'pending', $11, $12
 )
-RETURNING id, owner_id, artifact_type, source_kind, original_filename, storage_provider, storage_bucket, storage_key, sha256, file_size, mime_type, immutable, verification_status, verified_at, uploaded_by, uploaded_at, metadata, deleted_at
+RETURNING id, owner_id, artifact_type, source_kind, original_filename,
+          storage_provider, storage_bucket, storage_key, sha256, file_size,
+          mime_type, immutable, verification_status, verified_at, uploaded_by,
+          uploaded_at, metadata, deleted_at, derived_from_artifact_id
 `
 
 type CreateSourceArtifactParams struct {
@@ -111,6 +116,7 @@ func (q *Queries) CreateSourceArtifact(ctx context.Context, arg CreateSourceArti
 		&i.UploadedAt,
 		&i.Metadata,
 		&i.DeletedAt,
+		&i.DerivedFromArtifactID,
 	)
 	return i, err
 }
@@ -124,7 +130,9 @@ INSERT INTO component_repo.upload_sessions (
     $4, $5, $6,
     $7, $8, $9
 )
-RETURNING id, owner_id, status, target_component_id, base_version_id, locale, timezone, failure_code, failure_params, metadata, created_by, created_at, expires_at, completed_at
+RETURNING id, owner_id, status, target_component_id, base_version_id,
+          locale, timezone, failure_code, failure_params, metadata, created_by,
+          created_at, expires_at, completed_at
 `
 
 type CreateUploadSessionParams struct {
@@ -181,7 +189,9 @@ INSERT INTO component_repo.upload_session_files (
     $7, $8, $9,
     $10
 )
-RETURNING id, upload_session_id, ordinal, artifact_type, original_filename, expected_size, expected_sha256, storage_provider, storage_bucket, storage_key, artifact_id, status, created_at, completed_at
+RETURNING id, upload_session_id, ordinal, artifact_type, original_filename,
+          expected_size, expected_sha256, storage_provider, storage_bucket,
+          storage_key, artifact_id, status, created_at, completed_at
 `
 
 type CreateUploadSessionFileParams struct {
@@ -281,7 +291,10 @@ func (q *Queries) FailUploadSessionFiles(ctx context.Context, sessionID pgtype.U
 }
 
 const getOwnedArtifact = `-- name: GetOwnedArtifact :one
-SELECT id, owner_id, artifact_type, source_kind, original_filename, storage_provider, storage_bucket, storage_key, sha256, file_size, mime_type, immutable, verification_status, verified_at, uploaded_by, uploaded_at, metadata, deleted_at
+SELECT id, owner_id, artifact_type, source_kind, original_filename,
+       storage_provider, storage_bucket, storage_key, sha256, file_size,
+       mime_type, immutable, verification_status, verified_at, uploaded_by,
+       uploaded_at, metadata, deleted_at, derived_from_artifact_id
 FROM component_repo.artifacts
 WHERE id = $1
   AND owner_id = $2
@@ -315,12 +328,15 @@ func (q *Queries) GetOwnedArtifact(ctx context.Context, arg GetOwnedArtifactPara
 		&i.UploadedAt,
 		&i.Metadata,
 		&i.DeletedAt,
+		&i.DerivedFromArtifactID,
 	)
 	return i, err
 }
 
 const getOwnedUploadSession = `-- name: GetOwnedUploadSession :one
-SELECT id, owner_id, status, target_component_id, base_version_id, locale, timezone, failure_code, failure_params, metadata, created_by, created_at, expires_at, completed_at
+SELECT id, owner_id, status, target_component_id, base_version_id,
+       locale, timezone, failure_code, failure_params, metadata, created_by,
+       created_at, expires_at, completed_at
 FROM component_repo.upload_sessions
 WHERE id = $1 AND owner_id = $2
 `
@@ -353,7 +369,11 @@ func (q *Queries) GetOwnedUploadSession(ctx context.Context, arg GetOwnedUploadS
 }
 
 const getVisibleVersionSourceArtifact = `-- name: GetVisibleVersionSourceArtifact :one
-SELECT a.id, a.owner_id, a.artifact_type, a.source_kind, a.original_filename, a.storage_provider, a.storage_bucket, a.storage_key, a.sha256, a.file_size, a.mime_type, a.immutable, a.verification_status, a.verified_at, a.uploaded_by, a.uploaded_at, a.metadata, a.deleted_at
+SELECT a.id, a.owner_id, a.artifact_type, a.source_kind, a.original_filename,
+       a.storage_provider, a.storage_bucket, a.storage_key, a.sha256, a.file_size,
+       a.mime_type, a.immutable, a.verification_status, a.verified_at,
+       a.uploaded_by, a.uploaded_at, a.metadata, a.deleted_at,
+       a.derived_from_artifact_id
 FROM component_repo.component_versions v
 JOIN component_repo.components c ON c.id = v.component_id
 JOIN component_repo.artifacts a ON a.id = v.source_artifact_id
@@ -394,12 +414,15 @@ func (q *Queries) GetVisibleVersionSourceArtifact(ctx context.Context, arg GetVi
 		&i.UploadedAt,
 		&i.Metadata,
 		&i.DeletedAt,
+		&i.DerivedFromArtifactID,
 	)
 	return i, err
 }
 
 const listExpiredUploadSessions = `-- name: ListExpiredUploadSessions :many
-SELECT id, owner_id, status, target_component_id, base_version_id, locale, timezone, failure_code, failure_params, metadata, created_by, created_at, expires_at, completed_at
+SELECT id, owner_id, status, target_component_id, base_version_id,
+       locale, timezone, failure_code, failure_params, metadata, created_by,
+       created_at, expires_at, completed_at
 FROM component_repo.upload_sessions
 WHERE status = 'pending' AND expires_at <= $1
 ORDER BY expires_at, id
@@ -447,7 +470,9 @@ func (q *Queries) ListExpiredUploadSessions(ctx context.Context, arg ListExpired
 }
 
 const listUploadSessionFiles = `-- name: ListUploadSessionFiles :many
-SELECT id, upload_session_id, ordinal, artifact_type, original_filename, expected_size, expected_sha256, storage_provider, storage_bucket, storage_key, artifact_id, status, created_at, completed_at
+SELECT id, upload_session_id, ordinal, artifact_type, original_filename,
+       expected_size, expected_sha256, storage_provider, storage_bucket,
+       storage_key, artifact_id, status, created_at, completed_at
 FROM component_repo.upload_session_files
 WHERE upload_session_id = $1
 ORDER BY ordinal, id
@@ -489,7 +514,9 @@ func (q *Queries) ListUploadSessionFiles(ctx context.Context, sessionID pgtype.U
 }
 
 const lockOwnedUploadSession = `-- name: LockOwnedUploadSession :one
-SELECT id, owner_id, status, target_component_id, base_version_id, locale, timezone, failure_code, failure_params, metadata, created_by, created_at, expires_at, completed_at
+SELECT id, owner_id, status, target_component_id, base_version_id,
+       locale, timezone, failure_code, failure_params, metadata, created_by,
+       created_at, expires_at, completed_at
 FROM component_repo.upload_sessions
 WHERE id = $1 AND owner_id = $2
 FOR UPDATE
@@ -526,7 +553,10 @@ const markArtifactFailed = `-- name: MarkArtifactFailed :one
 UPDATE component_repo.artifacts
 SET verification_status = 'failed', verified_at = NULL, metadata = $1
 WHERE id = $2 AND verification_status = 'pending' AND deleted_at IS NULL
-RETURNING id, owner_id, artifact_type, source_kind, original_filename, storage_provider, storage_bucket, storage_key, sha256, file_size, mime_type, immutable, verification_status, verified_at, uploaded_by, uploaded_at, metadata, deleted_at
+RETURNING id, owner_id, artifact_type, source_kind, original_filename,
+          storage_provider, storage_bucket, storage_key, sha256, file_size,
+          mime_type, immutable, verification_status, verified_at, uploaded_by,
+          uploaded_at, metadata, deleted_at, derived_from_artifact_id
 `
 
 type MarkArtifactFailedParams struct {
@@ -556,6 +586,7 @@ func (q *Queries) MarkArtifactFailed(ctx context.Context, arg MarkArtifactFailed
 		&i.UploadedAt,
 		&i.Metadata,
 		&i.DeletedAt,
+		&i.DerivedFromArtifactID,
 	)
 	return i, err
 }
@@ -564,7 +595,10 @@ const markArtifactVerified = `-- name: MarkArtifactVerified :one
 UPDATE component_repo.artifacts
 SET verification_status = 'verified', verified_at = now(), metadata = $1
 WHERE id = $2 AND verification_status = 'pending' AND deleted_at IS NULL
-RETURNING id, owner_id, artifact_type, source_kind, original_filename, storage_provider, storage_bucket, storage_key, sha256, file_size, mime_type, immutable, verification_status, verified_at, uploaded_by, uploaded_at, metadata, deleted_at
+RETURNING id, owner_id, artifact_type, source_kind, original_filename,
+          storage_provider, storage_bucket, storage_key, sha256, file_size,
+          mime_type, immutable, verification_status, verified_at, uploaded_by,
+          uploaded_at, metadata, deleted_at, derived_from_artifact_id
 `
 
 type MarkArtifactVerifiedParams struct {
@@ -594,6 +628,7 @@ func (q *Queries) MarkArtifactVerified(ctx context.Context, arg MarkArtifactVeri
 		&i.UploadedAt,
 		&i.Metadata,
 		&i.DeletedAt,
+		&i.DerivedFromArtifactID,
 	)
 	return i, err
 }
@@ -615,7 +650,9 @@ SET artifact_id = $1, status = 'uploaded', completed_at = now()
 WHERE id = $2
   AND upload_session_id = $3
   AND status = 'pending'
-RETURNING id, upload_session_id, ordinal, artifact_type, original_filename, expected_size, expected_sha256, storage_provider, storage_bucket, storage_key, artifact_id, status, created_at, completed_at
+RETURNING id, upload_session_id, ordinal, artifact_type, original_filename,
+          expected_size, expected_sha256, storage_provider, storage_bucket,
+          storage_key, artifact_id, status, created_at, completed_at
 `
 
 type MarkUploadSessionFileUploadedParams struct {
