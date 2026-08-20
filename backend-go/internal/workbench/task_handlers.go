@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"sort"
 	"strings"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
@@ -48,6 +50,7 @@ type sceneReference struct {
 	ReferenceName string         `json:"referenceName"`
 	ReferenceKind string         `json:"referenceKind"`
 	TargetModelID string         `json:"targetModelId"`
+	ColorCode     string         `json:"colorCode"`
 	Transform     sceneTransform `json:"transform"`
 }
 
@@ -250,10 +253,18 @@ type PreviewTaskHandler struct {
 	q         *db.Queries
 	store     storage.Store
 	keyPrefix string
+	files     map[string]string
 }
 
-func NewPreviewTaskHandler(pool *pgxpool.Pool, store storage.Store, keyPrefix string) *PreviewTaskHandler {
-	return &PreviewTaskHandler{pool: pool, q: db.New(pool), store: store, keyPrefix: strings.Trim(keyPrefix, "/")}
+func NewPreviewTaskHandler(pool *pgxpool.Pool, store storage.Store, keyPrefix, ldrawRoot string) (*PreviewTaskHandler, error) {
+	files, err := indexLDrawFiles(ldrawRoot)
+	if err != nil {
+		return nil, err
+	}
+	return &PreviewTaskHandler{
+		pool: pool, q: db.New(pool), store: store,
+		keyPrefix: strings.Trim(keyPrefix, "/"), files: files,
+	}, nil
 }
 
 type previewPayload struct {
@@ -282,7 +293,12 @@ func (h *PreviewTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTas
 	if input.PreviewGeneration != payload.Generation || input.PreviewGeneratorVersion == nil || *input.PreviewGeneratorVersion != payload.GeneratorVersion {
 		return task.Result{}, previewFailure(payload.VersionID, false)
 	}
-	if payload.InputHash != hashStrings(uuidutil.String(input.SceneSnapshotID), payload.GeneratorVersion) {
+	if payload.InputHash != componentPreviewInputHash(
+		uuidutil.String(input.VersionID), uuidutil.String(input.SceneSnapshotID),
+		input.StructureHash, input.GeometryHash,
+		uuidutil.String(input.PartLibraryVersionID), input.PartLibrarySourceHash,
+		payload.GeneratorVersion,
+	) {
 		return task.Result{}, previewFailure(payload.VersionID, false)
 	}
 	if input.PreviewStatus == "ready" && input.PreviewArtifactID.Valid {
@@ -291,7 +307,42 @@ func (h *PreviewTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTas
 	if err := h.q.MarkVersionPreviewRunning(ctx, db.MarkVersionPreviewRunningParams{VersionID: versionID, TaskID: claimed.ID}); err != nil {
 		return task.Result{}, err
 	}
-	glb, err := buildStructuralGLB(input.Document, payload.GeneratorVersion)
+	worldParts, err := collectComponentWorldParts(input.Document)
+	if err != nil {
+		return task.Result{}, previewFailure(payload.VersionID, false)
+	}
+	requiredPartRefs := uniqueComponentPartRefs(worldParts)
+	geometryRows, err := h.q.ListReadyPartGeometryForPreview(ctx, db.ListReadyPartGeometryForPreviewParams{
+		LdrawPartNums: requiredPartRefs, PartLibraryVersionID: input.PartLibraryVersionID,
+	})
+	if err != nil {
+		return task.Result{}, err
+	}
+	if len(geometryRows) != len(requiredPartRefs) {
+		return task.Result{}, previewFailure(payload.VersionID, false)
+	}
+	trianglesByPart := make(map[string][]ldrawTriangle, len(geometryRows))
+	for _, row := range geometryRows {
+		sourcePath := normalizeLDrawPath(row.SourceRelativePath)
+		localPath, ok := h.files[sourcePath]
+		if !ok {
+			return task.Result{}, previewFailure(payload.VersionID, false)
+		}
+		source, readErr := os.ReadFile(localPath)
+		if readErr != nil {
+			return task.Result{}, previewFailure(payload.VersionID, true)
+		}
+		sourceSum := sha256.Sum256(source)
+		if hex.EncodeToString(sourceSum[:]) != row.SourceFileHash {
+			return task.Result{}, previewFailure(payload.VersionID, false)
+		}
+		triangles, collectErr := collectLDrawTriangles(sourcePath, h.files)
+		if collectErr != nil || len(triangles) == 0 {
+			return task.Result{}, previewFailure(payload.VersionID, false)
+		}
+		trianglesByPart[row.LdrawPartNum] = triangles
+	}
+	glb, err := buildComponentGLB(worldParts, trianglesByPart, payload.GeneratorVersion)
 	if err != nil {
 		return task.Result{}, previewFailure(payload.VersionID, false)
 	}
@@ -305,7 +356,17 @@ func (h *PreviewTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTas
 	sum := sha256.Sum256(glb)
 	digest := hex.EncodeToString(sum[:])
 	_, err = txValue(ctx, h.pool, func(q *db.Queries) (struct{}, error) {
-		if _, upsertErr := q.UpsertPreviewArtifact(ctx, db.UpsertPreviewArtifactParams{ID: artifactID, OwnerID: claimed.OwnerID, OriginalFilename: payload.VersionID + ".glb", StorageProvider: h.store.Provider(), StorageBucket: h.store.Bucket(), StorageKey: key, Sha256: digest, FileSize: int64(len(glb)), UploadedBy: claimed.OwnerID, Metadata: mustJSON(map[string]any{"derivedBy": PreviewMaterializeType, "generatorVersion": payload.GeneratorVersion, "versionId": payload.VersionID}), DerivedFromArtifactID: input.SourceArtifactID}); upsertErr != nil {
+		if _, upsertErr := q.UpsertPreviewArtifact(ctx, db.UpsertPreviewArtifactParams{
+			ID: artifactID, OwnerID: claimed.OwnerID, OriginalFilename: payload.VersionID + ".glb",
+			StorageProvider: h.store.Provider(), StorageBucket: h.store.Bucket(), StorageKey: key,
+			Sha256: digest, FileSize: int64(len(glb)), UploadedBy: claimed.OwnerID,
+			Metadata: mustJSON(map[string]any{
+				"derivedBy": PreviewMaterializeType, "generatorVersion": payload.GeneratorVersion,
+				"versionId": payload.VersionID, "partLibraryVersionId": uuidutil.String(input.PartLibraryVersionID),
+				"partLibrarySourceHash": input.PartLibrarySourceHash,
+			}),
+			DerivedFromArtifactID: input.SourceArtifactID,
+		}); upsertErr != nil {
 			return struct{}{}, upsertErr
 		}
 		if readyErr := q.MarkVersionPreviewReady(ctx, db.MarkVersionPreviewReadyParams{ArtifactID: artifactID, GeneratorVersion: stringPointer(payload.GeneratorVersion), VersionID: versionID, TaskID: claimed.ID, PreviewGeneration: payload.Generation}); readyErr != nil {
@@ -319,25 +380,41 @@ func (h *PreviewTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTas
 	return task.Result{Payload: mustJSON(map[string]any{"versionId": payload.VersionID, "artifactId": artifactText, "generatorVersion": payload.GeneratorVersion}), ArtifactID: artifactID}, nil
 }
 
-func buildStructuralGLB(raw json.RawMessage, generator string) ([]byte, error) {
+type componentWorldPart struct {
+	instanceID string
+	partRef    string
+	colorCode  string
+	matrix     [16]float64
+}
+
+func collectComponentWorldParts(raw json.RawMessage) ([]componentWorldPart, error) {
 	var document sceneDocument
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return nil, err
 	}
 	models := map[string]sceneModel{}
 	for _, item := range document.Models {
+		if item.ModelID == "" {
+			return nil, errors.New("component preview model missing")
+		}
+		if _, exists := models[item.ModelID]; exists {
+			return nil, errors.New("component preview duplicate model")
+		}
 		models[item.ModelID] = item
 	}
-	nodes := []map[string]any{}
+	worldParts := []componentWorldPart{}
+	active := map[string]bool{}
 	var expand func(string, [16]float64, int) error
 	expand = func(modelID string, parent [16]float64, depth int) error {
-		if depth > 64 {
+		if depth > 64 || active[modelID] {
 			return errors.New("component preview recursion exceeded")
 		}
 		item, ok := models[modelID]
 		if !ok {
 			return errors.New("component preview model missing")
 		}
+		active[modelID] = true
+		defer delete(active, modelID)
 		for _, ref := range item.References {
 			local, err := glTFMatrix(ref.Transform)
 			if err != nil {
@@ -351,35 +428,128 @@ func buildStructuralGLB(raw json.RawMessage, generator string) ([]byte, error) {
 				continue
 			}
 			if ref.ReferenceKind == "part" {
-				values := make([]float64, 16)
-				copy(values, world[:])
-				nodes = append(nodes, map[string]any{"name": ref.ReferenceName, "mesh": 0, "matrix": values})
+				partRef := strings.ToLower(strings.TrimSpace(ref.ReferenceName))
+				if ref.InstanceID == "" || partRef == "" {
+					return errors.New("component preview part missing")
+				}
+				colorCode := strings.TrimSpace(ref.ColorCode)
+				if colorCode == "" {
+					colorCode = "16"
+				}
+				worldParts = append(worldParts, componentWorldPart{
+					instanceID: ref.InstanceID,
+					partRef:    partRef,
+					colorCode:  colorCode,
+					matrix:     world,
+				})
+				continue
 			}
+			return errors.New("component preview reference unsupported")
 		}
 		return nil
 	}
 	identity := [16]float64{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}
-	if document.RootModelID == "" || expand(document.RootModelID, identity, 0) != nil || len(nodes) == 0 {
+	if document.RootModelID == "" || expand(document.RootModelID, identity, 0) != nil || len(worldParts) == 0 {
 		return nil, errors.New("component preview unavailable")
 	}
-	positions := []float32{-10, -4, -10, 10, -4, -10, 10, 4, -10, -10, 4, -10, -10, -4, 10, 10, -4, 10, 10, 4, 10, -10, 4, 10}
-	indices := []uint16{0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 3, 2, 6, 3, 6, 7, 0, 3, 7, 0, 7, 4, 1, 5, 6, 1, 6, 2}
+	return worldParts, nil
+}
+
+func uniqueComponentPartRefs(parts []componentWorldPart) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, part := range parts {
+		if !seen[part.partRef] {
+			seen[part.partRef] = true
+			result = append(result, part.partRef)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]ldrawTriangle, generator string) ([]byte, error) {
 	bin := &bytes.Buffer{}
-	for _, value := range positions {
-		_ = binary.Write(bin, binary.LittleEndian, value)
+	bufferViews := []any{}
+	accessors := []any{}
+	meshes := []any{}
+	materials := []any{}
+	meshIndexByKey := map[string]int{}
+	materialIndexByColor := map[string]int{}
+	rootNode := map[string]any{"name": "Component Preview", "scale": []float64{0.05, -0.05, 0.05}, "children": []int{}}
+	nodes := []any{rootNode}
+	rootChildren := []int{}
+	for _, part := range parts {
+		meshKey := part.partRef + "\x00" + part.colorCode
+		meshIndex, exists := meshIndexByKey[meshKey]
+		if !exists {
+			triangles := trianglesByPart[part.partRef]
+			if len(triangles) == 0 {
+				return nil, errors.New("component preview part geometry missing")
+			}
+			materialIndex, exists := materialIndexByColor[part.colorCode]
+			if !exists {
+				materialIndex = len(materials)
+				materialIndexByColor[part.colorCode] = materialIndex
+				materials = append(materials, ldrawMaterial(part.colorCode))
+			}
+			positions, indices, minimum, maximum := ldrawTrianglesToBuffers(triangles)
+			positionOffset := bin.Len()
+			for _, value := range positions {
+				if err := binary.Write(bin, binary.LittleEndian, value); err != nil {
+					return nil, err
+				}
+			}
+			indexOffset := bin.Len()
+			for _, value := range indices {
+				if err := binary.Write(bin, binary.LittleEndian, value); err != nil {
+					return nil, err
+				}
+			}
+			positionView := len(bufferViews)
+			bufferViews = append(bufferViews, map[string]any{
+				"buffer": 0, "byteOffset": positionOffset, "byteLength": len(positions) * 4, "target": 34962,
+			})
+			indexView := len(bufferViews)
+			bufferViews = append(bufferViews, map[string]any{
+				"buffer": 0, "byteOffset": indexOffset, "byteLength": len(indices) * 4, "target": 34963,
+			})
+			positionAccessor := len(accessors)
+			accessors = append(accessors, map[string]any{
+				"bufferView": positionView, "componentType": 5126, "count": len(positions) / 3,
+				"type": "VEC3", "min": minimum, "max": maximum,
+			})
+			indexAccessor := len(accessors)
+			accessors = append(accessors, map[string]any{
+				"bufferView": indexView, "componentType": 5125, "count": len(indices), "type": "SCALAR",
+			})
+			meshIndex = len(meshes)
+			meshIndexByKey[meshKey] = meshIndex
+			meshes = append(meshes, map[string]any{"name": part.partRef, "primitives": []any{map[string]any{
+				"attributes": map[string]any{"POSITION": positionAccessor}, "indices": indexAccessor, "material": materialIndex,
+			}}})
+		}
+		matrix := make([]float64, 16)
+		copy(matrix, part.matrix[:])
+		nodeIndex := len(nodes)
+		nodes = append(nodes, map[string]any{"name": part.instanceID, "mesh": meshIndex, "matrix": matrix})
+		rootChildren = append(rootChildren, nodeIndex)
 	}
-	indexOffset := bin.Len()
-	for _, value := range indices {
-		_ = binary.Write(bin, binary.LittleEndian, value)
-	}
+	rootNode["children"] = rootChildren
 	for bin.Len()%4 != 0 {
 		bin.WriteByte(0)
 	}
-	sceneNodes := make([]int, len(nodes))
-	for index := range nodes {
-		sceneNodes[index] = index
+	gltf := map[string]any{
+		"asset":       map[string]any{"version": "2.0", "generator": generator},
+		"scene":       0,
+		"scenes":      []any{map[string]any{"nodes": []int{0}}},
+		"nodes":       nodes,
+		"meshes":      meshes,
+		"materials":   materials,
+		"buffers":     []any{map[string]any{"byteLength": bin.Len()}},
+		"bufferViews": bufferViews,
+		"accessors":   accessors,
 	}
-	gltf := map[string]any{"asset": map[string]any{"version": "2.0", "generator": generator}, "scene": 0, "scenes": []any{map[string]any{"nodes": sceneNodes}}, "nodes": nodes, "meshes": []any{map[string]any{"primitives": []any{map[string]any{"attributes": map[string]any{"POSITION": 0}, "indices": 1}}}}, "buffers": []any{map[string]any{"byteLength": bin.Len()}}, "bufferViews": []any{map[string]any{"buffer": 0, "byteOffset": 0, "byteLength": indexOffset, "target": 34962}, map[string]any{"buffer": 0, "byteOffset": indexOffset, "byteLength": len(indices) * 2, "target": 34963}}, "accessors": []any{map[string]any{"bufferView": 0, "componentType": 5126, "count": 8, "type": "VEC3", "min": []float64{-10, -4, -10}, "max": []float64{10, 4, 10}}, map[string]any{"bufferView": 1, "componentType": 5123, "count": len(indices), "type": "SCALAR"}}}
 	jsonChunk, err := json.Marshal(gltf)
 	if err != nil {
 		return nil, err
@@ -399,6 +569,57 @@ func buildStructuralGLB(raw json.RawMessage, generator string) ([]byte, error) {
 	output.WriteString("BIN\x00")
 	output.Write(bin.Bytes())
 	return output.Bytes(), nil
+}
+
+func ldrawTrianglesToBuffers(triangles []ldrawTriangle) ([]float32, []uint32, [3]float64, [3]float64) {
+	positions := make([]float32, 0, len(triangles)*9)
+	indices := make([]uint32, 0, len(triangles)*3)
+	minimum := [3]float64{math.Inf(1), math.Inf(1), math.Inf(1)}
+	maximum := [3]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1)}
+	for _, triangle := range triangles {
+		for _, vertex := range triangle {
+			indices = append(indices, uint32(len(indices)))
+			positions = append(positions, float32(vertex.x), float32(vertex.y), float32(vertex.z))
+			for axis, value := range []float64{vertex.x, vertex.y, vertex.z} {
+				minimum[axis] = math.Min(minimum[axis], value)
+				maximum[axis] = math.Max(maximum[axis], value)
+			}
+		}
+	}
+	return positions, indices, minimum, maximum
+}
+
+func ldrawMaterial(colorCode string) map[string]any {
+	r, g, b := ldrawColor(colorCode)
+	return map[string]any{"name": "LDraw " + colorCode, "doubleSided": true, "pbrMetallicRoughness": map[string]any{
+		"baseColorFactor": []float64{r, g, b, 1}, "metallicFactor": 0, "roughnessFactor": 0.72,
+	}}
+}
+
+func ldrawColor(colorCode string) (float64, float64, float64) {
+	colors := map[string][3]float64{
+		"0": {0.02, 0.02, 0.02}, "1": {0.00, 0.13, 0.55}, "2": {0.00, 0.45, 0.16},
+		"3": {0.00, 0.52, 0.58}, "4": {0.80, 0.00, 0.05}, "5": {0.75, 0.00, 0.45},
+		"6": {0.36, 0.20, 0.10}, "7": {0.60, 0.62, 0.64}, "8": {0.28, 0.30, 0.32},
+		"9": {0.35, 0.55, 0.85}, "10": {0.30, 0.70, 0.20}, "11": {0.00, 0.70, 0.78},
+		"12": {0.95, 0.36, 0.24}, "13": {1.00, 0.55, 0.75}, "14": {0.96, 0.82, 0.08},
+		"15": {0.95, 0.95, 0.92}, "16": {0.72, 0.74, 0.78},
+	}
+	if value, ok := colors[colorCode]; ok {
+		return value[0], value[1], value[2]
+	}
+	return 0.72, 0.74, 0.78
+}
+
+func componentPreviewInputHash(versionID, sceneSnapshotID, structureHash, geometryHash, partLibraryVersionID, partLibrarySourceHash, generator string) string {
+	return hashStrings(versionID, sceneSnapshotID, structureHash, geometryHash, partLibraryVersionID, partLibrarySourceHash, generator)
+}
+
+func previewGeneratorStale(status string, generator *string) bool {
+	if generator == nil {
+		return status == "ready" || status == "failed"
+	}
+	return *generator != PreviewGeneratorVersion
 }
 
 func glTFMatrix(value sceneTransform) ([16]float64, error) {

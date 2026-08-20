@@ -151,6 +151,33 @@ func TestG7WorkbenchContract(t *testing.T) {
 		t.Fatalf("localized BOM = %+v error=%v", parts, err)
 	}
 
+	ldrawRoot := t.TempDir()
+	partsRoot := filepath.Join(ldrawRoot, "parts")
+	if err := os.MkdirAll(partsRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	partSources := map[string][]byte{
+		"3001.dat": []byte("3 16 0 0 0 20 0 0 0 10 0\n"),
+		"3002.dat": []byte("3 16 0 0 0 30 0 0 0 10 0\n"),
+		"3003.dat": []byte("3 16 0 0 0 20 0 0 0 20 0\n"),
+	}
+	for partNumber, source := range partSources {
+		if err := os.WriteFile(filepath.Join(partsRoot, partNumber), source, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		partHash := sha256.Sum256(source)
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO component_repo.part_geometries (
+				part_library_version_id, ldraw_part_num, source_relative_path, source_file_hash,
+				bbox_min, bbox_max, logical_width_stud, logical_depth_stud, logical_height_plate,
+				vertex_count, face_count
+			) VALUES ($1, $2, $3, $4,
+				ARRAY[0,0,0]::float8[], ARRAY[30,20,0]::float8[], 2, 4, 3, 3, 1)`,
+			testUUID(t, fixturePartLibraryID), partNumber, "parts/"+partNumber, hex.EncodeToString(partHash[:])); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	initialPreview, err := service.GetPreview(ctx, owner, "owner-jwt", fixtureVersionID)
 	if err != nil || initialPreview.Status != "pending" || store.putCount != 0 {
 		t.Fatalf("GET generated preview: %+v error=%v writes=%d", initialPreview, err, store.putCount)
@@ -163,11 +190,15 @@ func TestG7WorkbenchContract(t *testing.T) {
 	if err != nil || !ok || uuidutil.String(claimedPreview.ID) != previewTask.TaskID {
 		t.Fatalf("claim preview: %+v %v", claimedPreview, err)
 	}
-	previewResult, err := NewPreviewTaskHandler(pool, store, "component-repo").Handle(ctx, claimedPreview)
+	previewHandler, err := NewPreviewTaskHandler(pool, store, "component-repo", ldrawRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewResult, err := previewHandler.Handle(ctx, claimedPreview)
 	if err != nil {
 		t.Fatalf("preview handler: %v", err)
 	}
-	recoveredResult, err := NewPreviewTaskHandler(pool, store, "component-repo").Handle(ctx, claimedPreview)
+	recoveredResult, err := previewHandler.Handle(ctx, claimedPreview)
 	if err != nil || uuidutil.String(recoveredResult.ArtifactID) != uuidutil.String(previewResult.ArtifactID) || store.putCount != 1 {
 		t.Fatalf("preview crash recovery duplicated output: result=%+v error=%v writes=%d", recoveredResult, err, store.putCount)
 	}
@@ -196,7 +227,7 @@ func TestG7WorkbenchContract(t *testing.T) {
 	if !ok {
 		t.Fatal("rebuild not claimable")
 	}
-	rebuildResult, err := NewPreviewTaskHandler(pool, store, "component-repo").Handle(ctx, claimedRebuild)
+	rebuildResult, err := previewHandler.Handle(ctx, claimedRebuild)
 	if err != nil {
 		t.Fatalf("rebuild handler: %v", err)
 	}
@@ -208,26 +239,6 @@ func TestG7WorkbenchContract(t *testing.T) {
 		t.Fatalf("idempotent rebuild = %+v writes=%d", rebuilt, store.putCount)
 	}
 
-	ldrawRoot := t.TempDir()
-	partsRoot := filepath.Join(ldrawRoot, "parts")
-	if err := os.MkdirAll(partsRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	partSource := []byte("3 16 0 0 0 20 0 0 0 10 0\n")
-	if err := os.WriteFile(filepath.Join(partsRoot, "3001.dat"), partSource, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	partHash := sha256.Sum256(partSource)
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO component_repo.part_geometries (
-			part_library_version_id, ldraw_part_num, source_relative_path, source_file_hash,
-			bbox_min, bbox_max, logical_width_stud, logical_depth_stud, logical_height_plate,
-			vertex_count, face_count
-		) VALUES ($1, '3001.dat', 'parts/3001.dat', $2,
-			ARRAY[0,0,0]::float8[], ARRAY[20,10,0]::float8[], 2, 4, 3, 3, 1)`,
-		testUUID(t, fixturePartLibraryID), hex.EncodeToString(partHash[:])); err != nil {
-		t.Fatal(err)
-	}
 	activeLibrary, err := service.GetActivePartLibraryVersion(ctx)
 	if err != nil || activeLibrary.ID != fixturePartLibraryID {
 		t.Fatalf("active Part library = %+v error=%v", activeLibrary, err)

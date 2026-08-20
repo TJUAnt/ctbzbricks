@@ -313,23 +313,37 @@ type ComponentRepoPartConnectorDefinition struct {
 	CreatedAt               pgtype.Timestamptz
 }
 
-type ComponentRepoPartGeometry struct {
+type ComponentRepoPartExternalID struct {
 	PartLibraryVersionID pgtype.UUID
 	LdrawPartNum         string
-	SourceRelativePath   string
-	SourceFileHash       string
-	BboxMin              []float64
-	BboxMax              []float64
-	LogicalWidthStud     float64
-	LogicalDepthStud     float64
-	LogicalHeightPlate   float64
-	VertexCount          int32
-	FaceCount            int32
-	GeometryStatus       string
-	GeometryErrorCode    *string
-	GeometryErrorParams  []byte
+	IDSystem             string
+	ExternalID           string
+	RelationType         string
+	Confidence           pgtype.Numeric
+	Source               string
+	Metadata             []byte
 	CreatedAt            pgtype.Timestamptz
 	UpdatedAt            pgtype.Timestamptz
+}
+
+type ComponentRepoPartGeometry struct {
+	PartLibraryVersionID        pgtype.UUID
+	LdrawPartNum                string
+	SourceRelativePath          string
+	SourceFileHash              string
+	BboxMin                     []float64
+	BboxMax                     []float64
+	LogicalWidthStud            *float64
+	LogicalDepthStud            *float64
+	LogicalHeightPlate          *float64
+	VertexCount                 int32
+	FaceCount                   int32
+	GeometryStatus              string
+	GeometryErrorCode           *string
+	GeometryErrorParams         []byte
+	CreatedAt                   pgtype.Timestamptz
+	UpdatedAt                   pgtype.Timestamptz
+	LogicalSizeDerivationStatus string
 }
 
 type ComponentRepoPartLibraryVersion struct {

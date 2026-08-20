@@ -209,6 +209,16 @@ LEFT JOIN LATERAL (
 ) translation ON c.content_kind = 'official'
 WHERE c.deleted_at IS NULL
   AND (c.owner_id = $2 OR c.status = 'active')
+  AND EXISTS (
+      SELECT 1
+      FROM component_repo.component_versions version
+      WHERE version.component_id = c.id
+        AND version.deleted_at IS NULL
+        AND (
+            c.owner_id = $2
+            OR (c.status = 'active' AND version.status <> 'draft')
+        )
+  )
   AND ($3::text = '' OR c.status = $3)
   AND ($4::text = '' OR c.category = $4)
   AND (

@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check generate sqlc-vet test test-postgres vet check run-api run-worker migrate-help
+.PHONY: fmt fmt-check generate sqlc-vet test test-postgres vet check run-api run-worker migrate-help studio-manifest studio-import
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './db/generated/*')
@@ -31,3 +31,12 @@ run-worker:
 
 migrate-help:
 	go run ./cmd/migrate --help
+
+studio-manifest:
+	@test -n "$(STUDIO_ROOT)" || (echo "STUDIO_ROOT is required"; exit 1)
+	@test -n "$(OUT_DIR)" || (echo "OUT_DIR is required"; exit 1)
+	go run ./cmd/studio-manifest --studio-root "$(STUDIO_ROOT)" --out-dir "$(OUT_DIR)" $(if $(LEGACY_PARTS_FILE),--legacy-parts-file "$(LEGACY_PARTS_FILE)")
+
+studio-import:
+	@test -n "$(MANIFEST)" || (echo "MANIFEST is required"; exit 1)
+	go run ./cmd/studio-import --manifest "$(MANIFEST)" --status "$(or $(STATUS),building)" $(if $(LDRAW_ROOT),--ldraw-root "$(LDRAW_ROOT)") $(if $(DATABASE_URL),--database-url "$(DATABASE_URL)") $(if $(CREATED_BY),--created-by "$(CREATED_BY)") $(if $(LIBRARY_ID),--library-id "$(LIBRARY_ID)") $(if $(DRY_RUN),--dry-run) $(if $(LIMIT),--limit "$(LIMIT)")

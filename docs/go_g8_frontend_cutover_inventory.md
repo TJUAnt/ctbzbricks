@@ -1,10 +1,11 @@
 # G8 Component Repo 前端切换清单
 
-> 状态：G8.1 inventory completed；G8.2/G8.3 Part preview code cutover completed；运行数据交接待执行  
-> 日期：2026-08-14  
+> 状态：G8.1 inventory completed；G8.2/G8.3 Part preview code cutover completed；legacy-based 运行数据交接已执行；Studio-based Part Library roadmap recorded
+> 日期：2026-08-15
 > 目标：前端直接切换到 Gin `/api/v1`，随后删除旧 FastAPI Component Repo 公共路由  
 > 原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)  
 > 路线：[go_component_migration_plan.md](./go_component_migration_plan.md)
+> Studio Part Library 路线图：[go_part_library_studio_roadmap.md](./go_part_library_studio_roadmap.md)
 
 ## 1. 盘点结论
 
@@ -20,8 +21,10 @@ Go API 缺口，再重写单一前端 adapter；不增加兼容代理、旧 DTO 
 Import/Task/Candidate、关系审核、connector/interface、发布校验、Component 元数据与发布、预览、
 BOM、源文件下载、draft 删除、分组库查询/管理、Draft Version 元数据和 ValidationReport 读取。
 2026-08-14 已删除旧 Part/Library preview 路由。Part viewer 使用冻结的
-`partLibraryVersionId + ldrawPartNum`，同一个业务动作不会同时请求两套后端。真实开发环境仍需先应用
-Goose v8 并执行显式 Part 数据交接，代码切换不等同于环境已可运行。
+`partLibraryVersionId + ldrawPartNum`，同一个业务动作不会同时请求两套后端。2026-08-15
+真实开发库已执行 Goose v8/v9、legacy Part 数据交接和 legacy Rebrickable external ID
+交接；但该数据仍是 legacy-based 过渡基线。后续 Part Library 基准改为 Studio LDraw
+snapshot，详见 [Studio Part Library 基准路线图](./go_part_library_studio_roadmap.md)。
 
 ## 2. 当前使用面
 
@@ -80,12 +83,14 @@ Goose v8 并执行显式 Part 数据交接，代码切换不等同于环境已�
    - 增加 owner/version/candidate 约束的报告 GET；返回既有结构化 checks/issues。
    - Task result 只携带 report ID 和 passed，不把报告全文复制进 Task。
 
-6. **Part 预览所有权（代码已完成，环境交接待执行）**
+6. **Part 预览所有权（代码与 legacy-based 环境交接已完成，Studio-based 基准待实现）**
    - Goose v8 的 `part_geometries` 和 `part_previews` 分别拥有几何元数据与可重建 Artifact 状态。
    - API 以 `partLibraryVersionId + ldrawPartNum` 定位不可变 Part；GET 只读，POST 创建
      `component.part_preview.materialize` durable task。
    - Go Worker 从只读、版本固定的 `LDRAW_ROOT` 递归生成真实 LDraw GLB；HTTP handler 不做文件解析或网格计算。
    - Component preview 继续使用 Version-addressed GLB，不恢复 first/library/candidate preview 同义路由。
+   - 后续 active Part Library 应改由 Studio manifest 创建，而不是继续以 legacy
+     `public.ldraw_parts` 清单作为 membership 基准。
 
 7. **必要列表字段**
    - Component 投影补齐 UI 仍需的 logical size；owner 判断使用 `ownerId`，不依赖旧 `createdBy="auth:..."` 字符串。

@@ -115,6 +115,16 @@ WHERE group_record.id = $2
   AND group_record.owner_id = $3
   AND c.deleted_at IS NULL
   AND (c.owner_id = $3 OR c.status = 'active')
+  AND EXISTS (
+      SELECT 1
+      FROM component_repo.component_versions version
+      WHERE version.component_id = c.id
+        AND version.deleted_at IS NULL
+        AND (
+            c.owner_id = $3
+            OR (c.status = 'active' AND version.status <> 'draft')
+        )
+  )
   AND (
       $4::text = ''
       OR CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END ILIKE '%' || $4 || '%'
@@ -375,6 +385,16 @@ WHERE g.owner_id = $2
   AND g.id = $3
   AND c.deleted_at IS NULL
   AND (c.owner_id = $2 OR c.status = 'active')
+  AND EXISTS (
+      SELECT 1
+      FROM component_repo.component_versions version
+      WHERE version.component_id = c.id
+        AND version.deleted_at IS NULL
+        AND (
+            c.owner_id = $2
+            OR (c.status = 'active' AND version.status <> 'draft')
+        )
+  )
 ORDER BY COALESCE(membership.added_at, c.created_at) DESC, c.id
 LIMIT $5 OFFSET $4
 `
@@ -510,6 +530,16 @@ SELECT id, owner_id, parent_group_id, group_type, name, normalized_name,
            FROM component_repo.components component
            WHERE component.deleted_at IS NULL
              AND (component.owner_id = $1 OR component.status = 'active')
+             AND EXISTS (
+                 SELECT 1
+                 FROM component_repo.component_versions version
+                 WHERE version.component_id = component.id
+                   AND version.deleted_at IS NULL
+                   AND (
+                       component.owner_id = $1
+                       OR (component.status = 'active' AND version.status <> 'draft')
+                   )
+             )
        ) ELSE (
            SELECT count(*)::bigint
            FROM component_repo.component_group_memberships membership
@@ -518,6 +548,16 @@ SELECT id, owner_id, parent_group_id, group_type, name, normalized_name,
              AND membership.group_id = group_tree.id
              AND component.deleted_at IS NULL
              AND (component.owner_id = $1 OR component.status = 'active')
+             AND EXISTS (
+                 SELECT 1
+                 FROM component_repo.component_versions version
+                 WHERE version.component_id = component.id
+                   AND version.deleted_at IS NULL
+                   AND (
+                       component.owner_id = $1
+                       OR (component.status = 'active' AND version.status <> 'draft')
+                   )
+             )
        ) END)::bigint AS direct_component_count
 FROM group_tree
 ORDER BY depth, parent_group_id NULLS FIRST, sort_order, id
@@ -673,6 +713,16 @@ WHERE group_record.id = $3
   AND group_record.owner_id = $2
   AND c.deleted_at IS NULL
   AND (c.owner_id = $2 OR c.status = 'active')
+  AND EXISTS (
+      SELECT 1
+      FROM component_repo.component_versions version
+      WHERE version.component_id = c.id
+        AND version.deleted_at IS NULL
+        AND (
+            c.owner_id = $2
+            OR (c.status = 'active' AND version.status <> 'draft')
+        )
+  )
   AND (cardinality($4::text[]) = 0 OR c.status = ANY($4::text[]))
   AND (
       $5::text = ''

@@ -1,6 +1,6 @@
 {
   "schema": "brickbuilder-frontend-i18n-catalog-v1",
-  "catalogVersion": "frontend-2026.08.14.1",
+  "catalogVersion": "frontend-2026.08.17.2",
   "sourceLocale": "en-US",
   "defaultLocale": "zh-CN",
   "productLocales": ["zh-CN", "en-US"],
@@ -17,5 +17,5 @@
   },
   "rtlLanguageCodes": ["ar", "fa", "he", "ur"],
   "telemetryEndpoint": "/api/i18n/events",
-  "contentHash": "a1a6a2b1e255eb291ebba2639d2ca4fa43b1683e69080c0aeb943d605b3f9285"
+  "contentHash": "cee3d241508a132e7b2b7ba05672df74f59ce8489263ac438a723dc1b1fe0d62"
 }

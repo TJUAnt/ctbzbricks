@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   addComponentToGroup,
+  deleteComponent,
   listComponentGroups,
+  purgeComponent,
   searchComponentGroupComponents,
   deleteComponentVersion,
   detectRelations,
@@ -175,6 +177,7 @@ describe('Component Repo Go API adapter', () => {
       taskId: null, geometry: {
         bbox: { minX: -20, minY: -12, minZ: -10, maxX: 20, maxY: 12, maxZ: 10 },
         logicalWidthStud: 2, logicalDepthStud: 4, logicalHeightPlate: 3,
+        logicalSizeDerivationStatus: 'legacy_imported',
         vertexCount: 8, faceCount: 12,
       }, failure: null,
     };
@@ -230,6 +233,45 @@ describe('Component Repo Go API adapter', () => {
       '/api/v1/component-versions/version-1',
       expect.objectContaining({ method: 'DELETE' }),
     );
+  });
+
+  it('deletes the whole component through the component resource endpoint', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(deleteComponent('component-1')).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v1/components/component-1',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('starts and waits for component purge through the purge task endpoint', async () => {
+    vi.stubGlobal('window', { location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' } });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ taskId: 'purge-task-1', status: 'queued' }, 202))
+      .mockResolvedValueOnce(jsonResponse({
+        ...taskSucceeded,
+        id: 'purge-task-1',
+        taskType: 'component.purge',
+        status: 'succeeded',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(purgeComponent('component-1', 'My Component')).resolves.toMatchObject({
+      id: 'purge-task-1',
+      status: 'succeeded',
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/components/component-1/purge',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"confirmComponentName":"My Component"'),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/tasks/purge-task-1', undefined);
   });
 
   it('combines Go connector and interface resources without fabricating legacy analysis metadata', async () => {

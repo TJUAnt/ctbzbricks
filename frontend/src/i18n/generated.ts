@@ -222,6 +222,10 @@ export type TranslationKey =
   | "componentRepo:creatingASecureUploadChannel"
   | "componentRepo:currentVersionCannotDelete"
   | "componentRepo:customGroupDescription"
+  | "componentRepo:deleteComponent"
+  | "componentRepo:deleteComponentArtifactsRetained"
+  | "componentRepo:deleteComponentDescription"
+  | "componentRepo:deleteComponentTitle"
   | "componentRepo:deleteGroup"
   | "componentRepo:deleteGroupConfirmation"
   | "componentRepo:deleteOnlyVersionDescription"
@@ -229,6 +233,7 @@ export type TranslationKey =
   | "componentRepo:deleteVersion"
   | "componentRepo:deleteVersionDescription"
   | "componentRepo:deleteVersionTitle"
+  | "componentRepo:deletingComponent"
   | "componentRepo:deletingVersion"
   | "componentRepo:details"
   | "componentRepo:detect"
@@ -315,6 +320,14 @@ export type TranslationKey =
   | "componentRepo:publish"
   | "componentRepo:published"
   | "componentRepo:publishedVersion"
+  | "componentRepo:purgeComponent"
+  | "componentRepo:purgeComponentConfirmLabel"
+  | "componentRepo:purgeComponentConfirmPlaceholder"
+  | "componentRepo:purgeComponentDescription"
+  | "componentRepo:purgeComponentNameMismatch"
+  | "componentRepo:purgeComponentStorageWarning"
+  | "componentRepo:purgeComponentTitle"
+  | "componentRepo:purgingComponent"
   | "componentRepo:quantity"
   | "componentRepo:readyToUpload"
   | "componentRepo:recognitionVersion"
@@ -403,6 +416,9 @@ export type TranslationKey =
   | "errors:component_repo.component_not_found"
   | "errors:component_repo.component_not_managed"
   | "errors:component_repo.component_processing_failed"
+  | "errors:component_repo.component_purge_confirmation_failed"
+  | "errors:component_repo.component_purge_failed"
+  | "errors:component_repo.component_purge_storage_failed"
   | "errors:component_repo.confirmed_relation_cannot_be_rejected"
   | "errors:component_repo.connector_capacity_exceeded"
   | "errors:component_repo.current_version_delete_forbidden"
@@ -939,6 +955,9 @@ export type TranslationParamsByKey = {
   "app:dashboard.i18nHealth.latestHour": {
     "hour": InterpolationValue;
   };
+  "componentRepo:deleteComponentDescription": {
+    "componentName": InterpolationValue;
+  };
   "componentRepo:deleteGroupConfirmation": {
     "name": InterpolationValue;
   };
@@ -955,6 +974,9 @@ export type TranslationParamsByKey = {
   "componentRepo:pageOf": {
     "page": InterpolationValue;
     "totalPages": InterpolationValue;
+  };
+  "componentRepo:purgeComponentDescription": {
+    "componentName": InterpolationValue;
   };
   "componentRepo:selectConnectionPoint": {
     "id": InterpolationValue;

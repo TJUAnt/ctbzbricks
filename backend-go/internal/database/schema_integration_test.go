@@ -31,7 +31,7 @@ func TestComponentRepoBaselineContract(t *testing.T) {
 		"component_versions", "components", "connector_analyses",
 		"connector_analysis_blockers", "connector_analysis_items",
 		"connector_analysis_path_nodes", "connector_analysis_relations", "imports",
-		"interfaces", "outbox_events", "part_connector_definitions",
+		"interfaces", "outbox_events", "part_connector_definitions", "part_external_ids",
 		"part_geometries", "part_library_versions", "part_previews", "part_translations", "parts", "relation_candidates", "scene_snapshots", "task_dependencies", "task_events",
 		"task_jobs", "tasks", "upload_session_files", "upload_sessions", "validation_reports",
 	}

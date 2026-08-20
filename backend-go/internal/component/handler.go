@@ -30,6 +30,7 @@ func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/components/:componentId", h.getComponent)
 	group.PATCH("/components/:componentId", h.updateComponent)
 	group.DELETE("/components/:componentId", h.deleteComponent)
+	group.POST("/components/:componentId/purge", h.purgeComponent)
 
 	group.GET("/components/:componentId/versions", h.listVersions)
 	group.POST("/components/:componentId/versions", h.createVersion)
@@ -105,6 +106,17 @@ func (h *Handler) updateComponent(c *gin.Context) {
 func (h *Handler) deleteComponent(c *gin.Context) {
 	actor, _ := actorFromContext(c)
 	h.writeNoContent(c, h.service.DeleteComponent(c.Request.Context(), actor.ID, c.Param("componentId")))
+}
+
+func (h *Handler) purgeComponent(c *gin.Context) {
+	actor, _ := actorFromContext(c)
+	var input PurgeComponentInput
+	if err := decodeJSON(c, &input); err != nil {
+		h.writeError(c, validationError("body"))
+		return
+	}
+	result, err := h.service.PurgeComponent(c.Request.Context(), actor.ID, c.Param("componentId"), input)
+	h.writeJSON(c, http.StatusAccepted, result, err)
 }
 
 func (h *Handler) listVersions(c *gin.Context) {

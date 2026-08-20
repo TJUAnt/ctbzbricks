@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -209,7 +210,7 @@ func (t ldrawTransform) combine(child ldrawTransform) ldrawTransform {
 func indexLDrawFiles(root string) (map[string]string, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
-		return nil, errors.New("LDRAW_ROOT is required for Part preview materialization")
+		return nil, errors.New("LDRAW_ROOT is required for preview materialization")
 	}
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
@@ -241,6 +242,16 @@ func indexLDrawFiles(root string) (map[string]string, error) {
 				if _, exists := result[key]; !exists {
 					result[key] = path
 				}
+				if !samePath(base, root) {
+					full, fullErr := filepath.Rel(root, path)
+					if fullErr != nil {
+						return fullErr
+					}
+					fullKey := normalizeLDrawPath(full)
+					if _, exists := result[fullKey]; !exists {
+						result[fullKey] = path
+					}
+				}
 				if strings.HasPrefix(key, "p/48/") {
 					aliases["p/"+strings.TrimPrefix(key, "p/48/")] = path
 				}
@@ -263,7 +274,14 @@ func indexLDrawFiles(root string) (map[string]string, error) {
 }
 
 func normalizeLDrawPath(value string) string {
-	return strings.ToLower(strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(value)), "./"))
+	value = strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	return strings.ToLower(strings.TrimPrefix(filepath.ToSlash(value), "./"))
+}
+
+func samePath(left, right string) bool {
+	leftAbs, leftErr := filepath.Abs(left)
+	rightAbs, rightErr := filepath.Abs(right)
+	return leftErr == nil && rightErr == nil && leftAbs == rightAbs
 }
 
 func collectLDrawTriangles(relativePath string, files map[string]string) ([]ldrawTriangle, error) {
@@ -288,12 +306,24 @@ func collectLDrawFile(relativePath string, files map[string]string, transform ld
 		return nil, err
 	}
 	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	reader := bufio.NewReader(file)
 	triangles := []ldrawTriangle{}
-	for scanner.Scan() {
-		fields := strings.Fields(strings.TrimSpace(scanner.Text()))
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && len(line) == 0 {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return nil, readErr
+		}
+		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) == 0 || fields[0] == "0" || fields[0] == "2" || fields[0] == "5" {
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					break
+				}
+				return nil, readErr
+			}
 			continue
 		}
 		switch fields[0] {
@@ -327,10 +357,10 @@ func collectLDrawFile(relativePath string, files map[string]string, transform ld
 			if fields[0] == "4" {
 				expected = 14
 			}
-			if len(fields) != expected {
+			if len(fields) < expected {
 				return nil, errors.New("invalid LDraw face")
 			}
-			values, parseErr := parseLDrawFloats(fields[2:])
+			values, parseErr := parseLDrawFloats(fields[2:expected])
 			if parseErr != nil {
 				return nil, parseErr
 			}
@@ -343,9 +373,12 @@ func collectLDrawFile(relativePath string, files map[string]string, transform ld
 				triangles = append(triangles, ldrawTriangle{vertices[0], vertices[2], vertices[3]})
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return nil, readErr
+		}
 	}
 	return triangles, nil
 }
@@ -372,6 +405,9 @@ func resolveLDrawReference(fromPath, reference string, files map[string]string) 
 	} else if strings.Contains(reference, "/") {
 		if strings.HasPrefix(reference, "s/") {
 			candidates = append(candidates, "parts/"+reference)
+		}
+		if strings.HasPrefix(reference, "48/") || strings.HasPrefix(reference, "8/") {
+			candidates = append(candidates, "p/"+strings.TrimPrefix(strings.TrimPrefix(reference, "48/"), "8/"))
 		}
 		if section == "p" {
 			candidates = append(candidates, "p/"+reference)

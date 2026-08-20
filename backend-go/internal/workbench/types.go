@@ -12,7 +12,7 @@ const (
 	PartPreviewMaterializeType  = "component.part_preview.materialize"
 	RelationDetectionVersion    = "component-relation-detector-v1"
 	ValidatorVersion            = "component-repo-validator-v1"
-	PreviewGeneratorVersion     = "component-preview-structural-glb-v1"
+	PreviewGeneratorVersion     = "component-preview-studio-ldraw-glb-v1"
 	PartPreviewGeneratorVersion = "part-preview-ldraw-glb-v1"
 )
 
@@ -44,12 +44,13 @@ type PartPreview struct {
 }
 
 type PartGeometry struct {
-	BBox               PartBoundingBox `json:"bbox"`
-	LogicalWidthStud   float64         `json:"logicalWidthStud"`
-	LogicalDepthStud   float64         `json:"logicalDepthStud"`
-	LogicalHeightPlate float64         `json:"logicalHeightPlate"`
-	VertexCount        int32           `json:"vertexCount"`
-	FaceCount          int32           `json:"faceCount"`
+	BBox                        PartBoundingBox `json:"bbox"`
+	LogicalWidthStud            *float64        `json:"logicalWidthStud"`
+	LogicalDepthStud            *float64        `json:"logicalDepthStud"`
+	LogicalHeightPlate          *float64        `json:"logicalHeightPlate"`
+	LogicalSizeDerivationStatus string          `json:"logicalSizeDerivationStatus"`
+	VertexCount                 int32           `json:"vertexCount"`
+	FaceCount                   int32           `json:"faceCount"`
 }
 
 type PartBoundingBox struct {

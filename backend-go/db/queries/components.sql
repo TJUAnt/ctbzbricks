@@ -69,6 +69,16 @@ LEFT JOIN LATERAL (
 ) translation ON c.content_kind = 'official'
 WHERE c.deleted_at IS NULL
   AND (c.owner_id = sqlc.arg(actor_id) OR c.status = 'active')
+  AND EXISTS (
+      SELECT 1
+      FROM component_repo.component_versions version
+      WHERE version.component_id = c.id
+        AND version.deleted_at IS NULL
+        AND (
+            c.owner_id = sqlc.arg(actor_id)
+            OR (c.status = 'active' AND version.status <> 'draft')
+        )
+  )
   AND (sqlc.arg(status_filter)::text = '' OR c.status = sqlc.arg(status_filter))
   AND (sqlc.arg(category_filter)::text = '' OR c.category = sqlc.arg(category_filter))
   AND (

@@ -169,9 +169,10 @@ export type PartPreviewResponse = {
   taskId: string | null;
   geometry: {
     bbox: { minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number };
-    logicalWidthStud: number;
-    logicalDepthStud: number;
-    logicalHeightPlate: number;
+    logicalWidthStud: number | null;
+    logicalDepthStud: number | null;
+    logicalHeightPlate: number | null;
+    logicalSizeDerivationStatus: 'legacy_imported' | 'derived_exact' | 'derived_approximate' | 'not_applicable' | 'failed';
     vertexCount: number;
     faceCount: number;
   } | null;
@@ -646,6 +647,28 @@ export async function updateComponent(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+}
+
+export async function deleteComponent(componentId: string): Promise<void> {
+  await requestVoid(pathFor('componentDetail', { componentId }), { method: 'DELETE' });
+}
+
+export async function purgeComponent(
+  componentId: string,
+  confirmComponentName: string,
+): Promise<ComponentTaskResponse> {
+  const context = currentTaskContext();
+  const accepted = await requestJson<AcceptedTask>(pathFor('componentPurge', { componentId }), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      confirmComponentName,
+      deleteStorageObjects: true,
+      locale: context.locale,
+      timezone: context.timezone,
+    }),
+  });
+  return waitForTask(accepted.taskId);
 }
 
 export async function getComponentVersion(versionId: string): Promise<ComponentVersionResponse> {

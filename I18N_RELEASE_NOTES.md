@@ -2,6 +2,24 @@
 
 资源版本只追加、不复用。前端资源内容由 SHA-256 锁定，服务端导出版本写入每个正式产物。
 
+## frontend-2026.08.17.2
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：947
+- 内容哈希：`cee3d241508a132e7b2b7ba05672df74f59ce8489263ac438a723dc1b1fe0d62`
+- Component Repo 详情页新增永久删除组件的二次确认文案，并新增 purge 任务与确认失败/Storage 删除失败错误文案。
+- 组件名称仍按用户内容原样输入与比较；Component ID、task type、Storage key、删除计数和任务状态保持机器数据，不翻译。
+
+## frontend-2026.08.17.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：936
+- 内容哈希：`93479d839918ae1af7dc517030383981ad8ff5a7d50312f60f2a338761fae8b9`
+- Component Repo 详情页新增整体删除组件的确认文案，区分 Component 删除与单个 Version 删除。
+- Component ID、Version ID、删除审计字段、Storage key 和用户组件名称保持机器数据或用户内容；确认弹窗仅本地化系统说明。
+
 ## frontend-2026.08.14.1
 
 - 生产语言：`zh-CN`、`en-US`

@@ -31,6 +31,7 @@ Execution 使用 `task_job_id + execution_number` 唯一编号，并用 `retry_o
 | `component.validate` | Go Worker |
 | `component.preview.materialize` | Go Worker |
 | `component.part_preview.materialize` | Go Worker |
+| `component.purge` | Go Worker |
 | `component.import.parse` | Python Worker |
 | `component.relations.detect` | Python Worker |
 
@@ -116,17 +117,24 @@ JSON key 都是机器字段，不翻译。任务创建时冻结规范化 locale 
   "taskType": "component.preview.materialize",
   "payload": {
     "versionId": "uuid",
-    "generatorVersion": "component-preview-structural-glb-v1",
+    "generatorVersion": "component-preview-studio-ldraw-glb-v1",
     "generation": 0,
     "inputHash": "sha256"
   },
   "result": {
     "versionId": "uuid",
     "artifactId": "uuid",
-    "generatorVersion": "component-preview-structural-glb-v1"
+    "generatorVersion": "component-preview-studio-ldraw-glb-v1"
   }
 }
 ```
+
+`component.preview.materialize.inputHash` 绑定冻结输入：
+`componentVersionId + sceneSnapshotId + structureHash + geometryHash +
+partLibraryVersionId + partLibrarySourceHash + generatorVersion`。Worker 只能使用
+该 ComponentVersion 固定的 Part Library，不读取“当前 active library”来重解释旧版本。
+生成器从 Studio/LDraw source path 读取真实 part mesh，组合为 ComponentVersion 整体 GLB；
+没有 structural cube fallback。
 
 `component.part_preview.materialize`：
 
@@ -148,6 +156,44 @@ JSON key 都是机器字段，不翻译。任务创建时冻结规范化 locale 
   }
 }
 ```
+
+`component.purge`：
+
+```json
+{
+  "taskType": "component.purge",
+  "payload": {
+    "componentId": "uuid",
+    "deleteStorageObjects": true,
+    "storageObjects": [
+      {
+        "provider": "supabase",
+        "bucket": "component-artifacts",
+        "key": "owner/component-repo/source/file.io"
+      }
+    ],
+    "purgeVersion": "component-purge-v1"
+  },
+  "result": {
+    "componentId": "uuid",
+    "componentRedacted": true,
+    "versionsRedacted": 1,
+    "artifactsTombstoned": 2,
+    "relatedTasksRedacted": 3,
+    "storageObjectsDeleted": 3
+  }
+}
+```
+
+`component.purge` 是显式危险操作，只能由 owner 对自己的 `content_kind=user`
+Component 通过 API 排队。API 创建任务前必须使用组件名称做二次确认，并冻结当前可删除
+Storage object 清单，便于失败后重试。Worker 先幂等删除同 provider/bucket 的对象存储文件，
+再调用 Goose-owned `component_repo.redact_owned_component(...)` 将 Component Repo
+领域数据写为 tombstone/redacted 状态。在线 purge 不物理删除 `imports`、`scene_snapshots`、
+`candidates`、`validation_reports`、`upload_sessions`、`artifacts` 或 historical task 行；
+后续物理回收必须走独立 maintenance/GC。成功后 Worker 必须 redacts 当前 purge task payload，
+只保留 `componentId + purged=true`，避免长期保存 Storage key。其他 owner 的 import/upload
+如果引用该 Component 或其 Version，保持其独立数据不被删除。
 
 关系 Worker 在一个事务中写入 relation candidates、connector analysis、external
 interfaces、Candidate/Draft 签名以及任务终态。SceneSnapshot 不在其写集合中。关系确认

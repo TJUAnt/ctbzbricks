@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/artifact"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/component"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/config"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/database"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/logging"
@@ -65,13 +66,20 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	defer logger.Info("Worker stopped", "workerId", workerID)
 	var maintenance worker.UploadMaintenance
 	handlers := map[string]task.Handler{}
+	objectStore := storage.New(cfg.Storage)
+	handlers[task.ComponentPurgeType] = component.NewPurgeTaskHandler(pool, objectStore)
 	if cfg.Storage.Provider != "disabled" {
-		artifactService := artifact.NewService(pool, storage.New(cfg.Storage), cfg.Storage).WithImportConfig(cfg.Import)
+		artifactService := artifact.NewService(pool, objectStore, cfg.Storage).WithImportConfig(cfg.Import)
 		maintenance = artifactService
 		handlers[task.ArtifactVerifyType] = artifact.NewVerificationTaskHandler(artifactService)
-		objectStore := storage.New(cfg.Storage)
-		handlers[task.PreviewMaterializeType] = workbench.NewPreviewTaskHandler(pool, objectStore, cfg.Storage.KeyPrefix)
 		if cfg.PartPreview.LDrawRoot != "" {
+			previewHandler, handlerErr := workbench.NewPreviewTaskHandler(
+				pool, objectStore, cfg.Storage.KeyPrefix, cfg.PartPreview.LDrawRoot,
+			)
+			if handlerErr != nil {
+				return handlerErr
+			}
+			handlers[task.PreviewMaterializeType] = previewHandler
 			partPreviewHandler, handlerErr := workbench.NewPartPreviewTaskHandler(
 				pool, objectStore, cfg.Storage.KeyPrefix, cfg.PartPreview.LDrawRoot,
 			)
@@ -80,7 +88,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 			}
 			handlers[task.PartPreviewMaterializeType] = partPreviewHandler
 		} else {
-			logger.Warn("Part preview capability disabled", "errorCode", "worker.part_preview_disabled")
+			logger.Warn("Component and Part preview capabilities disabled", "errorCode", "worker.preview_disabled")
 		}
 	}
 	handlers[task.ComponentValidateType] = workbench.NewValidationTaskHandler(pool)

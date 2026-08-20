@@ -1,8 +1,9 @@
 # Go 后端迁移进度
 
-> 最后更新：2026-08-14（G8 当前职责与跟进基线）
+> 最后更新：2026-08-20（G8 Component 永久删除改为 redaction/tombstone）
 > 状态依据：[go_component_migration_plan.md](./go_component_migration_plan.md)
 > 跟进指南：[go_migration_followup_guide.md](./go_migration_followup_guide.md)
+> Studio Part Library 路线图：[go_part_library_studio_roadmap.md](./go_part_library_studio_roadmap.md)
 > 更新规则：只记录已经由代码、测试或文档证据证明的事实。
 
 ## 1. 当前摘要
@@ -17,9 +18,9 @@
 | G5 持久化任务系统 | Completed | Logical Job / Execution / Attempt、PostgreSQL 状态机、attempt-fenced lease/retry/cancel、event/outbox 与 Go/Python Worker 已验收 |
 | G6 导入、解析与候选流程 | Completed | upload -> verify dependency -> Python parse -> Snapshot/Candidate/Draft 异步闭环已验收 |
 | G7 关系、接口、校验和预览 | Completed | Python 关系检测、Go 关系审核/真实发布校验/预览与 PostgreSQL 不变量已验收 |
-| G8 前端切换与 Python API 删除 | In progress | 主要 Component Repo 前端能力已切换；Part/Library preview、真实浏览器/RLS 验收与 Python 公共 router 删除尚未完成 |
+| G8 前端切换与 Python API 删除 | In progress | 主要 Component Repo 前端能力已切换；Part preview Go 代码与真实库 v8/v9 数据交接已执行；Studio-based Part Library 基准 roadmap 已固化；真实浏览器/RLS 验收与 Python 公共 router 删除尚未完成 |
 
-当前 Go 后端已经覆盖 Component Repo 的目录、版本、分组、订阅、Artifact、上传、持久任务、导入、Candidate、关系审核、connector/interface、验证、发布门禁、BOM 和预览闭环。Python 的目标保留边界只有 `component.import.parse` 与 `component.relations.detect` 两个独立算法 Worker。G8 已切换 Component Repo 的主要前端调用；Part/Library preview 仍访问旧 FastAPI，真实 Supabase 非 owner Preview RLS、Worker 启动与队列消费、浏览器双语言网络流量和旧 Python router 删除仍需完成。代码阶段状态与当前环境运行状态必须分开判断，详见[跟进指南](./go_migration_followup_guide.md)。
+当前 Go 后端已经覆盖 Component Repo 的目录、版本、分组、订阅、Artifact、上传、持久任务、导入、Candidate、关系审核、connector/interface、验证、发布门禁、BOM 和预览闭环。Python 的目标保留边界只有 `component.import.parse` 与 `component.relations.detect` 两个独立算法 Worker。G8 已切换 Component Repo 的主要前端调用；Part preview 已切到 `/api/v1` 并在真实开发库执行 v8/v9 schema 与 legacy Rebrickable external ID 交接。后续 Part Library 数据基准改为 Studio LDraw snapshot，详见 [Studio Part Library 基准路线图](./go_part_library_studio_roadmap.md)。真实 Supabase 非 owner Preview RLS、浏览器双语言网络流量和旧 Python router 删除仍需完成。代码阶段状态与当前环境运行状态必须分开判断，详见[跟进指南](./go_migration_followup_guide.md)。
 
 ## 2. 已确认决策
 
@@ -836,7 +837,531 @@ i18n 影响包括官方 Part 名称选择、API error 和 Task failure；为三�
 
 未修改真实 Supabase 开发库、`storage` policy 或终态历史任务。真实环境仍是 Goose v7；启用新 Part preview 前必须明确数据库目标并执行 Goose v8、Part 数据交接、行数/hash 核对，同时为 Go Worker 配置与该版本一致的只读 `LDRAW_ROOT`。G8 仍未完成，剩余工作是实际数据/Artifact smoke、浏览器双语言与网络验收，以及删除其余 Python Component Repo 公共 API。
 
-## 25. 更新模板
+## 25. G8 Part preview 真实开发库迁移执行记录
+
+日期：2026-08-15
+阶段：G8
+状态：In progress
+
+完成内容：
+
+- [x] 在已确认的 Supabase `postgres` 开发数据库执行 Goose `00008_part_preview.sql`，真实库从 version 7 升级到 version 8。
+- [x] 真实库新增 Goose-owned `component_repo.part_geometries` 与 `component_repo.part_previews`；未修改 provider-owned `storage` schema 或 policy。
+- [x] 执行显式 Part 数据交接脚本 `backend-go/db/data_migrations/20260814_public_parts_to_go.sql`；legacy `public.ldraw_parts`、`public.ldraw_part_geometry` 与 `public.part_translations` 未删除、未重命名。
+- [x] 交接脚本成功提交事务，将 24,214 个 legacy Part 行写入/更新到 `component_repo.parts`；`component_repo.part_previews` 通过 trigger 与既有数据覆盖到 25,062 行。
+- [x] 确认 legacy `public.part_translations` 为 0 行，因此本次 `component_repo.part_translations` 插入 0 行符合源数据状态。
+- [x] 用户提供的 `LDCadShadowLibrary` 经检查为 LDCad shadow/connectivity 信息库，不是 Part preview 所需几何源；改用本机 Studio LDraw 根目录 `/Applications/Studio 2.0/ldraw` 生成 source hash staging。
+- [x] 新增并执行显式补交接脚本 `backend-go/db/data_migrations/20260815_part_geometries_from_hash_stage.sql`，使用 `/tmp/ctbzbricks_studio_part_hashes.tsv` 写入可核对的 `source_relative_path + sha256`。
+
+验证结果：
+
+```text
+Goose migrate up                    PASS（00008 applied；database version=8）
+Part data handoff transaction        PASS（BEGIN -> COMMIT）
+component_repo.parts                 25,062 rows
+component_repo.part_previews         25,062 rows
+component_repo.part_geometries       4,062 rows
+component_repo.part_geometries ready 4,062 rows
+public.ldraw_parts                   24,214 rows retained
+public.ldraw_part_geometry           24,214 rows retained
+public.part_translations             0 rows retained
+legacy Part file_hash audit          24,214 empty file_hash values
+legacy geometry numeric readiness    8,228 rows with required parsed geometry fields
+LDCadShadowLibrary coverage          3,302 matching legacy paths（rejected as geometry source）
+Studio LDraw coverage                11,785 matching legacy paths
+geometry hash staging                11,785 rows
+geometry completion transaction      PASS（COPY 11,785；INSERT/UPDATE 4,062；COMMIT）
+sample geometry                      3001.dat -> parts/3001.dat -> 414 faces
+```
+
+i18n 影响为官方 Part 内容数据交接：机器 ID、Part 编号、hash、状态和 JSON key 保持不翻译；legacy 翻译源表为空，未新增或修改资源 key、catalog version、content hash 或 release notes。
+
+遗留：真实库现在已有可用 Part preview geometry 子集，但仍有 21,000 个 `component_repo.parts` 缺少 `part_geometries`。原因是 legacy `public.ldraw_parts.file_hash` 全为空，且 Studio LDraw 与 legacy Part 清单只部分重叠；本次只对本地源文件存在、legacy geometry 字段完整且已解析的 Part 写入 `ready` geometry。下一步应为 Go Worker 配置只读 `LDRAW_ROOT=/Applications/Studio 2.0/ldraw`，用 `3001.dat` 等已具备 geometry 的样例执行真实 Part preview Artifact smoke；若要求覆盖更多 Part，需要补充与 legacy Part 清单一致的完整 LDraw library 或重新导入 Part/geometry 元数据。
+
+## 26. G8 Part identity 与 logical size schema 决策固化
+
+日期：2026-08-15
+阶段：G8
+状态：In progress
+
+完成内容：
+
+- [x] 固化 Part 核心身份继续使用 `(partLibraryVersionId, ldrawPartNum)`，不改为 LEGO design ID、BrickLink ID 或 Rebrickable ID；外部平台编号作为版本化多值映射。
+- [x] 新增 Goose v9 `part_external_ids`，用于挂载 `ldraw/rebrickable/bricklink/lego_design/lego_element`，并记录 `relation_type/confidence/source/metadata`。
+- [x] `part_geometries.logical_width_stud/logical_depth_stud/logical_height_plate` 从必填字段改为可空派生字段，新增稳定机器字段 `logical_size_derivation_status`。
+- [x] Part preview API 的 `geometry` 仍代表可预览几何；logical size 可为 `null`，前端尺寸展示对 `null` 使用既有空值样式，不阻塞 GLB preview。
+- [x] 新增显式、幂等 `20260815_part_external_ids_from_legacy.sql`，用于在 Goose v9 后把 legacy `public.xref_part_numbers` 交接到 `component_repo.part_external_ids`；脚本不删除或修改 legacy 表。
+
+验证结果：
+
+```text
+go tool sqlc generate                         PASS
+backend-go db/migrations tests                PASS
+backend-go internal/workbench tests           PASS
+frontend componentRepoApi focused test        PASS（含 i18n:check）
+legacy external ID audit                      PASS（xref rows=25,384；distinct LDraw=5,504；当前仅 Rebrickable 有值）
+Studio LDraw/connectivity audit               PASS（top-level distinct parts=24,426；connectivity files=8,998；collider files=10,386）
+```
+
+i18n 影响为 API 结构字段和机器状态扩展：`logicalSizeDerivationStatus`、`id_system`、`relation_type`、外部编号和 JSON key 都是机器值，不翻译；未新增 UI 文案、错误码、资源 key、catalog version、content hash 或 release notes。
+
+真实开发库执行记录：2026-08-15 已在已确认的 Supabase `postgres` 开发数据库执行 Goose v9，`00009_part_geometry_derivation_and_external_ids.sql` 成功提交。核对结果为 `goose_version=9`、`component_repo.part_external_ids` 已存在且当前 0 行、`component_repo.part_geometries.logical_size_derivation_status` 已存在，既有 4,062 条 geometry 均为 `legacy_imported`。未修改 provider-owned `storage` schema 或 policy，未删除或修改 legacy `public` 表。
+
+真实开发库 external ID 交接记录：2026-08-15 已执行 `20260815_part_external_ids_from_legacy.sql`。第一次运行因 legacy `xref_part_numbers` 存在重复映射而在事务内失败并回滚；脚本补充 `DISTINCT ON` 去重后重跑成功提交。结果为 `component_repo.part_external_ids=50,444`，其中 `ldraw=25,062`、`rebrickable=25,382`，非 LDraw external ID 覆盖 5,504 个 Part；`relation_type` 分布为 `exact=5,504`、`unknown=19,878`。真实源表当前没有 BrickLink、LEGO design 或 LEGO element 值，因此对应系统仍为 0。未修改 provider-owned `storage` schema 或 policy，未删除或修改 legacy `public` 表。
+
+遗留：v9 schema 与 legacy Rebrickable external ID 已交接到真实库；BrickLink/LEGO design/element 仍需后续引入可信映射源。下一步应补一次真实 Part preview smoke，并决定是否接入 Studio `connectivity/*.conn` 与 `collider/*.col`。
+
+## 27. G8 Studio Part Library 基准路线图记录
+
+日期：2026-08-15
+阶段：G8
+状态：Roadmap recorded
+
+完成内容：
+
+- [x] 新增 [Studio Part Library 基准路线图与数据来源依据](./go_part_library_studio_roadmap.md)，固化后续 Part Library 不再以 legacy `public.ldraw_parts` 为权威基准，而以 Studio LDraw snapshot 为几何和 Part membership 基准。
+- [x] 明确 legacy 数据边界：legacy 只作为名称、类别、历史 Rebrickable cross-reference 和迁移审计/enrichment 来源，不再决定新 Part Library 包含哪些 Part。
+- [x] 明确外部编号策略：核心 Part ID 继续为 `(partLibraryVersionId, ldrawPartNum)`；BrickLink、LEGO design、LEGO element、Rebrickable 全部通过 `component_repo.part_external_ids` 多值挂载。
+- [x] 明确 LEGO element 是颜色/材质相关编号，不能作为无颜色 Part 的唯一身份；后续导入必须携带 color metadata 或迁入颜色感知表。
+- [x] 明确 logical size 从 Studio 几何派生，并使用 `logical_size_derivation_status` 记录 `derived_exact/derived_approximate/not_applicable/failed` 等状态；Part preview 不因 logical size 缺失失败。
+- [x] 明确 Studio connectivity/collider 作为后续独立阶段，不混入本次 Part preview 几何基准。
+
+数据来源依据：
+
+```text
+Studio root                                  /Applications/Studio 2.0
+Studio LDraw all .dat/.ldr/.mpd              50,578 files
+Studio distinct top-level parts              24,426
+Studio top-level bl_ prefixed files           1,966
+ldraw_new.xml                                Transformation=5,272 / Assembly=97 / Decoration=43 / Material=210
+designid.xml                                 Part=443 / alternate design IDs=533
+elementInfoList.json                         rows=84,317 / elementId=75,608 / blItemNo=45,006 / blColorCode=170
+Studio connectivity                           8,998 .conn files
+Studio collider                               10,397 .col files
+example LEGO element cardinality              blItemNo=3001 -> 79 elementId rows
+```
+
+i18n 影响为无：本次仅新增开发 roadmap 与数据来源文档；没有修改 UI、API/任务 code、locale/timezone、官方 Part 翻译、资源 key、catalog version、content hash 或 release notes。机器编号、外部编号、状态和 JSON key 继续不翻译。
+
+遗留：roadmap 尚未实现。下一步是 S1 Studio manifest 生成器：只读扫描 Studio snapshot，生成可审计 manifest、hash 和 coverage report；不写真实数据库。
+
+## 28. G8 legacy public 容量清理执行记录
+
+日期：2026-08-15
+阶段：G8
+状态：Completed
+
+完成内容：
+
+- [x] 在用户确认后，对已确认的 Supabase `postgres` 开发数据库执行显式清理脚本 `backend-go/db/data_migrations/20260815_cleanup_legacy_capacity.sql`。
+- [x] 只清理两张 legacy/public 辅助导入表：`public.rb_inventory_parts` 与 `public.ldraw_file_references`。
+- [x] 未修改 `component_repo` schema、`storage` schema、Supabase Storage policy、Goose migration 版本或其它 `public` 表。
+- [x] 清理前执行外键 preflight：两张表只作为 child table 引用 `rb_inventories/rb_parts/ldraw_files`，没有其它表引用它们，因此执行无 `CASCADE` 的 `TRUNCATE`，不会连带删除父表或 Go schema 数据。
+
+验证结果：
+
+```text
+target database                         postgres
+target user                             postgres
+public.rb_inventory_parts before        1,497,951 rows / 128 MB
+public.ldraw_file_references before       431,347 rows / 122 MB
+TRUNCATE transaction                    PASS（BEGIN -> TRUNCATE -> COMMIT）
+ANALYZE truncated tables                PASS
+public.rb_inventory_parts after         0 rows / 16 kB
+public.ldraw_file_references after      0 rows / 48 kB
+database total before cleanup           466 MB
+database total after cleanup            216 MB
+released database space                 about 250 MB
+remaining public legacy candidates      about 116 MB
+largest remaining public legacy table   fitting_candidate_profiles / 16 MB
+```
+
+i18n 影响为无：本次是开发数据库 legacy 辅助数据清理；没有修改 UI、API/任务 code、locale/timezone、官方 Part 翻译、资源 key、catalog version、content hash 或 release notes。机器编号、外部编号、状态和 JSON key 继续不翻译。
+
+遗留：`public` 中仍保留约 116 MB legacy 候选数据，用于迁移审计和后续 Studio-based Part Library 对照；如容量继续紧张，可再单独评估 `fitting_candidate_profiles`、legacy connector/shadow 和 Rebrickable catalog 表。不得在未确认前清理 `component_repo`、`storage` 或旧 Component Repo 公共 API 仍可能读取的小体积 `public.component_*` 表。
+
+## 29. G8 Studio Part Library S1 manifest 生成器执行记录
+
+日期：2026-08-15
+阶段：G8 / Studio Part Library S1
+状态：Completed for manifest generation
+
+完成内容：
+
+- [x] 新增 Go 离线工具 `backend-go/cmd/studio-manifest` 与内部包 `backend-go/internal/partlibrary`，用于只读扫描 BrickLink Studio install root 或其 `ldraw` 子目录。
+- [x] 新增 `backend-go Makefile` 入口 `studio-manifest`，通过 `STUDIO_ROOT`、`OUT_DIR` 和可选 `LEGACY_PARTS_FILE` 运行。
+- [x] 工具输出 `studio_manifest.json` 与 `studio_manifest_summary.json`；每个源文件记录 `relative_path/file_kind/sha256/size_bytes`，并生成 canonical top-level Part 清单。
+- [x] 工具识别 top-level official/unofficial `.dat` Part、LEGO `.dat`、subpart、primitive、texture、connectivity `.conn`、collider `.col` 和其它 LDraw 文件。
+- [x] 固化 duplicate policy：同一 `ldrawPartNum` 同时存在 official 与 unofficial 来源时，canonical membership 优先 official，所有 candidate path 仍保留在 manifest 中。
+- [x] 工具解析 Studio metadata source 摘要：`ldraw_new.xml`、`designid.xml`、`elementInfoList.json`。
+- [x] coverage report 能力已实现：只有显式提供 `LEGACY_PARTS_FILE` 时才生成 `studio_manifest_coverage.json`；工具本身不连接或读取真实数据库。
+- [x] 单元测试覆盖 manifest 分类、duplicate policy、metadata parsing、coverage 计算和 manifest hash 确定性。
+
+真实 Studio snapshot 运行结果：
+
+```text
+command install root              go run ./cmd/studio-manifest --studio-root '/Applications/Studio 2.0' --out-dir /tmp/ctbzbricks_studio_manifest_s1_v3
+command ldraw root                go run ./cmd/studio-manifest --studio-root '/Applications/Studio 2.0/ldraw' --out-dir /tmp/ctbzbricks_studio_manifest_s1_v3_repeat
+manifest path                     /tmp/ctbzbricks_studio_manifest_s1_v3/studio_manifest.json
+summary path                      /tmp/ctbzbricks_studio_manifest_s1_v3/studio_manifest_summary.json
+manifest sha256                   524fee2594a1e8023965e718b398b90d7bc8a10adc864dbbd84e64c77bc50e2b
+hash determinism                  PASS（install root 与 ldraw root 输入 hash 一致）
+total manifest files              69,968
+LDraw .dat/.ldr/.mpd files         50,578
+canonical top-level parts          24,426
+official top-level .dat            12,132
+unofficial top-level .dat          23,216
+duplicate part nums                10,922
+top-level bl_ prefixed files        1,966
+connectivity .conn files            8,998
+collider .col files                10,386
+textures                               6
+ldraw_new.xml transformations       5,272
+ldraw_new.xml assemblies               97
+ldraw_new.xml decorations              43
+designid.xml parts                    443
+designid.xml alternate IDs            533
+elementInfoList.json rows          84,317
+distinct elementId                 75,608
+distinct blItemNo                  45,005
+distinct blColorCode                  170
+blItemNo=3001 element rows             79
+```
+
+验证结果：
+
+```text
+go test ./internal/partlibrary ./cmd/studio-manifest PASS
+GOCACHE=/tmp/ctbzbricks-go-cache make check          PASS
+Makefile studio-manifest target                      PASS（hash 524fee2594a1e8023965e718b398b90d7bc8a10adc864dbbd84e64c77bc50e2b）
+git diff --check                                    PASS
+```
+
+i18n 影响为无：本次新增离线开发工具、Makefile 入口和开发文档记录；没有修改 UI、API/任务 code、locale/timezone、官方 Part 翻译、资源 key、catalog version、content hash 或 release notes。机器编号、外部编号、状态和 JSON key 继续不翻译。
+
+遗留：真实 coverage report 未生成，因为 S1 工具按设计不读取真实数据库，且本次没有提供显式导出的 `LEGACY_PARTS_FILE`。下一步 S2 前应决定是否从备份或显式只读导出生成 legacy part list，用于 coverage 审计；随后实现 Studio-based Part Library Version importer，但仍不得在 API/Worker startup 中执行导入或回填。
+
+## 30. G8 Studio Part Library S2 importer 与真实库激活记录
+
+日期：2026-08-15
+阶段：G8 / Studio Part Library S2
+状态：Completed for Studio-based Part Library metadata import
+
+完成内容：
+
+- [x] 新增 Go 离线工具 `backend-go/cmd/studio-import`，从 S1 `studio_manifest.json` 创建或更新 Studio-based Part Library Version。
+- [x] 新增 `backend-go Makefile` 入口 `studio-import`；默认 `STATUS=building`，不会自动激活 runtime library。
+- [x] importer 默认使用 manifest hash 确定性生成 Library UUID，避免重复导入同一 snapshot 产生多个版本。
+- [x] importer 使用临时 staging table + `CopyFrom` 批量写入 `component_repo.part_library_versions`、`parts`、`part_geometries`；`part_previews` 由 Goose v8 trigger 自动创建。
+- [x] importer 不读取 legacy `public.ldraw_parts`、不连接 Storage、不修改 `storage` schema/policy、不在 API/Worker startup 执行。
+- [x] LDraw 解析器修复 Windows 风格 backslash reference 归一化；同一修复同步到 Part preview Worker 的 `normalizeLDrawPath`。
+- [x] importer 递归解析 LDraw type 1/3/4，写入 bbox、source hash、vertex/face count；logical size 当前为 geometry-derived approximate；解析失败写入 `geometry_status=failed` 和稳定 `component_repo.geometry_not_materialized`。
+- [x] 在真实 Supabase `postgres` 开发库导入 Studio-based Part Library Version，初始 `status=building`。
+- [x] 样例核对通过后，将 Studio-based library 标为 `active`，并将旧 legacy-based active library 标为 `retired`；未删除旧数据，冻结引用仍可查。
+
+真实开发库结果：
+
+```text
+partLibraryVersionId                 c8176a73-eccb-4db3-ba72-30edf5f9fd23
+source_name                          bricklink_studio_ldraw
+source_hash                          524fee2594a1e8023965e718b398b90d7bc8a10adc864dbbd84e64c77bc50e2b
+previous active library              a834780c-6c1b-a698-70a5-2513d4c94c15 / connector_instances
+previous active status after switch   retired
+Studio library status after switch    active
+parts                                24,426
+part_previews                        24,426
+geometry ready                       22,569
+geometry failed                       1,857
+external_ids                              0（S3 范围）
+```
+
+代表样例：
+
+```text
+3001.dat             ready / face_count=700 / logical≈4 x 2 x 3.5
+3002.dat             ready / face_count=508 / logical≈3 x 2 x 3.5
+3003.dat             ready / face_count=316 / logical≈2 x 2 x 3.5
+3020.dat             ready / face_count=700 / logical≈4 x 2 x 1.5
+3023.dat             ready / face_count=172 / logical≈2 x 1 x 1.5
+3062b.dat            ready / face_count=448 / logical≈1 x 1 x 3.5
+3710.dat             ready / face_count=364 / logical≈4 x 1 x 1.5
+bl_10202pb016.dat    ready / face_count=2444
+```
+
+验证结果：
+
+```text
+go test ./internal/partlibrary ./internal/workbench ./cmd/studio-import ./cmd/studio-manifest PASS
+isolated PostgreSQL make test-postgres                                               PASS
+GOCACHE=/tmp/ctbzbricks-go-cache make check                                          PASS
+real Supabase Studio import status=building                                          PASS
+real Supabase Studio activation                                                      PASS
+git diff --check                                                                     PASS
+```
+
+i18n 影响为无：本次新增离线导入工具、机器状态和开发文档记录；没有修改 UI、API/任务 code、locale/timezone、官方 Part 翻译、资源 key、catalog version、content hash 或 release notes。Part 编号、hash、status、error code/params 和 JSON key 继续不翻译。
+
+遗留：本次完成 DB-level Part/geometry/preview metadata 导入与 active library 切换；尚未执行真实 GLB Artifact materialize smoke。`part_external_ids` 对新 Studio library 仍为 0，BrickLink/LEGO design/LEGO element/Rebrickable external ID 补充属于 S3。后续 parser hardening 已显式写入真实库，见下一节。
+
+## 31. G8 Studio LDraw geometry parser hardening 记录
+
+日期：2026-08-15
+阶段：G8 / Studio Part Library S2 hardening
+状态：Completed
+
+完成内容：
+
+- [x] 诊断真实库 1,857 个 `geometry_status=failed`：原始失败主要由 `invalid LDraw face`、`missing LDraw reference`、`bufio.Scanner: token too long` 和少量 no-face 组成。
+- [x] 明确处理原则写入 [Studio Part Library 基准路线图](./go_part_library_studio_roadmap.md)：当前 Part preview 以 mesh/bbox 为目标，忽略 printed texture 的 UV/metadata，但不对真正缺失的 subpart/primitive 猜测几何。
+- [x] `backend-go/internal/partlibrary` 的 LDraw parser 改为 line reader，避免超长 `PE_TEX_INFO` 触发 scanner token limit。
+- [x] LDraw type 3/4 face 接受 Studio trailing UV/texture fields，只解析标准几何坐标。
+- [x] LDraw reference resolver 增加 Studio primitive fallback：`8/<name>.dat` / `48/<name>.dat` 在原路径缺失时可解析到 plain `p/<name>.dat`。
+- [x] missing reference 错误保留稳定 reason，同时在 importer 失败参数和 dry-run sample 中记录 `fromPath`、`reference` 和 `candidates`，便于后续判断是真缺源文件还是 resolver 缺口。
+- [x] 同步修复 Part preview Worker 的 LDraw parser，避免 importer ready 与 GLB materialize 语义分叉。
+- [x] 增加 importer 与 Worker 回归测试：Studio textured face、超长 texture metadata、`8/`/`48/` primitive fallback、missing reference 诊断。
+- [x] 用户确认后，显式重跑 `studio-import` 写回已确认的真实 Supabase `postgres` 开发库；同一 deterministic Studio library 保持 `active`。
+
+验证结果：
+
+```text
+go test ./internal/partlibrary ./internal/workbench ./cmd/studio-import ./cmd/studio-manifest PASS
+studio-import dry-run before hardening baseline                                    24,426 parts / 22,569 ready / 1,857 failed（写库前真实库基线）
+studio-import dry-run after texture face + long metadata hardening                 24,426 parts / 24,322 ready /   104 failed
+studio-import dry-run after 8/48 primitive fallback                                24,426 parts / 24,373 ready /    53 failed
+real Supabase studio-import write                                                  PASS（DryRun=false；status=active）
+real Supabase DB count check                                                       PASS（parts=24,426；previews=24,426；ready=24,373；failed=53；active libraries=1）
+real Supabase sample check                                                         PASS（10202pb021.dat/115551.dat/14769pb079.dat ready；13195.dat missing reference）
+remaining failure sample source check                                              PASS（抽样 reference 在本机 Studio snapshot 中未找到）
+```
+
+i18n 影响为无：本次只修改离线 importer、Worker 内部几何解析、机器诊断字段和开发文档；没有修改 UI 文案、公共 API 文案、locale/timezone、官方 Part 翻译、资源 key、catalog version、content hash 或 release notes。LDraw path、reference、状态、error code/params 和 JSON key 继续作为机器值不翻译。
+
+真实开发库核对结果：
+
+```text
+partLibraryVersionId                 c8176a73-eccb-4db3-ba72-30edf5f9fd23
+source_hash                          524fee2594a1e8023965e718b398b90d7bc8a10adc864dbbd84e64c77bc50e2b
+status                               active
+active libraries                     1
+parts                                24,426
+part_previews                        24,426
+geometry ready                       24,373
+geometry failed                          53
+```
+
+遗留：真实 Supabase active Studio library 已更新到 parser hardening 结果；尚未执行真实 GLB Artifact materialize smoke。下一步使用 `3001.dat`、`3023.dat`、printed textured 样例和 ready `bl_` 样例，通过 Go API/Worker + Storage 物化 GLB Artifact。
+
+## 32. G8 ComponentVersion Studio mesh preview 迁移记录
+
+日期：2026-08-15
+阶段：G8 / Component Repo Part preview & Component preview
+状态：In progress
+
+完成内容：
+
+- [x] Go `component.preview.materialize` 生成器从 structural cube 升级为 Studio/LDraw mesh-based
+  ComponentVersion 整体 GLB。
+- [x] Preview Worker 只使用 ComponentVersion 固定的 `part_library_version_id`，并从
+  `component_repo.part_geometries.source_relative_path` 找到对应 Studio/LDraw source file；
+  不读取当前 active Part Library 来重解释旧版本。
+- [x] Component preview input hash 改为绑定冻结输入：
+  `componentVersionId + sceneSnapshotId + structureHash + geometryHash + partLibraryVersionId +
+  partLibrarySourceHash + generatorVersion`。
+- [x] generator version 升级为 `component-preview-studio-ldraw-glb-v1`；旧 generator 的
+  ready/failed preview 会通过 API 暴露为 `stale` 并触发重新物化。
+- [x] Worker 不再提供 structural fallback；缺少 `LDRAW_ROOT` 时不注册 Component/Part preview
+  materialize handler，避免悄悄生成假几何。
+- [x] GLB artifact metadata 记录 `partLibraryVersionId` 与 `partLibrarySourceHash`，方便审计来源。
+- [x] 记录策略：Component list / detail 的主要 preview artifact 是整体 Component GLB；
+  批量 materialize 每个 Part 的 GLB 作为后续缓存/性能 TODO，不混入本次链路。
+- [x] 同步更新任务协议、Studio Part Library roadmap 和跟进指南。
+
+验证结果：
+
+```text
+GOCACHE=/tmp/ctbzbricks-go-cache go tool sqlc generate       PASS
+GOCACHE=/tmp/ctbzbricks-go-cache go test ./internal/workbench ./cmd/worker PASS
+GOCACHE=/tmp/ctbzbricks-go-cache go test ./...               PASS
+real Supabase smoke fixture                                   PASS（versionId=b48a8fc1-b6c6-45b7-877d-a30f39e7a96f；partLibraryVersionId=c8176a73-eccb-4db3-ba72-30edf5f9fd23；part=3001.dat）
+Go API POST /api/v1/component-versions/:id/preview/materialize PASS（202；taskId=27515e65-a043-4e83-a8bf-dca92d18d540）
+Go Worker component.preview.materialize                        PASS（task succeeded；attempts=1；artifactId=2ea5a928-3f0d-5e86-9785-a951b4615352）
+real Supabase Storage server-side GLB read                     PASS（34,500 bytes；MIME=model/gltf-binary；magic=glTF；sha256 matches DB）
+real GLB JSON chunk                                            PASS（generator=component-preview-studio-ldraw-glb-v1；meshCount=1；nodeCount=2；materialCount=1；bufferByteLength=33,600）
+Go API GET /api/v1/component-versions/:id/preview signed URL   BLOCKED（503 component_repo.storage_unavailable with local HS256 smoke JWT）
+Alembic storage policy upgrade                                 PASS（20260803_0021 -> 20260809_0022 -> 20260816_0023）
+real Supabase storage policy check                             PASS（authenticated DELETE policy removed；component preview managed select retained）
+real Supabase preview helper check                             PASS（can_read_component_preview_artifact(smoke artifact storage_key)=true for owner UUID）
+```
+
+i18n 影响为无：本次只修改内部任务机器字段、generator version、GLB artifact 生成逻辑、sqlc
+查询和开发文档；没有新增 UI 文案、翻译资源、官方 Part 翻译、locale/timezone 选择逻辑或
+resource catalog/release notes。
+
+遗留：
+
+- 真实 Supabase ComponentVersion 整体 GLB 物化链路已经通过：Go API 创建任务、Go Worker 使用
+  Studio/LDraw mesh 写入 Supabase Storage、server-side 读取 artifact 与 hash/GLB 结构校验均成功。
+- 用户侧 signed URL 仍未闭环：本次使用 Go API 本地 HS256 smoke JWT 可以通过 API auth，但
+  Supabase Storage RLS 对该 token 返回不可用，API 映射为 `component_repo.storage_unavailable`。
+- Alembic-owned Storage policy 已修正：`20260816_0023` 保留 legacy `public` preview 读取语义，
+  并让 `public.can_read_component_preview_artifact(text)` 同时识别 Go `component_repo` 的
+  derived/verified preview artifact。SQL 层 helper 已验证 smoke owner 可读。
+- 剩余未闭环点是 token 来源：本地 HS256 smoke JWT 不是 Supabase Auth token，直接调用
+  Supabase Storage sign endpoint 返回 `signature verification failed`。后续需要使用真实
+  Supabase 登录 access token 重跑 API GET。
+- 单个 Part GLB 的批量 materialize 仍是后续 TODO；当前仍支持按单个 Part preview API 逐个生成。
+- 颜色表目前为基础 LDraw color code 映射；如需 Studio/BrickLink/LEGO 颜色精确一致，后续应接入
+  版本化颜色表。
+
+下一步：
+
+- 使用真实 Supabase 登录 access token 重跑 `GET /api/v1/component-versions/:id/preview`，
+  验证 API 返回 signed URL 并可由浏览器下载 GLB。若真实 token 仍失败，再继续查 Storage
+  policy 或 JWT audience/issuer 配置。
+- 之后进入 external IDs S3，补充 BrickLink / LEGO design / LEGO element 映射。
+
+## 33. G8 Component 列表 version 可见性 hardening
+
+日期：2026-08-17
+阶段：G8 / Component Repo 前端切换与 Go API 行为收敛
+状态：Completed for list visibility hardening
+
+完成内容：
+
+- [x] `GET /api/v1/components` 的 Go 查询不再返回没有任何未删除 `component_versions` 的空壳
+  Component。
+- [x] 可见 version 判定与现有 version API 权限一致：owner 可看到自己未删除版本；非 owner 只通过
+  `active` Component 下的非 `draft` 版本获得列表可见性。
+- [x] Component group 的 root/custom 成员列表、搜索结果和状态计数同步采用同一 version-exists
+  条件，避免列表项、分组计数和筛选统计不一致。
+- [x] 更新 sqlc 生成代码，并补充 PostgreSQL integration contract：刚创建但没有 version 的
+  Component 不出现在 owner 的列表中；分页 fixture 改为显式包含 published version。
+
+验证结果：
+
+```text
+GOCACHE=/private/tmp/ctbzbricks-go-cache go tool sqlc generate PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./internal/component ./internal/httpapi ./internal/workbench PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache ./scripts/test-postgres.sh PASS（沙箱外；隔离 PostgreSQL Goose v1->v9、startup contract、integration tests）
+git diff --check PASS
+```
+
+i18n 影响为无资源变更：本次改变 Component 列表返回集合，不新增 UI 文案、错误 code、任务消息、
+翻译资源、locale/timezone 逻辑、catalog version、content hash 或 release notes。Component
+status、version ID 和 JSON 字段继续作为机器值不翻译。
+
+遗留：真实 Supabase 中已有空壳 Component 不会再出现在 Go 列表接口，但本次不删除或回填真实数据；
+如需释放容量，应另行执行经确认的数据清理脚本。
+
+## 34. G8 Component 整体删除语义与前端入口
+
+日期：2026-08-17
+阶段：G8 / Component Repo 前端切换与生命周期语义
+状态：Completed for component delete affordance
+
+完成内容：
+
+- [x] 明确 Component 整体删除采用 GitHub repository 类似语义：owner 可以删除已发布后的
+  user Component；该操作是整个 Component 软删除，不等同于删除某个 published/current
+  ComponentVersion。
+- [x] 保持后端 `DELETE /api/v1/components/:componentId` 的 owner-only、`content_kind='user'`
+  和 `deleted_at` 软删除边界；删除后 Component 详情、列表、分组入口和非 owner 公开读取均不可见。
+- [x] 保持 `DELETE /api/v1/component-versions/:versionId` 的草稿版本删除语义，current/published
+  version 不通过版本删除入口单独删除。
+- [x] 前端 Component 详情页新增 owner 可见的“删除组件”入口、确认弹窗和删除后回组件仓库列表流程；
+  API adapter 新增 `deleteComponent()`，调用整体 Component resource endpoint。
+- [x] 补充前端 adapter 测试，确认整体删除调用 `/api/v1/components/:componentId`，避免与
+  ComponentVersion 删除 endpoint 混淆。
+- [x] 补充 PostgreSQL integration contract，确认 owner 可删除 published Component，删除后 owner
+  与非 owner 读取均返回 `component_repo.component_not_found`。
+
+验证结果：
+
+```text
+frontend npm run i18n:check                                  PASS（2 locales / 10 namespaces；catalog frontend-2026.08.17.1）
+frontend componentRepoApi focused test                       PASS（9 tests）
+frontend npm test                                            PASS（13 files / 59 tests）
+frontend npm run build                                       PASS（仅既有 Vite deprecation/chunk-size warnings）
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./internal/component ./internal/httpapi PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache ./scripts/test-postgres.sh PASS（沙箱外；隔离 PostgreSQL Goose v1->v9、startup contract、integration tests）
+git diff --check                                             PASS
+python -m pytest                                             NOT RUN（当前 shell 无 python 命令）
+python3 -m pytest                                            NOT RUN（系统 Python 缺少 pytest 模块）
+bundled python3 -m pytest                                    NOT RUN（Codex bundled Python 缺少 pytest 模块）
+```
+
+i18n 影响：新增 Component 详情页整体删除按钮、确认标题、确认说明、保留 artifact 警告和删除中状态文案；
+生产语言 `zh-CN`、`en-US` 已同步，`catalogVersion` 升级为 `frontend-2026.08.17.1`，
+`contentHash=93479d839918ae1af7dc517030383981ad8ff5a7d50312f60f2a338761fae8b9`，并更新
+`I18N_RELEASE_NOTES.md`。Component ID、Version ID、删除审计字段、Storage key 和用户组件名称仍为
+机器数据或用户内容，不翻译。
+
+遗留：本次不做物理删除 Storage artifact、不清理历史 deleted Component 关联行；如需释放对象存储容量，
+需要单独设计可审计的 retention/GC 策略。
+
+## 35. G8 Component 永久删除 / purge redaction
+
+日期：2026-08-20
+阶段：G8 / Component Repo 生命周期与数据清理
+状态：Completed for redaction code path；真实库未执行 v10
+
+完成内容：
+
+- [x] 经设计复盘，撤销在线 hard purge 路线：不在 `component.purge` Worker 中追逐
+  `ComponentVersion -> Import -> SceneSnapshot -> Candidate -> Artifact -> Task` 的完整 FK 拓扑。
+- [x] 新增 [Component 删除、脱敏与 GC 技术方案](./component_deletion_retention_gc.md)，明确产品“永久删除”采用
+  `soft delete + redaction + async storage delete`；物理删除留给后续独立 maintenance/GC。
+- [x] 重写 Goose v10 `00010_component_purge.sql`：新增
+  `component_repo.redact_owned_component(actor, component, current_task)`，将目标用户 Component 写为
+  tombstone，脱敏用户主字段、版本 label/release note/metadata、相关 task payload/result/outbox/event
+  params，并将可独占 Artifact 标记 `deleted_at`。
+- [x] v10 只通过会话变量 `component_repo.component_redaction=on` 开窄口：允许 redaction 函数内部
+  tombstone source Artifact、脱敏 published version 用户字段、脱敏 terminal task payload；普通代码路径仍保留
+  source Artifact 不可删除、发布版本结构不可变和 terminal task 不可变保护。
+- [x] redaction 不物理删除 `imports`、`scene_snapshots`、`candidates`、`validation_reports`、
+  `upload_sessions`、`artifacts`、`tasks`、`task_events` 或 `outbox_events` 行；共享 Storage/Artifact
+  保守跳过，不误删其它活跃版本仍引用的对象。
+- [x] 新增 `POST /api/v1/components/:componentId/purge`：owner-only，要求 `confirmComponentName`
+  精确匹配用户原始组件名，API 只创建 durable `component.purge` 任务，不在 HTTP 请求里执行删除。
+- [x] 新增 Go Worker `component.purge` handler：先按任务 payload 中冻结的 storage object 清单幂等删除
+  同 provider/bucket 对象，再调用数据库 redaction function；成功后 redacts 当前 purge task payload，只保留
+  `componentId + purged=true`。Task result 改为 `componentRedacted / versionsRedacted /
+  artifactsTombstoned / relatedTasksRedacted / storageObjectsDeleted`。
+- [x] 前端 Component 详情页新增独立“永久删除”入口，要求输入组件名称确认；提交后等待 purge task 成功再返回组件仓库列表。
+- [x] 更新 `docs/go_task_protocol.md`，记录 `component.purge` 是 redaction/tombstone 语义，不是 hard delete。
+
+验证结果：
+
+```text
+GOCACHE=/private/tmp/ctbzbricks-go-cache go tool sqlc generate PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go tool sqlc vet      PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./db/migrations ./internal/component ./cmd/worker PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache ./scripts/test-postgres.sh PASS（沙箱外；隔离 PostgreSQL Goose v1->v10、startup contract、integration tests）
+frontend npm run i18n:check                                    PASS（2 locales / 10 namespaces；catalog frontend-2026.08.17.2）
+frontend npm test                                              PASS（13 files / 60 tests）
+frontend npm run build                                         PASS（仅既有 Vite deprecation/chunk-size warnings）
+git diff --check                                               PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./...         PASS（首次遇到一次 `internal/auth` ES256 tamper 瞬时失败；单包与全量复跑均 PASS）
+python -m pytest                                               NOT RUN（当前 shell 无 python 命令）
+python3 -m pytest                                              NOT RUN（系统 Python 缺少 pytest 模块）
+bundled python3 -m pytest                                      NOT RUN（Codex bundled Python 缺少 pytest 模块）
+```
+
+i18n 影响：新增永久删除确认 UI 文案、name mismatch 提示，以及
+`component_repo.component_purge_confirmation_failed`、
+`component_repo.component_purge_failed`、`component_repo.component_purge_storage_failed` 三个错误码文案；
+生产语言 `zh-CN`、`en-US` 已同步，`catalogVersion` 升级为 `frontend-2026.08.17.2`，
+`contentHash=cee3d241508a132e7b2b7ba05672df74f59ce8489263ac438a723dc1b1fe0d62`，并更新
+`I18N_RELEASE_NOTES.md`。Component 名称继续作为用户内容原样输入/比较；Component ID、task type、
+Storage key、删除计数、任务状态和 JSON key 均为机器数据，不翻译。
+
+遗留：
+
+- 本次只实现 redaction 代码路径与隔离 PostgreSQL contract，不对真实 Supabase 执行 Goose v10，也不 purge 任何真实 Component。
+- purge 成功后仍保留当前 purge task 的最小执行记录，作为前端完成状态和审计依据；如果未来要求“连 purge task tombstone 都删除”，需要另行设计异步完成通知或 admin-only 清理策略。
+- 物理释放数据库行空间不属于在线 purge；后续按 `component_repo.gc` / maintenance roadmap 另行实现 dry-run、retention period 和 FK-safe batch cleanup。
+
+## 36. 更新模板
 
 每次完成迁移工作后追加：
 

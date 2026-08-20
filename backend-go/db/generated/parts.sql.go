@@ -18,7 +18,8 @@ SELECT library.id AS part_library_version_id, library.source_hash AS part_librar
        geometry.source_relative_path, geometry.source_file_hash,
        geometry.bbox_min, geometry.bbox_max,
        geometry.logical_width_stud, geometry.logical_depth_stud,
-       geometry.logical_height_plate, geometry.vertex_count, geometry.face_count,
+       geometry.logical_height_plate, geometry.logical_size_derivation_status,
+       geometry.vertex_count, geometry.face_count,
        geometry.geometry_status, geometry.geometry_error_code, geometry.geometry_error_params,
        preview.status AS preview_status, preview.generator_version,
        preview.artifact_id, preview.task_id, preview.generation,
@@ -50,35 +51,36 @@ type GetPartPreviewParams struct {
 }
 
 type GetPartPreviewRow struct {
-	PartLibraryVersionID  pgtype.UUID
-	PartLibrarySourceHash string
-	LdrawPartNum          string
-	SourceName            string
-	ContentLocale         string
-	TranslatedName        *string
-	TranslatedLocale      *string
-	SourceRelativePath    *string
-	SourceFileHash        *string
-	BboxMin               []float64
-	BboxMax               []float64
-	LogicalWidthStud      *float64
-	LogicalDepthStud      *float64
-	LogicalHeightPlate    *float64
-	VertexCount           *int32
-	FaceCount             *int32
-	GeometryStatus        *string
-	GeometryErrorCode     *string
-	GeometryErrorParams   []byte
-	PreviewStatus         string
-	GeneratorVersion      *string
-	ArtifactID            pgtype.UUID
-	TaskID                pgtype.UUID
-	Generation            int32
-	FailureCode           *string
-	FailureParams         []byte
-	Sha256                *string
-	FileSize              *int64
-	StorageKey            *string
+	PartLibraryVersionID        pgtype.UUID
+	PartLibrarySourceHash       string
+	LdrawPartNum                string
+	SourceName                  string
+	ContentLocale               string
+	TranslatedName              *string
+	TranslatedLocale            *string
+	SourceRelativePath          *string
+	SourceFileHash              *string
+	BboxMin                     []float64
+	BboxMax                     []float64
+	LogicalWidthStud            *float64
+	LogicalDepthStud            *float64
+	LogicalHeightPlate          *float64
+	LogicalSizeDerivationStatus *string
+	VertexCount                 *int32
+	FaceCount                   *int32
+	GeometryStatus              *string
+	GeometryErrorCode           *string
+	GeometryErrorParams         []byte
+	PreviewStatus               string
+	GeneratorVersion            *string
+	ArtifactID                  pgtype.UUID
+	TaskID                      pgtype.UUID
+	Generation                  int32
+	FailureCode                 *string
+	FailureParams               []byte
+	Sha256                      *string
+	FileSize                    *int64
+	StorageKey                  *string
 }
 
 func (q *Queries) GetPartPreview(ctx context.Context, arg GetPartPreviewParams) (GetPartPreviewRow, error) {
@@ -99,6 +101,7 @@ func (q *Queries) GetPartPreview(ctx context.Context, arg GetPartPreviewParams) 
 		&i.LogicalWidthStud,
 		&i.LogicalDepthStud,
 		&i.LogicalHeightPlate,
+		&i.LogicalSizeDerivationStatus,
 		&i.VertexCount,
 		&i.FaceCount,
 		&i.GeometryStatus,

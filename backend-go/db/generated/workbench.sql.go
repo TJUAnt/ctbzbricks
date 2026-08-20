@@ -368,11 +368,14 @@ SELECT version.id, version.component_id, component.owner_id,
        version.preview_generator_version, version.preview_failure_code,
        version.preview_failure_params, version.preview_task_id,
        version.preview_generation, component.content_locale,
+       version.part_library_version_id, version.structure_hash, version.geometry_hash,
+       part_library.source_hash AS part_library_source_hash,
        import_job.timezone
 FROM component_repo.component_versions version
 JOIN component_repo.components component ON component.id = version.component_id
 JOIN component_repo.candidates candidate ON candidate.id = version.component_candidate_id
 JOIN component_repo.imports import_job ON import_job.id = candidate.import_id
+JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
 WHERE version.id = $1
   AND component.owner_id = $2
   AND version.deleted_at IS NULL
@@ -399,6 +402,10 @@ type GetOwnedVersionPreviewStateRow struct {
 	PreviewTaskID           pgtype.UUID
 	PreviewGeneration       int32
 	ContentLocale           string
+	PartLibraryVersionID    pgtype.UUID
+	StructureHash           string
+	GeometryHash            string
+	PartLibrarySourceHash   string
 	Timezone                string
 }
 
@@ -420,6 +427,10 @@ func (q *Queries) GetOwnedVersionPreviewState(ctx context.Context, arg GetOwnedV
 		&i.PreviewTaskID,
 		&i.PreviewGeneration,
 		&i.ContentLocale,
+		&i.PartLibraryVersionID,
+		&i.StructureHash,
+		&i.GeometryHash,
+		&i.PartLibrarySourceHash,
 		&i.Timezone,
 	)
 	return i, err
@@ -429,9 +440,13 @@ const getPreviewTaskInput = `-- name: GetPreviewTaskInput :one
 SELECT version.id AS version_id, component.owner_id, version.source_artifact_id,
        version.scene_snapshot_id, version.preview_generation,
        version.preview_generator_version, version.preview_artifact_id,
-       version.preview_status, snapshot.document
+       version.preview_status, version.part_library_version_id,
+       version.structure_hash, version.geometry_hash,
+       part_library.source_hash AS part_library_source_hash,
+       snapshot.document
 FROM component_repo.component_versions version
 JOIN component_repo.components component ON component.id = version.component_id
+JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
 JOIN component_repo.scene_snapshots snapshot ON snapshot.id = version.scene_snapshot_id
 WHERE version.id = $1
   AND component.owner_id = $2
@@ -454,6 +469,10 @@ type GetPreviewTaskInputRow struct {
 	PreviewGeneratorVersion *string
 	PreviewArtifactID       pgtype.UUID
 	PreviewStatus           string
+	PartLibraryVersionID    pgtype.UUID
+	StructureHash           string
+	GeometryHash            string
+	PartLibrarySourceHash   string
 	Document                []byte
 }
 
@@ -469,6 +488,10 @@ func (q *Queries) GetPreviewTaskInput(ctx context.Context, arg GetPreviewTaskInp
 		&i.PreviewGeneratorVersion,
 		&i.PreviewArtifactID,
 		&i.PreviewStatus,
+		&i.PartLibraryVersionID,
+		&i.StructureHash,
+		&i.GeometryHash,
+		&i.PartLibrarySourceHash,
 		&i.Document,
 	)
 	return i, err
@@ -1086,6 +1109,49 @@ func (q *Queries) ListOwnedRelationCandidates(ctx context.Context, arg ListOwned
 	return items, nil
 }
 
+const listReadyPartGeometryForPreview = `-- name: ListReadyPartGeometryForPreview :many
+SELECT geometry.ldraw_part_num,
+       geometry.source_relative_path,
+       geometry.source_file_hash
+FROM component_repo.part_geometries geometry
+JOIN unnest($1::text[]) requested(ldraw_part_num)
+  ON geometry.ldraw_part_num = requested.ldraw_part_num
+WHERE geometry.part_library_version_id = $2
+  AND geometry.geometry_status = 'ready'
+ORDER BY geometry.ldraw_part_num
+`
+
+type ListReadyPartGeometryForPreviewParams struct {
+	LdrawPartNums        []string
+	PartLibraryVersionID pgtype.UUID
+}
+
+type ListReadyPartGeometryForPreviewRow struct {
+	LdrawPartNum       string
+	SourceRelativePath string
+	SourceFileHash     string
+}
+
+func (q *Queries) ListReadyPartGeometryForPreview(ctx context.Context, arg ListReadyPartGeometryForPreviewParams) ([]ListReadyPartGeometryForPreviewRow, error) {
+	rows, err := q.db.Query(ctx, listReadyPartGeometryForPreview, arg.LdrawPartNums, arg.PartLibraryVersionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReadyPartGeometryForPreviewRow{}
+	for rows.Next() {
+		var i ListReadyPartGeometryForPreviewRow
+		if err := rows.Scan(&i.LdrawPartNum, &i.SourceRelativePath, &i.SourceFileHash); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockOwnedRelationCandidate = `-- name: LockOwnedRelationCandidate :one
 SELECT relation.id, relation.component_candidate_id, relation.owner_id,
        relation.endpoint_a, relation.endpoint_b, relation.connection_type,
@@ -1150,11 +1216,14 @@ SELECT version.id, version.component_id, component.owner_id,
        version.preview_generator_version, version.preview_failure_code,
        version.preview_failure_params, version.preview_task_id,
        version.preview_generation, component.content_locale,
+       version.part_library_version_id, version.structure_hash, version.geometry_hash,
+       part_library.source_hash AS part_library_source_hash,
        import_job.timezone
 FROM component_repo.component_versions version
 JOIN component_repo.components component ON component.id = version.component_id
 JOIN component_repo.candidates candidate ON candidate.id = version.component_candidate_id
 JOIN component_repo.imports import_job ON import_job.id = candidate.import_id
+JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
 WHERE version.id = $1
   AND component.owner_id = $2
   AND version.deleted_at IS NULL
@@ -1182,6 +1251,10 @@ type LockOwnedVersionPreviewStateRow struct {
 	PreviewTaskID           pgtype.UUID
 	PreviewGeneration       int32
 	ContentLocale           string
+	PartLibraryVersionID    pgtype.UUID
+	StructureHash           string
+	GeometryHash            string
+	PartLibrarySourceHash   string
 	Timezone                string
 }
 
@@ -1203,6 +1276,10 @@ func (q *Queries) LockOwnedVersionPreviewState(ctx context.Context, arg LockOwne
 		&i.PreviewTaskID,
 		&i.PreviewGeneration,
 		&i.ContentLocale,
+		&i.PartLibraryVersionID,
+		&i.StructureHash,
+		&i.GeometryHash,
+		&i.PartLibrarySourceHash,
 		&i.Timezone,
 	)
 	return i, err

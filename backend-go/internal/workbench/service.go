@@ -276,7 +276,8 @@ func (s *Service) MaterializePreview(ctx context.Context, actor pgtype.UUID, acc
 		return AcceptedTask{}, err
 	}
 	cacheMissing := false
-	if state.PreviewStatus == "ready" && state.PreviewArtifactID.Valid {
+	staleGenerator := previewGeneratorStale(state.PreviewStatus, state.PreviewGeneratorVersion)
+	if state.PreviewStatus == "ready" && state.PreviewArtifactID.Valid && !staleGenerator {
 		preview, previewErr := s.q.GetVisibleVersionPreview(ctx, db.GetVisibleVersionPreviewParams{VersionID: id, ActorID: actor})
 		if previewErr == nil && preview.StorageKey != nil {
 			if _, headErr := s.store.HeadForUser(ctx, *preview.StorageKey, accessToken); headErr == nil {
@@ -293,23 +294,29 @@ func (s *Service) MaterializePreview(ctx context.Context, actor pgtype.UUID, acc
 			return AcceptedTask{}, err
 		}
 		generation := locked.PreviewGeneration
-		if cacheMissing || locked.PreviewStatus == "failed" {
+		lockedStaleGenerator := previewGeneratorStale(locked.PreviewStatus, locked.PreviewGeneratorVersion)
+		if cacheMissing || locked.PreviewStatus == "failed" || lockedStaleGenerator {
 			generation++
 		}
-		if (locked.PreviewStatus == "pending" || locked.PreviewStatus == "running") && locked.PreviewTaskID.Valid {
+		if !lockedStaleGenerator && (locked.PreviewStatus == "pending" || locked.PreviewStatus == "running") && locked.PreviewTaskID.Valid {
 			existing, taskErr := q.GetOwnedTask(ctx, db.GetOwnedTaskParams{TaskID: locked.PreviewTaskID, ActorID: actor})
 			if taskErr == nil && (existing.Status == "queued" || existing.Status == "running") {
 				return AcceptedTask{TaskID: uuidutil.String(existing.ID), Status: existing.Status}, nil
 			}
 			generation++
 		}
-		inputHash := hashStrings(uuidutil.String(locked.SceneSnapshotID), PreviewGeneratorVersion)
+		inputHash := componentPreviewInputHash(
+			uuidutil.String(locked.ID), uuidutil.String(locked.SceneSnapshotID),
+			locked.StructureHash, locked.GeometryHash,
+			uuidutil.String(locked.PartLibraryVersionID), locked.PartLibrarySourceHash,
+			PreviewGeneratorVersion,
+		)
 		payload := mustJSON(map[string]any{"versionId": versionID, "generatorVersion": PreviewGeneratorVersion, "generation": generation, "inputHash": inputHash})
 		scheduled, err := task.ScheduleWithQueries(ctx, q, task.ScheduleInput{
 			OwnerID: actor, TaskType: PreviewMaterializeType, LogicalKey: versionID,
 			InputHash: inputHash, Payload: payload, Locale: locked.ContentLocale,
 			Timezone: locked.Timezone, CreatedBy: actor, MaxAttempts: 3,
-			ForceNew: cacheMissing || locked.PreviewStatus == "failed",
+			ForceNew: cacheMissing || locked.PreviewStatus == "failed" || lockedStaleGenerator,
 		})
 		if err != nil {
 			return AcceptedTask{}, err
@@ -333,11 +340,16 @@ func (s *Service) GetPreview(ctx context.Context, actor pgtype.UUID, accessToken
 	if err != nil {
 		return Preview{}, err
 	}
-	result := Preview{VersionID: versionID, Status: row.PreviewStatus, GeneratorVersion: row.PreviewGeneratorVersion, ArtifactID: uuidutil.NullableString(row.PreviewArtifactID), SHA256: row.Sha256, FileSize: row.FileSize}
-	if row.PreviewFailureCode != nil {
+	status := row.PreviewStatus
+	staleGenerator := previewGeneratorStale(row.PreviewStatus, row.PreviewGeneratorVersion)
+	if staleGenerator {
+		status = "stale"
+	}
+	result := Preview{VersionID: versionID, Status: status, GeneratorVersion: row.PreviewGeneratorVersion, ArtifactID: uuidutil.NullableString(row.PreviewArtifactID), SHA256: row.Sha256, FileSize: row.FileSize}
+	if row.PreviewFailureCode != nil && !staleGenerator {
 		result.Failure = &Failure{Code: *row.PreviewFailureCode, Params: object(row.PreviewFailureParams)}
 	}
-	if row.PreviewStatus == "ready" && row.StorageKey != nil {
+	if row.PreviewStatus == "ready" && row.StorageKey != nil && !staleGenerator {
 		url, signErr := s.store.SignDownloadForUser(ctx, *row.StorageKey, s.signedURLTTL, accessToken)
 		if signErr != nil {
 			return Preview{}, apierror.New("component_repo.storage_unavailable", http.StatusServiceUnavailable, nil)
@@ -389,12 +401,16 @@ func (s *Service) GetPartPreview(ctx context.Context, partLibraryVersionID, part
 		Status: row.PreviewStatus, GeneratorVersion: row.GeneratorVersion,
 		TaskID: uuidutil.NullableString(row.TaskID),
 	}
-	if len(row.BboxMin) == 3 && len(row.BboxMax) == 3 && row.LogicalWidthStud != nil &&
-		row.LogicalDepthStud != nil && row.LogicalHeightPlate != nil && row.VertexCount != nil && row.FaceCount != nil {
+	if len(row.BboxMin) == 3 && len(row.BboxMax) == 3 && row.LogicalSizeDerivationStatus != nil &&
+		row.VertexCount != nil && row.FaceCount != nil {
 		result.Geometry = &PartGeometry{
-			BBox:             PartBoundingBox{MinX: row.BboxMin[0], MinY: row.BboxMin[1], MinZ: row.BboxMin[2], MaxX: row.BboxMax[0], MaxY: row.BboxMax[1], MaxZ: row.BboxMax[2]},
-			LogicalWidthStud: *row.LogicalWidthStud, LogicalDepthStud: *row.LogicalDepthStud,
-			LogicalHeightPlate: *row.LogicalHeightPlate, VertexCount: *row.VertexCount, FaceCount: *row.FaceCount,
+			BBox: PartBoundingBox{
+				MinX: row.BboxMin[0], MinY: row.BboxMin[1], MinZ: row.BboxMin[2],
+				MaxX: row.BboxMax[0], MaxY: row.BboxMax[1], MaxZ: row.BboxMax[2],
+			},
+			LogicalWidthStud: row.LogicalWidthStud, LogicalDepthStud: row.LogicalDepthStud,
+			LogicalHeightPlate: row.LogicalHeightPlate, LogicalSizeDerivationStatus: *row.LogicalSizeDerivationStatus,
+			VertexCount: *row.VertexCount, FaceCount: *row.FaceCount,
 		}
 	}
 	if row.FailureCode != nil {

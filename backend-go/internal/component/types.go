@@ -65,6 +65,18 @@ type UpdateComponentInput struct {
 	ContentLocale *string        `json:"contentLocale"`
 }
 
+type PurgeComponentInput struct {
+	ConfirmComponentName string `json:"confirmComponentName"`
+	DeleteStorageObjects bool   `json:"deleteStorageObjects"`
+	Locale               string `json:"locale"`
+	Timezone             string `json:"timezone"`
+}
+
+type ComponentPurgeAccepted struct {
+	TaskID string `json:"taskId"`
+	Status string `json:"status"`
+}
+
 type OptionalString struct {
 	Set   bool
 	Value *string

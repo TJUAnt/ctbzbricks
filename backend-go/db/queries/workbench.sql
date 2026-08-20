@@ -317,11 +317,14 @@ SELECT version.id, version.component_id, component.owner_id,
        version.preview_generator_version, version.preview_failure_code,
        version.preview_failure_params, version.preview_task_id,
        version.preview_generation, component.content_locale,
+       version.part_library_version_id, version.structure_hash, version.geometry_hash,
+       part_library.source_hash AS part_library_source_hash,
        import_job.timezone
 FROM component_repo.component_versions version
 JOIN component_repo.components component ON component.id = version.component_id
 JOIN component_repo.candidates candidate ON candidate.id = version.component_candidate_id
 JOIN component_repo.imports import_job ON import_job.id = candidate.import_id
+JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
 WHERE version.id = sqlc.arg(version_id)
   AND component.owner_id = sqlc.arg(actor_id)
   AND version.deleted_at IS NULL
@@ -334,11 +337,14 @@ SELECT version.id, version.component_id, component.owner_id,
        version.preview_generator_version, version.preview_failure_code,
        version.preview_failure_params, version.preview_task_id,
        version.preview_generation, component.content_locale,
+       version.part_library_version_id, version.structure_hash, version.geometry_hash,
+       part_library.source_hash AS part_library_source_hash,
        import_job.timezone
 FROM component_repo.component_versions version
 JOIN component_repo.components component ON component.id = version.component_id
 JOIN component_repo.candidates candidate ON candidate.id = version.component_candidate_id
 JOIN component_repo.imports import_job ON import_job.id = candidate.import_id
+JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
 WHERE version.id = sqlc.arg(version_id)
   AND component.owner_id = sqlc.arg(actor_id)
   AND version.deleted_at IS NULL
@@ -357,14 +363,29 @@ WHERE id = sqlc.arg(version_id);
 SELECT version.id AS version_id, component.owner_id, version.source_artifact_id,
        version.scene_snapshot_id, version.preview_generation,
        version.preview_generator_version, version.preview_artifact_id,
-       version.preview_status, snapshot.document
+       version.preview_status, version.part_library_version_id,
+       version.structure_hash, version.geometry_hash,
+       part_library.source_hash AS part_library_source_hash,
+       snapshot.document
 FROM component_repo.component_versions version
 JOIN component_repo.components component ON component.id = version.component_id
+JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
 JOIN component_repo.scene_snapshots snapshot ON snapshot.id = version.scene_snapshot_id
 WHERE version.id = sqlc.arg(version_id)
   AND component.owner_id = sqlc.arg(owner_id)
   AND version.preview_task_id = sqlc.arg(task_id)
   AND version.preview_status IN ('pending', 'running', 'ready');
+
+-- name: ListReadyPartGeometryForPreview :many
+SELECT geometry.ldraw_part_num,
+       geometry.source_relative_path,
+       geometry.source_file_hash
+FROM component_repo.part_geometries geometry
+JOIN unnest(sqlc.arg(ldraw_part_nums)::text[]) requested(ldraw_part_num)
+  ON geometry.ldraw_part_num = requested.ldraw_part_num
+WHERE geometry.part_library_version_id = sqlc.arg(part_library_version_id)
+  AND geometry.geometry_status = 'ready'
+ORDER BY geometry.ldraw_part_num;
 
 -- name: MarkVersionPreviewRunning :exec
 UPDATE component_repo.component_versions

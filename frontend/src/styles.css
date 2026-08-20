@@ -3434,6 +3434,22 @@ button {
   color: #ffffff;
 }
 
+.component-repo-actions button.component-repo-danger-button {
+  border-color: rgba(182, 47, 47, 0.28);
+  background: #fff5f5;
+  color: #b62f2f;
+}
+
+.component-repo-actions button.component-repo-danger-button:hover {
+  background: #ffe9e9;
+}
+
+.component-repo-actions button.component-repo-permanent-danger-button {
+  border-color: rgba(154, 29, 29, 0.34);
+  background: #b62f2f;
+  color: #fff;
+}
+
 .component-repo-secondary-button {
   width: 100%;
 }
@@ -5552,6 +5568,38 @@ button {
 .component-version-delete-body > div:not(.component-version-delete-error) svg {
   flex: 0 0 auto;
   margin-top: 1px;
+}
+
+.component-purge-confirm-field {
+  display: grid;
+  gap: 7px;
+}
+
+.component-purge-confirm-field span,
+.component-purge-confirm-mismatch {
+  color: #526176;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.component-purge-confirm-field input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #d8e0e9;
+  border-radius: 8px;
+  background: #fff;
+  color: #1d2d42;
+  padding: 0 11px;
+  font: inherit;
+}
+
+.component-purge-confirm-field input:focus {
+  border-color: #b62f2f;
+  outline: 2px solid rgba(182, 47, 47, 0.14);
+}
+
+.component-purge-confirm-mismatch {
+  color: #a12b2b;
 }
 
 .component-version-delete-dialog > footer {

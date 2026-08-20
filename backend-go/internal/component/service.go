@@ -6,9 +6,11 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -165,6 +167,64 @@ func (s *Service) DeleteComponent(ctx context.Context, actor pgtype.UUID, compon
 		return struct{}{}, err
 	})
 	return err
+}
+
+func (s *Service) PurgeComponent(ctx context.Context, actor pgtype.UUID, componentID string, input PurgeComponentInput) (ComponentPurgeAccepted, error) {
+	id, err := resourceID(componentID, "componentId")
+	if err != nil {
+		return ComponentPurgeAccepted{}, err
+	}
+	locale, ok := NormalizeLocale(input.Locale)
+	if !ok {
+		return ComponentPurgeAccepted{}, validationError("locale")
+	}
+	if _, err := time.LoadLocation(input.Timezone); err != nil {
+		return ComponentPurgeAccepted{}, validationError("timezone")
+	}
+	component, err := s.q.GetOwnedComponentForPurge(ctx, db.GetOwnedComponentForPurgeParams{
+		ComponentID: id, ActorID: actor,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ComponentPurgeAccepted{}, notFound("component_repo.component_not_found", "componentId", componentID)
+	}
+	if err != nil {
+		return ComponentPurgeAccepted{}, err
+	}
+	if input.ConfirmComponentName != component.Name {
+		return ComponentPurgeAccepted{}, apierror.New("component_repo.component_purge_confirmation_failed", http.StatusUnprocessableEntity, map[string]any{"componentId": componentID})
+	}
+	objects, err := s.q.ListComponentPurgeStorageObjects(ctx, db.ListComponentPurgeStorageObjectsParams{
+		TargetComponentID: id, ActorID: actor,
+	})
+	if err != nil {
+		return ComponentPurgeAccepted{}, err
+	}
+	storageObjects := make([]componentPurgeStorageObject, 0, len(objects))
+	for _, object := range objects {
+		storageObjects = append(storageObjects, componentPurgeStorageObject{
+			Provider: object.StorageProvider,
+			Bucket:   object.StorageBucket,
+			Key:      object.StorageKey,
+		})
+	}
+	payload, err := json.Marshal(componentPurgePayload{
+		ComponentID:          componentID,
+		DeleteStorageObjects: input.DeleteStorageObjects,
+		StorageObjects:       storageObjects,
+		PurgeVersion:         componentPurgeVersion,
+	})
+	if err != nil {
+		return ComponentPurgeAccepted{}, err
+	}
+	created, _, err := task.NewService(s.pool).Enqueue(ctx, task.EnqueueInput{
+		OwnerID: actor, TaskType: task.ComponentPurgeType, Payload: payload,
+		Locale: locale, Timezone: input.Timezone, CreatedBy: actor,
+		IdempotencyKey: "component-purge:" + componentID, MaxAttempts: 5,
+	})
+	if err != nil {
+		return ComponentPurgeAccepted{}, err
+	}
+	return ComponentPurgeAccepted{TaskID: created.ID, Status: created.Status}, nil
 }
 
 func (s *Service) CreateVersion(ctx context.Context, actor pgtype.UUID, componentID string, input CreateVersionInput) (ComponentVersion, error) {

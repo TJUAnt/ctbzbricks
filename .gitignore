@@ -30,6 +30,7 @@ docs/adr/*
 !docs/go_component_schema_baseline.md
 !docs/go_task_protocol.md
 !docs/go_g8_frontend_cutover_inventory.md
+!docs/go_part_library_studio_roadmap.md
 LDCadShadowLibrary/
 frontend/.env
 backend/.env

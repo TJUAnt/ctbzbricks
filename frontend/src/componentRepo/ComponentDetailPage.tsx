@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  AlertTriangle,
   Boxes,
   Braces,
   Crosshair,
@@ -10,6 +11,8 @@ import {
   Plug,
   RefreshCw,
   Rocket,
+  Trash2,
+  X,
 } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import appConfig from '../app/appConfig';
@@ -17,6 +20,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useAppTranslation, useDynamicTranslation, type TranslationKey } from '../i18n';
 import { ComponentScene, type ComponentSceneConnector } from '../parts/PartViewerPage';
 import {
+  deleteComponent,
   getComponent,
   getConnectorAnalysis,
   listComponentGroupIds,
@@ -25,6 +29,7 @@ import {
   listRelations,
   loadComponentVersionParts,
   loadComponentVersionPreview,
+  purgeComponent,
   publishVersion,
   type ComponentConnectorAnalysisResponse,
   type ComponentConnectorResponse,
@@ -99,6 +104,11 @@ export function ComponentDetailPage() {
   const [actionNotice, setActionNotice] = React.useState<string | null>(null);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [publishing, setPublishing] = React.useState(false);
+  const [confirmingDeleteComponent, setConfirmingDeleteComponent] = React.useState(false);
+  const [deletingComponent, setDeletingComponent] = React.useState(false);
+  const [confirmingPurgeComponent, setConfirmingPurgeComponent] = React.useState(false);
+  const [purgingComponent, setPurgingComponent] = React.useState(false);
+  const [purgeConfirmName, setPurgeConfirmName] = React.useState('');
   const [activeConnectorPartId, setActiveConnectorPartId] = React.useState<string | null>(null);
   const [selectedConnectorId, setSelectedConnectorId] = React.useState<string | null>(null);
   const trRef = React.useRef(tr);
@@ -273,6 +283,15 @@ export function ComponentDetailPage() {
         || state.component.ownerId === user?.id
       ),
   );
+  const canDeleteComponent = Boolean(
+    state.component
+      && state.component.contentKind === 'user'
+      && !isAuthLoading
+      && (
+        !isAuthConfigured
+        || state.component.ownerId === user?.id
+      ),
+  );
   const publish = async () => {
     if (!state.version || !canPublish) return;
     setPublishing(true);
@@ -292,6 +311,47 @@ export function ComponentDetailPage() {
       setPublishing(false);
     }
   };
+  const confirmDeleteComponent = async () => {
+    if (!state.component || !canDeleteComponent) return;
+    setDeletingComponent(true);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      await deleteComponent(state.component.id);
+      navigate(routeFor('componentRepo'));
+    } catch (deleteError) {
+      setActionError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : tr('errors:common.unknown'),
+      );
+      setConfirmingDeleteComponent(false);
+    } finally {
+      setDeletingComponent(false);
+    }
+  };
+  const confirmPurgeComponent = async () => {
+    if (!state.component || !canDeleteComponent) return;
+    if (purgeConfirmName !== state.component.name) {
+      setActionError(tr('componentRepo:purgeComponentNameMismatch'));
+      return;
+    }
+    setPurgingComponent(true);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      await purgeComponent(state.component.id, purgeConfirmName);
+      navigate(routeFor('componentRepo'));
+    } catch (purgeError) {
+      setActionError(
+        purgeError instanceof Error
+          ? purgeError.message
+          : tr('errors:common.unknown'),
+      );
+    } finally {
+      setPurgingComponent(false);
+    }
+  };
 
   return (
     <section className="component-repo-page component-detail-page">
@@ -304,6 +364,37 @@ export function ComponentDetailPage() {
           <button onClick={() => navigate(routeFor('componentRepo'))} type="button">
             {appConfig.texts.componentRepoBackToList}
           </button>
+          {canDeleteComponent ? (
+            <button
+              className="component-repo-danger-button"
+              disabled={deletingComponent || purgingComponent}
+              onClick={() => {
+                setActionError(null);
+                setActionNotice(null);
+                setConfirmingDeleteComponent(true);
+              }}
+              type="button"
+            >
+              <Trash2 aria-hidden="true" />
+              {tr('componentRepo:deleteComponent')}
+            </button>
+          ) : null}
+          {canDeleteComponent ? (
+            <button
+              className="component-repo-danger-button component-repo-permanent-danger-button"
+              disabled={deletingComponent || purgingComponent}
+              onClick={() => {
+                setActionError(null);
+                setActionNotice(null);
+                setPurgeConfirmName('');
+                setConfirmingPurgeComponent(true);
+              }}
+              type="button"
+            >
+              <Trash2 aria-hidden="true" />
+              {tr('componentRepo:purgeComponent')}
+            </button>
+          ) : null}
           {canPublish ? (
             <button
               className="component-repo-primary-button"
@@ -319,6 +410,169 @@ export function ComponentDetailPage() {
           ) : null}
         </div>
       </header>
+
+      {confirmingDeleteComponent && state.component ? (
+        <div className="component-version-delete-backdrop">
+          <section
+            aria-labelledby={`delete-component-title-${state.component.id}`}
+            aria-modal="true"
+            className="component-version-delete-dialog"
+            role="dialog"
+          >
+            <header>
+              <div>
+                <span><Trash2 aria-hidden="true" /></span>
+                <h2 id={`delete-component-title-${state.component.id}`}>
+                  {tr('componentRepo:deleteComponentTitle')}
+                </h2>
+              </div>
+              <button
+                aria-label={tr('componentRepo:close')}
+                disabled={deletingComponent}
+                onClick={() => {
+                  setConfirmingDeleteComponent(false);
+                  setActionError(null);
+                }}
+                type="button"
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <div className="component-version-delete-body">
+              <p>
+                {tr('componentRepo:deleteComponentDescription', {
+                  componentName: state.component.name,
+                })}
+              </p>
+              <div>
+                <AlertTriangle aria-hidden="true" />
+                {tr('componentRepo:deleteComponentArtifactsRetained')}
+              </div>
+              {actionError ? (
+                <div className="component-version-delete-error">
+                  <AlertTriangle aria-hidden="true" />
+                  {actionError}
+                </div>
+              ) : null}
+            </div>
+            <footer>
+              <button
+                disabled={deletingComponent}
+                onClick={() => {
+                  setConfirmingDeleteComponent(false);
+                  setActionError(null);
+                }}
+                type="button"
+              >
+                {tr('componentRepo:cancel')}
+              </button>
+              <button
+                className="component-version-delete-confirm"
+                disabled={deletingComponent}
+                onClick={() => void confirmDeleteComponent()}
+                type="button"
+              >
+                {deletingComponent ? <LoaderCircle aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
+                {tr(
+                  deletingComponent
+                    ? 'componentRepo:deletingComponent'
+                    : 'componentRepo:deleteComponent',
+                )}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
+      {confirmingPurgeComponent && state.component ? (
+        <div className="component-version-delete-backdrop">
+          <section
+            aria-labelledby={`purge-component-title-${state.component.id}`}
+            aria-modal="true"
+            className="component-version-delete-dialog"
+            role="dialog"
+          >
+            <header>
+              <div>
+                <span><Trash2 aria-hidden="true" /></span>
+                <h2 id={`purge-component-title-${state.component.id}`}>
+                  {tr('componentRepo:purgeComponentTitle')}
+                </h2>
+              </div>
+              <button
+                aria-label={tr('componentRepo:close')}
+                disabled={purgingComponent}
+                onClick={() => {
+                  setConfirmingPurgeComponent(false);
+                  setActionError(null);
+                  setPurgeConfirmName('');
+                }}
+                type="button"
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <div className="component-version-delete-body">
+              <p>
+                {tr('componentRepo:purgeComponentDescription', {
+                  componentName: state.component.name,
+                })}
+              </p>
+              <div>
+                <AlertTriangle aria-hidden="true" />
+                {tr('componentRepo:purgeComponentStorageWarning')}
+              </div>
+              <label className="component-purge-confirm-field">
+                <span>{tr('componentRepo:purgeComponentConfirmLabel')}</span>
+                <input
+                  disabled={purgingComponent}
+                  onChange={(event) => setPurgeConfirmName(event.target.value)}
+                  placeholder={tr('componentRepo:purgeComponentConfirmPlaceholder')}
+                  type="text"
+                  value={purgeConfirmName}
+                />
+              </label>
+              {purgeConfirmName && purgeConfirmName !== state.component.name ? (
+                <small className="component-purge-confirm-mismatch">
+                  {tr('componentRepo:purgeComponentNameMismatch')}
+                </small>
+              ) : null}
+              {actionError ? (
+                <div className="component-version-delete-error">
+                  <AlertTriangle aria-hidden="true" />
+                  {actionError}
+                </div>
+              ) : null}
+            </div>
+            <footer>
+              <button
+                disabled={purgingComponent}
+                onClick={() => {
+                  setConfirmingPurgeComponent(false);
+                  setActionError(null);
+                  setPurgeConfirmName('');
+                }}
+                type="button"
+              >
+                {tr('componentRepo:cancel')}
+              </button>
+              <button
+                className="component-version-delete-confirm"
+                disabled={purgingComponent || purgeConfirmName !== state.component.name}
+                onClick={() => void confirmPurgeComponent()}
+                type="button"
+              >
+                {purgingComponent ? <LoaderCircle aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
+                {tr(
+                  purgingComponent
+                    ? 'componentRepo:purgingComponent'
+                    : 'componentRepo:purgeComponent',
+                )}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       {state.error ? <div className="asset-error">{state.error}</div> : null}
       {actionError ? <div className="asset-error">{actionError}</div> : null}

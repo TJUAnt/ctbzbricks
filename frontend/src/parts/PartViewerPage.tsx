@@ -221,12 +221,12 @@ function DimensionRow({
 }: {
   label: string;
   unit: string;
-  value: number | undefined;
+  value: number | null | undefined;
 }) {
   return (
     <div>
       <dt>{label}</dt>
-      <dd>{value === undefined ? '—' : `${formatNumber(value, { maximumFractionDigits: 2 })} ${unit}`}</dd>
+      <dd>{value == null ? '—' : `${formatNumber(value, { maximumFractionDigits: 2 })} ${unit}`}</dd>
     </div>
   );
 }

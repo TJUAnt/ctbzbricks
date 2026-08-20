@@ -31,6 +31,16 @@ SELECT id, owner_id, parent_group_id, group_type, name, normalized_name,
            FROM component_repo.components component
            WHERE component.deleted_at IS NULL
              AND (component.owner_id = sqlc.arg(owner_id) OR component.status = 'active')
+             AND EXISTS (
+                 SELECT 1
+                 FROM component_repo.component_versions version
+                 WHERE version.component_id = component.id
+                   AND version.deleted_at IS NULL
+                   AND (
+                       component.owner_id = sqlc.arg(owner_id)
+                       OR (component.status = 'active' AND version.status <> 'draft')
+                   )
+             )
        ) ELSE (
            SELECT count(*)::bigint
            FROM component_repo.component_group_memberships membership
@@ -39,6 +49,16 @@ SELECT id, owner_id, parent_group_id, group_type, name, normalized_name,
              AND membership.group_id = group_tree.id
              AND component.deleted_at IS NULL
              AND (component.owner_id = sqlc.arg(owner_id) OR component.status = 'active')
+             AND EXISTS (
+                 SELECT 1
+                 FROM component_repo.component_versions version
+                 WHERE version.component_id = component.id
+                   AND version.deleted_at IS NULL
+                   AND (
+                       component.owner_id = sqlc.arg(owner_id)
+                       OR (component.status = 'active' AND version.status <> 'draft')
+                   )
+             )
        ) END)::bigint AS direct_component_count
 FROM group_tree
 ORDER BY depth, parent_group_id NULLS FIRST, sort_order, id;
@@ -188,6 +208,16 @@ WHERE g.owner_id = sqlc.arg(owner_id)
   AND g.id = sqlc.arg(group_id)
   AND c.deleted_at IS NULL
   AND (c.owner_id = sqlc.arg(owner_id) OR c.status = 'active')
+  AND EXISTS (
+      SELECT 1
+      FROM component_repo.component_versions version
+      WHERE version.component_id = c.id
+        AND version.deleted_at IS NULL
+        AND (
+            c.owner_id = sqlc.arg(owner_id)
+            OR (c.status = 'active' AND version.status <> 'draft')
+        )
+  )
 ORDER BY COALESCE(membership.added_at, c.created_at) DESC, c.id
 LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset);
 
@@ -241,6 +271,16 @@ WHERE group_record.id = sqlc.arg(group_id)
   AND group_record.owner_id = sqlc.arg(owner_id)
   AND c.deleted_at IS NULL
   AND (c.owner_id = sqlc.arg(owner_id) OR c.status = 'active')
+  AND EXISTS (
+      SELECT 1
+      FROM component_repo.component_versions version
+      WHERE version.component_id = c.id
+        AND version.deleted_at IS NULL
+        AND (
+            c.owner_id = sqlc.arg(owner_id)
+            OR (c.status = 'active' AND version.status <> 'draft')
+        )
+  )
   AND (cardinality(sqlc.arg(status_filters)::text[]) = 0 OR c.status = ANY(sqlc.arg(status_filters)::text[]))
   AND (
       sqlc.arg(search_query)::text = ''
@@ -273,6 +313,16 @@ WHERE group_record.id = sqlc.arg(group_id)
   AND group_record.owner_id = sqlc.arg(owner_id)
   AND c.deleted_at IS NULL
   AND (c.owner_id = sqlc.arg(owner_id) OR c.status = 'active')
+  AND EXISTS (
+      SELECT 1
+      FROM component_repo.component_versions version
+      WHERE version.component_id = c.id
+        AND version.deleted_at IS NULL
+        AND (
+            c.owner_id = sqlc.arg(owner_id)
+            OR (c.status = 'active' AND version.status <> 'draft')
+        )
+  )
   AND (
       sqlc.arg(search_query)::text = ''
       OR CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END ILIKE '%' || sqlc.arg(search_query) || '%'

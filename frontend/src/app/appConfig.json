@@ -100,6 +100,7 @@
     "candidateValidate": "/api/v1/component-candidates/{candidateId}/validate",
     "validationReport": "/api/v1/validation-reports/{reportId}",
     "componentDetail": "/api/v1/components/{componentId}",
+    "componentPurge": "/api/v1/components/{componentId}/purge",
     "componentVersions": "/api/v1/components/{componentId}/versions",
     "componentVersion": "/api/v1/component-versions/{versionId}",
     "componentVersionDelete": "/api/v1/component-versions/{versionId}",
