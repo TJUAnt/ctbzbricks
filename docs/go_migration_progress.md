@@ -1,6 +1,6 @@
 # Go 后端迁移进度
 
-> 最后更新：2026-08-20（G8 Component 永久删除改为 redaction/tombstone）
+> 最后更新：2026-08-26（Part Search meshopt GLB 静态缩略图）
 > 状态依据：[go_component_migration_plan.md](./go_component_migration_plan.md)
 > 跟进指南：[go_migration_followup_guide.md](./go_migration_followup_guide.md)
 > Studio Part Library 路线图：[go_part_library_studio_roadmap.md](./go_part_library_studio_roadmap.md)
@@ -15,16 +15,17 @@
 | G2 PostgreSQL schema baseline | Completed | `component_repo` baseline、authority、sqlc 与 PostgreSQL contract 已验收 |
 | G3 组件目录、版本和分组 | Completed | GET 只读与 Candidate 来源链约束已完成 hardening 并通过 PostgreSQL contract |
 | G4 Artifact 与上传会话 | Completed | source Artifact 数据库不可变边界、直传 RLS 与服务端清理权限均已通过 contract |
-| G5 持久化任务系统 | Completed | Logical Job / Execution / Attempt、PostgreSQL 状态机、attempt-fenced lease/retry/cancel、event/outbox 与 Go/Python Worker 已验收 |
-| G6 导入、解析与候选流程 | Completed | upload -> verify dependency -> Python parse -> Snapshot/Candidate/Draft 异步闭环已验收 |
-| G7 关系、接口、校验和预览 | Completed | Python 关系检测、Go 关系审核/真实发布校验/预览与 PostgreSQL 不变量已验收 |
-| G8 前端切换与 Python API 删除 | In progress | 主要 Component Repo 前端能力已切换；Part preview Go 代码与真实库 v8/v9 数据交接已执行；Studio-based Part Library 基准 roadmap 已固化；真实浏览器/RLS 验收与 Python 公共 router 删除尚未完成 |
+| G5 持久化任务系统 | Completed | Logical Job / Execution / Attempt、PostgreSQL 状态机、attempt-fenced lease/retry/cancel、event/outbox 与语言无关 Worker 协议已验收 |
+| G6 导入、解析与候选流程 | Completed | upload -> verify dependency -> Go parse -> Snapshot/Candidate/Draft 异步闭环已验收 |
+| G7 关系、接口、校验和预览 | Completed | 关系检测/审核、可选版本验证、预览与 PostgreSQL 不变量均由 Go 承担 |
+| G8 前端切换与 Component Repo Python 删除 | In progress | 主要前端能力与全部 Component Repo task consumer 已切换 Go；尚需真实浏览器/RLS 验收和旧 Python 公共 router 删除 |
 
-当前 Go 后端已经覆盖 Component Repo 的目录、版本、分组、订阅、Artifact、上传、持久任务、导入、Candidate、关系审核、connector/interface、验证、发布门禁、BOM 和预览闭环。Python 的目标保留边界只有 `component.import.parse` 与 `component.relations.detect` 两个独立算法 Worker。G8 已切换 Component Repo 的主要前端调用；Part preview 已切到 `/api/v1` 并在真实开发库执行 v8/v9 schema 与 legacy Rebrickable external ID 交接。后续 Part Library 数据基准改为 Studio LDraw snapshot，详见 [Studio Part Library 基准路线图](./go_part_library_studio_roadmap.md)。真实 Supabase 非 owner Preview RLS、浏览器双语言网络流量和旧 Python router 删除仍需完成。代码阶段状态与当前环境运行状态必须分开判断，详见[跟进指南](./go_migration_followup_guide.md)。
+当前 Go 后端已经覆盖 Component Repo 的目录、版本、分组、订阅、Artifact、上传、持久任务、导入、解析、Candidate、关系检测/审核、connector/interface、可选版本验证、直接发布、BOM 和预览闭环。发布与验证已解耦：owner 可直接发布 Draft，验证由用户在 Draft/Published 上显式异步触发，最近报告在详情页展示且不改变发布状态。`component.import.parse` 与 `component.relations.detect` 均由 Go Worker 执行，旧 Python import/relation worker adapter 与启动入口均已删除。上传弹窗以 complete `202` 为终点，Worker 持久执行 verify/parse/BOM/GLB；Candidate 默认只展示整体 GLB 与 BOM，Connector 按开关加载。BOM 已逐项返回 `geometryStatus`，缺少几何的 Part 保留并标注，整体 GLB 采用记录 omissions 的 partial preview。G8 已切换 Component Repo 的主要前端调用；Part preview 已切到 `/api/v1`，Studio LDraw snapshot 已成为 active Part Library。真实 Supabase 当前已执行 Goose v12 与 Studio connector 导入，active library 为 `preview_ready/relation_ready=true`；collider 采用 metadata-only。真实 Supabase 非 owner Preview RLS、完整双语言网络矩阵和旧 Python 公共 router 删除仍需完成。代码阶段状态与当前环境运行状态必须分开判断，详见[跟进指南](./go_migration_followup_guide.md)。
 
 ## 2. 已确认决策
 
-- [x] Go 作为后端系统主体，Python 作为算法插件。
+- [x] Component Repo 目标运行时为 Go-only；其他 BrickBuilder 领域是否保留 Python 由各自路线图决定。
+- [x] `component.relations.detect` 已迁移为 Go Worker；不得新增 Component Repo Python task type。
 - [x] 技术栈采用 Gin、PostgreSQL、sqlc、pgx/v5、pgxpool。
 - [x] 增加 Goose 作为 Go 目标 schema migration 工具。
 - [x] 当前开发阶段不承担旧 API、在线流量、MySQL 或开发数据兼容义务。
@@ -34,6 +35,7 @@
 - [x] 新组件 API 使用 `/api/v1`，不要求复刻旧 FastAPI DTO。
 - [x] migration authority 按 PostgreSQL schema/domain 分配：Goose 独占 `component_repo`；Alembic 暂时管理未迁移的 legacy `public` 域及 provider-owned Supabase `storage` policy，双方不得跨边界管理同一对象。
 - [x] Go API 继承现有 i18n、领域内容和结构化错误不变量。
+- [x] ComponentVersion 发布不要求 ValidationReport；验证是用户显式触发的可选异步质量报告，可作用于 Draft/Published，失败不阻止或撤销发布。
 
 ## 3. G0 完成记录
 
@@ -633,7 +635,8 @@ G1-G7 的代码与隔离测试阶段验收已完成，但 2026-08-14 Review 确�
 - Part/Library preview 仍走旧 `/api`，FastAPI 仍挂载 Component Repo router，因此仓库中仍存在两套公共入口。
 - G5-G8 大量实现仍处于未提交工作树，当前 Git HEAD 不能复现已验证能力。
 - Nginx 只做反向代理/HTTPS/负载均衡；不新增业务网关。
-- 删除旧 Python Component Repo 公共路由和仅为这些路由服务的 schema/service；保留 `component.import.parse` 与 `component.relations.detect` 两个明确 Worker 算法边界。
+- 当时计划删除旧 Python Component Repo 公共路由、保留两个算法 Worker；该目标已被 2026-08-22
+  Component Repo Go-only 决策取代，见第 41 节。
 - G7 当前 GLB 是确定性的 structural preview；若后续要求 LDraw 精细表面 mesh，可在不改变 version-addressed Artifact/Task/API 契约的前提下升级 generator version。
 - Auth verifier 已兼容 Supabase ES256/JWKS 和 legacy HS256；部署时需要保证 issuer/JWKS URL 指向同一个 Supabase 项目。
 
@@ -1209,7 +1212,8 @@ resource catalog/release notes。
 - 剩余未闭环点是 token 来源：本地 HS256 smoke JWT 不是 Supabase Auth token，直接调用
   Supabase Storage sign endpoint 返回 `signature verification failed`。后续需要使用真实
   Supabase 登录 access token 重跑 API GET。
-- 单个 Part GLB 的批量 materialize 仍是后续 TODO；当前仍支持按单个 Part preview API 逐个生成。
+- Part GLB 全库预生成已在本文件第 61 节闭环；单 Part preview API 继续承担显式补建，维护脚本承担
+  Part Library 更新后的可恢复批量回填。
 - 颜色表目前为基础 LDraw color code 映射；如需 Studio/BrickLink/LEGO 颜色精确一致，后续应接入
   版本化颜色表。
 
@@ -1299,69 +1303,158 @@ i18n 影响：新增 Component 详情页整体删除按钮、确认标题、确�
 遗留：本次不做物理删除 Storage artifact、不清理历史 deleted Component 关联行；如需释放对象存储容量，
 需要单独设计可审计的 retention/GC 策略。
 
-## 35. G8 Component 永久删除 / purge redaction
+## 35. G8 Component 删除简化与强删除 TODO
 
-日期：2026-08-20
+日期：2026-08-21
 阶段：G8 / Component Repo 生命周期与数据清理
-状态：Completed for redaction code path；真实库未执行 v10
+状态：Completed for simplification；真实库无需执行 v10
 
 完成内容：
 
-- [x] 经设计复盘，撤销在线 hard purge 路线：不在 `component.purge` Worker 中追逐
-  `ComponentVersion -> Import -> SceneSnapshot -> Candidate -> Artifact -> Task` 的完整 FK 拓扑。
-- [x] 新增 [Component 删除、脱敏与 GC 技术方案](./component_deletion_retention_gc.md)，明确产品“永久删除”采用
-  `soft delete + redaction + async storage delete`；物理删除留给后续独立 maintenance/GC。
-- [x] 重写 Goose v10 `00010_component_purge.sql`：新增
-  `component_repo.redact_owned_component(actor, component, current_task)`，将目标用户 Component 写为
-  tombstone，脱敏用户主字段、版本 label/release note/metadata、相关 task payload/result/outbox/event
-  params，并将可独占 Artifact 标记 `deleted_at`。
-- [x] v10 只通过会话变量 `component_repo.component_redaction=on` 开窄口：允许 redaction 函数内部
-  tombstone source Artifact、脱敏 published version 用户字段、脱敏 terminal task payload；普通代码路径仍保留
-  source Artifact 不可删除、发布版本结构不可变和 terminal task 不可变保护。
-- [x] redaction 不物理删除 `imports`、`scene_snapshots`、`candidates`、`validation_reports`、
-  `upload_sessions`、`artifacts`、`tasks`、`task_events` 或 `outbox_events` 行；共享 Storage/Artifact
-  保守跳过，不误删其它活跃版本仍引用的对象。
-- [x] 新增 `POST /api/v1/components/:componentId/purge`：owner-only，要求 `confirmComponentName`
-  精确匹配用户原始组件名，API 只创建 durable `component.purge` 任务，不在 HTTP 请求里执行删除。
-- [x] 新增 Go Worker `component.purge` handler：先按任务 payload 中冻结的 storage object 清单幂等删除
-  同 provider/bucket 对象，再调用数据库 redaction function；成功后 redacts 当前 purge task payload，只保留
-  `componentId + purged=true`。Task result 改为 `componentRedacted / versionsRedacted /
-  artifactsTombstoned / relatedTasksRedacted / storageObjectsDeleted`。
-- [x] 前端 Component 详情页新增独立“永久删除”入口，要求输入组件名称确认；提交后等待 purge task 成功再返回组件仓库列表。
-- [x] 更新 `docs/go_task_protocol.md`，记录 `component.purge` 是 redaction/tombstone 语义，不是 hard delete。
+- [x] 经设计复盘，确认当前直接目标是“owner 删除 Component 后普通列表、详情、分组、公开访问不可见”，
+  不要求“所有信息立即清除”。
+- [x] 保留既有 `DELETE /api/v1/components/:componentId` soft delete 语义：
+  `components.status='archived'`、`deleted_at/deleted_by` 写入审计字段；不删除版本、导入、快照、候选、
+  artifact、task 或 Storage object。
+- [x] 移除未执行到真实库的 Goose v10 `00010_component_purge.sql`、`component_repo.redact_owned_component`
+  函数、`component_purge.sql`、sqlc generated purge query、Go `component.purge` Worker handler、
+  task type、API 路由和 Service 方法；Goose head 回到真实开发库当前 v9。
+- [x] 前端移除独立“永久删除”入口、确认弹窗、purge adapter、`componentPurge` 配置和相关测试；
+  Component 详情页只保留“删除组件”soft delete 入口。
+- [x] 从任务协议删除 `component.purge`，避免后续开发者误以为当前系统支持强删除任务。
+- [x] 将 [Component 删除、脱敏与 GC TODO](./component_deletion_retention_gc.md) 降级为 future TODO，
+  明确当前实现不得引入 `component.purge` API/Worker/Goose migration；强删除、脱敏、Storage 清理和
+  FK-safe GC 后续按宽度优先单独评估。
 
 验证结果：
 
 ```text
-GOCACHE=/private/tmp/ctbzbricks-go-cache go tool sqlc generate PASS
-GOCACHE=/private/tmp/ctbzbricks-go-cache go tool sqlc vet      PASS
-GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./db/migrations ./internal/component ./cmd/worker PASS
-GOCACHE=/private/tmp/ctbzbricks-go-cache ./scripts/test-postgres.sh PASS（沙箱外；隔离 PostgreSQL Goose v1->v10、startup contract、integration tests）
-frontend npm run i18n:check                                    PASS（2 locales / 10 namespaces；catalog frontend-2026.08.17.2）
-frontend npm test                                              PASS（13 files / 60 tests）
-frontend npm run build                                         PASS（仅既有 Vite deprecation/chunk-size warnings）
-git diff --check                                               PASS
-GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./...         PASS（首次遇到一次 `internal/auth` ES256 tamper 瞬时失败；单包与全量复跑均 PASS）
-python -m pytest                                               NOT RUN（当前 shell 无 python 命令）
-python3 -m pytest                                              NOT RUN（系统 Python 缺少 pytest 模块）
-bundled python3 -m pytest                                      NOT RUN（Codex bundled Python 缺少 pytest 模块）
+backend-go:
+- gofmt -w internal/component/service.go internal/component/handler.go internal/component/service_integration_test.go internal/component/types.go internal/task/types.go cmd/worker/main.go
+- GOCACHE=/private/tmp/ctbzbricks-go-cache go tool sqlc generate
+- GOCACHE=/private/tmp/ctbzbricks-go-cache go tool sqlc vet
+- GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./db/migrations ./internal/component ./cmd/worker
+- GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./...
+- GOCACHE=/private/tmp/ctbzbricks-go-cache ./scripts/test-postgres.sh
+  - Goose migrated only 00001..00009 and reported version 9
+  - isolated PostgreSQL migration and startup contract: PASS
+
+frontend:
+- npm run i18n:check
+- npm test
+- npm run build
+
+repo:
+- git diff --check
+- runtime grep confirmed no remaining component.purge / purgeComponent / component_purge references
+  outside docs and historical release notes.
+
+legacy Python backend:
+- python -m pytest NOT RUN（当前 shell 无 python 命令）
+- python3 -m pytest NOT RUN（系统 Python 缺少 pytest 模块）
+- .venv/bin/python -m pytest NOT RUN（仓库 .venv 缺少 pytest 模块）
 ```
 
-i18n 影响：新增永久删除确认 UI 文案、name mismatch 提示，以及
-`component_repo.component_purge_confirmation_failed`、
-`component_repo.component_purge_failed`、`component_repo.component_purge_storage_failed` 三个错误码文案；
-生产语言 `zh-CN`、`en-US` 已同步，`catalogVersion` 升级为 `frontend-2026.08.17.2`，
-`contentHash=cee3d241508a132e7b2b7ba05672df74f59ce8489263ac438a723dc1b1fe0d62`，并更新
-`I18N_RELEASE_NOTES.md`。Component 名称继续作为用户内容原样输入/比较；Component ID、task type、
-Storage key、删除计数、任务状态和 JSON key 均为机器数据，不翻译。
+i18n 影响：移除未采用的永久删除 UI 文案和 purge 错误资源；普通“删除组件”文案继续保留。
+资源版本更新为 `frontend-2026.08.21.1`，
+`contentHash=93479d839918ae1af7dc517030383981ad8ff5a7d50312f60f2a338761fae8b9`。
+Component 名称继续作为用户内容原样展示/插值；Component ID、删除审计字段、Storage key、状态和
+JSON key 仍为机器数据，不翻译。
 
 遗留：
 
-- 本次只实现 redaction 代码路径与隔离 PostgreSQL contract，不对真实 Supabase 执行 Goose v10，也不 purge 任何真实 Component。
-- purge 成功后仍保留当前 purge task 的最小执行记录，作为前端完成状态和审计依据；如果未来要求“连 purge task tombstone 都删除”，需要另行设计异步完成通知或 admin-only 清理策略。
-- 物理释放数据库行空间不属于在线 purge；后续按 `component_repo.gc` / maintenance roadmap 另行实现 dry-run、retention period 和 FK-safe batch cleanup。
+- 当前删除不释放数据库行空间或对象存储容量，也不脱敏历史 task/import/artifact metadata。
+- 如果后续确实需要强删除/隐私擦除/容量回收，再从 TODO 文档中按独立切片实现 redaction、Storage cleanup
+  或 admin-only GC；不要把这些能力混入当前 soft delete 主线。
 
-## 36. 更新模板
+## 36. G8 upload complete 422 诊断日志
+
+日期：2026-08-22
+阶段：G8 / 真实浏览器与 Supabase Storage 验收
+状态：In progress；诊断增强已完成
+
+背景：
+
+- 真实浏览器上传 Component 时，`POST /api/v1/component-imports/upload-sessions/:sessionId/complete`
+  返回 `422 component_repo.upload_session_complete_failed`。
+- 真实 `storage.objects` policy 已确认包含 owner-scoped authenticated INSERT/SELECT，以及 preview
+  managed SELECT；缺少 upload SELECT policy 已被排除。
+- 失败 session 对应的 Storage object 事后查不到，但 Go complete 失败路径会执行
+  `failAndCompensate` 并尝试删除 object，因此事后对象缺失不能区分“前端未上传”和“complete 校验失败后被补偿删除”。
+
+完成内容：
+
+- [x] 在 `artifact.Service.CompleteUploadSession` 的 preflight 分支加入内部 warning 日志：
+  - `no_files`
+  - `storage_provider_bucket_mismatch`
+  - `storage_object_not_found`
+  - `storage_head_unavailable`
+  - `storage_metadata_mismatch`
+- [x] 日志只包含机器诊断字段：`uploadSessionId`、`ordinal`、`artifactId`、`artifactType`、
+  provider/bucket、expected/actual size、expected/actual content type 和错误对象；不改变公共 API
+  响应，不向前端暴露 Storage key、SQL、路径或 provider 原始响应正文。
+- [x] API router 将同一个结构化 logger 注入 artifact service，便于与请求日志按时间和 session 关联。
+
+验证结果：
+
+```text
+gofmt -w internal/artifact/service.go internal/httpapi/router.go
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./internal/artifact ./internal/httpapi ./cmd/api PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./... PASS
+```
+
+i18n 影响：无。仅新增内部日志，不新增/修改用户可见文案、API error code、任务进度或资源 catalog。
+
+下一步：
+
+- 重启 Go API 后重新上传一次 Component。
+- 在后端日志中查找 `Component upload completion failed preflight`，用 `reason` 判断下一步：
+  - `storage_object_not_found`：浏览器 upload 没有留下对象，或 Go 使用的 JWT/路径读不到对象；
+  - `storage_head_unavailable`：Supabase Storage info 请求或凭据配置异常；
+  - `storage_metadata_mismatch`：查看 size / MIME 差异，决定是前端 upload content type 还是 Go 校验规则需要调整。
+
+## 37. G8 Studio .io MIME mismatch 修复
+
+日期：2026-08-22
+阶段：G8 / 真实浏览器与 Supabase Storage 验收
+状态：Completed for MIME fix；需重启 Go API 后重试真实上传
+
+背景：
+
+- 诊断日志确认真实上传失败根因为 `storage_metadata_mismatch`：
+  - `artifactType=studio_io`
+  - `expectedSize=275136`
+  - `actualSize=275136`
+  - `expectedContentType=application/octet-stream`
+  - `actualContentType=application/x-studioformat`
+- 因 size 一致且 Storage policy 已确认存在 owner-scoped authenticated INSERT/SELECT，本次不是 RLS 缺失或对象丢失问题，而是 Go 对 Studio `.io` 的 MIME 校验过窄。
+
+完成内容：
+
+- [x] 将 `studio_io` 的首选 MIME 从 `application/octet-stream` 调整为
+  `application/x-studioformat`；前端 upload session 返回的 `.io` `contentType` 也随之使用该值。
+- [x] `studio_io` 校验同时接受 `application/x-studioformat` 与 `application/octet-stream`，避免不同浏览器或 Supabase 元数据行为导致同类误拒。
+- [x] `ldraw_ldr` / `ldraw_mpd` 继续保持 `text/plain`，不放宽为任意 binary。
+- [x] mismatch 诊断日志从单个 `expectedContentType` 改为 `expectedContentTypes`，便于后续排查 MIME 别名。
+- [x] 新增单元测试覆盖 Studio MIME 首选值、Supabase Studio MIME、octet-stream 兼容、参数化 MIME，以及 LDraw MIME 边界。
+
+验证结果：
+
+```text
+gofmt -w internal/artifact/service.go internal/artifact/service_test.go
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./internal/artifact ./internal/httpapi ./cmd/api PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./... PASS
+```
+
+i18n 影响：无。只调整内部 MIME 校验和 upload session 机器字段；不新增/修改用户可见文案、API error code、任务进度或资源 catalog。
+
+下一步：
+
+- 重启 Go API。
+- 重新上传 Studio `.io` Component；不要复用已 failed 的 upload session。
+- 若 complete 通过但后续任务停住，再查看 `component.artifact.verify` / `component.import.parse` task 状态与 Worker 日志。
+
+## 38. 更新模板
 
 每次完成迁移工作后追加：
 
@@ -1376,3 +1469,1233 @@ Storage key、删除计数、任务状态和 JSON key 均为机器数据，不�
 ```
 
 阶段只有满足路线图中的全部验收条件后才能标记为 `Completed`。
+
+## 39. G6/G8 `component.import.parse` 迁移到 Go Worker
+
+日期：2026-08-22
+阶段：G6 import parse 执行者迁移 / G8 真实上传 smoke 前置修复
+状态：Completed for import parse migration；`component.relations.detect` 仍保留为 Python 算法 Worker
+
+背景：
+
+- 真实浏览器上传 `.io` 后，Go API 已能完成 upload session 并创建 durable tasks，但前端继续轮询
+  `/api/v1/tasks/:taskId`，根因是 `component.import.parse` 仍需要单独启动 Python Worker。
+- 目标是只保留一个常驻 Go Worker 处理上传后的验证、解析、validation、preview 等 Go 已迁移任务；
+  不在本次迁移关系检测算法。
+
+完成内容：
+
+- [x] 新增 Go LDraw/Studio import parser：
+  - 支持 Studio `.io` zip 中的 `model.ldr` 抽取；
+  - 支持 `.ldr` / `.mpd` type 1 reference、`0 FILE` / `0 NOFILE` / `0 Name:`；
+  - 产出 SceneSnapshot document、BOM、parse issues、summary、interface/structure/geometry hash；
+  - 对 invalid payload、unsupported artifact、缺失 `model.ldr`、invalid UTF-8 等返回稳定 parse failure。
+- [x] 新增 deterministic UUIDv5 helper，沿用 Python Go-owned worker 的 namespace，使
+  snapshot/candidate/component/draft-version/studio-exchange ID 对同一 import 可重试、幂等。
+- [x] 新增 `component.import.parse` Go handler：
+  - 读取 verified immutable artifact；
+  - 校验 object sha256；
+  - Studio `.io` 派生 verified `ldraw_ldr` artifact，并设置 `derived_from_artifact_id`；
+  - 在同一 PostgreSQL transaction 中写入 Import succeeded、SceneSnapshot、Candidate、
+    Draft ComponentVersion；
+  - handler 成功返回后，由共享 Go task runner 完成 task succeeded，满足
+    `sync_import_parse_task_state` trigger 对 import/task 顺序的约束。
+- [x] `cmd/worker` 注册 `component.import.parse`，因此开发期上传链路不再要求启动
+  `python -m src.tools.run_component_import_worker`。
+- [x] 更新 `backend-go/README.md`、`docs/go_task_protocol.md`、
+  `docs/go_component_migration_plan.md`，将 parse 执行者从 Python Worker 改为 Go Worker。
+
+验证结果：
+
+```text
+GOCACHE=/private/tmp/ctbzbricks-go-cache go tool sqlc generate PASS
+gofmt -w internal/uuidutil/uuid5.go internal/ingestion/import_parser.go \
+  internal/ingestion/import_parser_test.go internal/ingestion/parse_task.go \
+  internal/artifact/service_integration_test.go cmd/worker/main.go PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./internal/ingestion ./internal/artifact ./cmd/worker PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./... PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go tool sqlc vet PASS
+./scripts/test-postgres.sh PASS
+  - Goose migrated component_repo to version 9
+  - Go integration packages PASS
+  - backend/tests/test_go_component_import_worker.py: 9 passed
+  - isolated PostgreSQL migration and startup contract: PASS
+```
+
+i18n 影响：无。只迁移后台 worker 执行者与机器数据写入；不新增/修改用户可见文案、API error code、
+任务进度文案或资源 catalog。任务 payload/result、error code、JSON key、artifact type 和 hash
+继续作为机器字段，不翻译。
+
+遗留：
+
+- `component.relations.detect` 仍为 Python 算法 Worker；本记录当时尚未决定是否迁移，后续
+  2026-08-22 Go-only 决策已将其纳入 G8 必须迁移项。
+- 旧 Python import worker 源码暂未删除，可作为短期对照与回退参考；不要在开发流程中继续要求它常驻。
+- `scripts/start-dev.sh` 仍只启动 Go API + frontend；真实上传 smoke 需要另开一个
+  `cd backend-go && go run ./cmd/worker`。
+
+下一步：
+
+- 重启 Go API 与 Go Worker 后，重新上传一个 Studio `.io` Component；
+- 观察 `component.artifact.verify` 与 `component.import.parse` task 应依次进入 `succeeded`，
+  前端不应继续卡在“组件处理中”。
+
+## 40. G6/G8 Python import Worker 清理
+
+日期：2026-08-22
+阶段：G6 import parse 收尾 / G8 mixed topology 清理
+状态：Completed
+
+背景：
+
+- `component.import.parse` 已迁移到 Go Worker 后，继续保留 Python import worker adapter、
+  import worker launcher 和专项 pytest 会制造两套执行路径，容易让开发环境再次启动错误 worker。
+- `component.relations.detect` 仍是 Python 算法 Worker，因此不能直接删除所有 Python task
+  adapter 代码；需要先把关系 Worker 复用的通用 claim/lease/event helper 从 import worker 中拆出。
+
+完成内容：
+
+- [x] 新增 Python 共享 `GoTaskWorker` 基类，仅服务尚未迁移的 Python 算法 Worker。
+- [x] `go_relation_worker.py` 改为继承共享 `GoTaskWorker`，不再依赖 import worker。
+- [x] 删除旧 Python import worker adapter 与启动入口：
+  - `backend/src/component_repo/go_import_worker.py`
+  - `backend/src/component_repo/go_import_parser.py`
+  - `backend/src/tools/run_component_import_worker.py`
+  - `backend/tests/test_go_component_import_worker.py`
+  - `scripts/start-component-import-worker.sh`
+  - `scripts/start-component-import-worker.ps1`
+- [x] `scripts/start-dev.sh` / `scripts/start-dev.ps1` 不再启动 Python Import Worker；
+  Go Worker 负责 `component.import.parse`。
+- [x] 开发拓扑默认只启动一个 Go Worker；Python Relation Worker 改为显式 opt-in，
+  仅在设置 `START_PYTHON_RELATION_WORKER=1` 时启动 `component.relations.detect`。
+- [x] `backend-go/scripts/test-postgres.sh` 不再运行已删除的 Python import worker pytest；
+  Go ingestion/artifact integration tests 覆盖 import parse path。
+- [x] `backend-go/README.md` 和当前进度摘要同步为 Go import parse / Python relation-only topology。
+
+验证结果：
+
+```text
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./internal/ingestion ./internal/artifact ./cmd/worker PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go test ./... PASS
+GOCACHE=/private/tmp/ctbzbricks-go-cache go tool sqlc vet PASS
+./scripts/test-postgres.sh PASS
+  - Goose migrated component_repo to version 9
+  - Go integration packages PASS
+  - isolated PostgreSQL migration and startup contract: PASS
+```
+
+i18n 影响：无。清理对象是后台 worker 源码、开发启动脚本和工程文档；不新增/修改 UI 文案、
+API error code、任务进度文案、资源 catalog 或用户内容处理规则。
+
+遗留：
+
+- Python 代码中仍保留 `component.relations.detect` 算法 Worker，但默认开发拓扑不启动；
+  当时是否继续迁移仍待决策；2026-08-22 已确定必须迁移到 Go，见下一节。
+- 旧 FastAPI Component Repo 公共 router 删除仍属于 G8 后续切片；本次只清理 import worker。
+
+下一步：
+
+- 使用 `scripts/start-dev.sh` 或单独 `cd backend-go && go run ./cmd/worker` 重新做真实上传 smoke；
+  默认不应再出现任何 Python Worker 进程。
+
+## 41. Component Repo Go-only 目标固化
+
+日期：2026-08-22
+阶段：G8 / 架构治理与 Python 退出边界
+状态：Decision completed；运行时迁移仍 In progress
+
+已确认决策：
+
+- [x] Go-only 先约束 Component Repo，不宣称整个 BrickBuilder 后端已经 Go-only。
+- [x] Component Repo 的公共 API、事务编排、持久任务、解析、关系检测、校验、预览和
+  Part Library 工具链目标执行者均为 Go。
+- [x] `component.relations.detect` 是唯一已知 Python 过渡实现，不是长期例外；不得新增
+  Component Repo Python task type、公共 API、持久化模型或扩大过渡 payload/result。
+- [x] G8 完成门槛增加关系检测 Go handler、Python relation worker/adapter/launcher 删除，
+  并要求不启动 Python 也能完成上传到发布/预览的完整业务链路。
+- [x] 语言无关任务协议继续保留，用于持久化契约、迁移对照和可替换性，不作为 Python
+  长期运行时授权。
+
+文档同步：
+
+- [x] 仓库级 `AGENTS.md`、`backend-go/README.md`、长期原则、阶段计划、任务协议、G8
+  切换清单和跟进指南统一为 Component Repo Go-only。
+- [x] Studio Part Library 后续 importer/worker 新能力默认使用 Go。
+- [x] schema baseline 未修改：其数据库 authority 与语言无关边界没有发生变化。
+
+验证结果：
+
+```text
+documentation consistency grep  PASS
+git diff --check                PASS
+runtime tests                   NOT RUN（仅文档治理变更）
+```
+
+i18n 影响：无。仅修改工程与迁移文档；不修改 UI 文案、API error code、任务 code、locale/timezone、
+资源 catalog、用户内容或官方翻译选择规则。
+
+下一步：
+
+- 为 `component.relations.detect` 固定 Python 现状的 golden fixtures、input hash 和 PostgreSQL
+  写入不变量，恢复被清理掉的 relation worker PostgreSQL E2E 覆盖；
+- 实现 Go relation handler 并做等价/差异验收，通过后删除 Python relation worker、共享 adapter
+  和启动入口；
+- 完成真实浏览器/RLS 验收并删除 FastAPI Component Repo 公共 router，G8 才可标记 Completed。
+
+## 42. Component Repo Go API 契约文档
+
+日期：2026-08-22
+阶段：G8 / API 文档收口
+状态：Completed for current route inventory
+
+完成内容：
+
+- [x] 新增 [Component Repo Go API](./api.md)，覆盖当前 2 条健康检查和 48 条认证
+  `/api/v1` 路由。
+- [x] 对每条接口记录职责、主要输入/输出、owner/可见性边界，以及 HTTP 内短事务或 durable task
+  的执行逻辑。
+- [x] 记录上传 `verify -> parse` dependency、关系检测、发布校验、Component/Part Preview
+  materialize、任务取消和短期 Storage URL 流程。
+- [x] 明确旧 FastAPI、同步 multipart、Candidate Preview、GET 隐式 materialize、hard purge 和
+  `library-items` alias 不属于 Go API。
+- [x] API 文档已随 S5 更新：`component.relations.detect` 当前由 Go Worker 执行，不存在长期或
+  过渡 Python task 边界。
+- [x] 将 `docs/api.md` 加入仓库级 Go migration preflight；后续路由、DTO、授权或执行流程变化必须
+  同步更新 API 文档。
+- [x] 为仓库 `docs/*` ignore 规则增加精确的 `!docs/api.md` 例外，确保该契约可进入版本控制。
+
+验证结果：
+
+```text
+registered route coverage check  PASS（50/50）
+git diff --check                 PASS
+runtime tests                    NOT RUN（仅文档变更）
+```
+
+i18n 影响：无。新增的是工程 API 文档，不修改 UI 文案、公共 error/task code、资源 catalog、
+locale/timezone 处理、用户内容或官方翻译规则。
+
+## 43. G8 / Studio Part Library S5 connectivity 与 Go relation Worker
+
+日期：2026-08-22
+阶段：G8 / Studio Part Library S5
+状态：Completed for code and isolated validation；真实数据库迁移/导入未执行
+
+完成内容：
+
+- [x] 新增 Goose v10 `00010_part_library_connectivity.sql`：
+  - `part_library_versions.preview_ready/relation_ready`；
+  - connector/collider count、source hash、parser version；
+  - 版本化、RLS-enabled 的 `part_collider_definitions`。
+- [x] 新增 Go Studio connectivity/collider parser：
+  - `.conn` 支持已观测的 Axle、Ball、Hole、Stud、Fixed、Hinge、Rail、Slider record；
+  - Stud/Hole matrix 展开为可检测 connector definitions；
+  - `.col` 支持 type `9/8192` box，signed half-extents 规范化并保留原值；
+  - parser 与 importer 不依赖 Studio DLL；本机 DLL 只用于只读格式对照。
+- [x] `studio-import` 升级为 v2：校验 sidecar hash/size，确定性生成 source ID/hash，使用
+  staging + `CopyFrom` + pgx transaction 写 connector/collider，并显式计算两类 readiness。
+- [x] `component.relations.detect` 迁移到 Go Worker：
+  - 只接受 Candidate 冻结且 `relation_ready=true` 的 Part Library；
+  - input hash 覆盖 Part Library ID/source hash 与 connector source hash/parser version；
+  - 从版本化 connector definitions 识别既有三类兼容关系；
+  - 原子物化 RelationCandidate、ConnectorAnalysis、external Interface 与 Candidate/Draft
+    interface signature；不修改 SceneSnapshot transform。
+- [x] 删除旧 Python relation worker、共享 adapter、命令入口与 Bash/PowerShell launcher；开发拓扑
+  只由 Go Worker 消费 Component Repo task。
+- [x] 更新 schema baseline、迁移原则/计划、task protocol、API 契约、G8 inventory、跟进指南、
+  Studio roadmap 与 Go README。
+
+完整 Studio dry-run（未连接数据库）：
+
+```text
+manifest sha256          524fee2594a1e8023965e718b398b90d7bc8a10adc864dbbd84e64c77bc50e2b
+parts                    24,426
+geometry ready           24,373
+geometry failed              53（缺失 LDraw reference）
+connector files           8,881
+connector definitions   190,419
+connector failures            0
+connector source hash   0aab7080e5d1ba2f365037e22f09ee26518f507f7e4b70be394765221d2be7ac
+collider files            10,295
+collider definitions   1,876,415
+collider failures             0
+collider source hash    1266cefe0db7cd1db7cca8b94e480bba106bb1e4e03845724a1fa070f821e5b6
+preview_ready              true
+relation_ready             true
+```
+
+验证结果：
+
+```text
+GOCACHE=/private/tmp/ctbz-go-cache go test ./...  PASS
+backend-go/scripts/test-postgres.sh                PASS
+  - Goose up/down/up through v10                   PASS
+  - schema/API/task/worker/ingestion/workbench     PASS
+  - Go relation E2E: 3 connectors / 1 relation /
+    3 external interfaces + task terminal state    PASS
+full Studio importer --dry-run                     PASS（约 35 s）
+bash -n scripts/start-dev.sh scripts/dev-env.sh    PASS
+```
+
+i18n 影响：无。改动只涉及机器 ID、hash、parser/detector version、数据库能力字段和内部 task
+执行者；未新增用户可见文案、公共错误/进度 code、locale-sensitive 数据、资源 catalog 或翻译。
+
+已知边界与下一步：
+
+- 本次没有连接或修改真实数据库。真实执行前必须确认准确 `DATABASE_URL`，显式执行 Goose v10，
+  再用同一 manifest 运行 Studio importer v2；API/Worker startup 不代做迁移或回填。
+- S5 完成 collider 数据接入和 availability 标记，不包含精确 clearance/raycast 求解；不能把
+  `eligibility_clearance_data_available=true` 解释为已做精确碰撞验证。
+- G8 仍为 In progress：剩余门槛是真实 Supabase/browser/RLS 验收和旧 FastAPI Component Repo
+  公共 router 删除，不再包含 Python task Worker 迁移。
+
+## 44. S5 真实 Supabase 导入与 connector 容量压缩
+
+日期：2026-08-22
+阶段：G8 / Studio Part Library S5 真实环境收口
+状态：Completed
+
+执行事实：
+
+- [x] 在已确认的 Supabase EU West `postgres` 数据库执行 Goose v10/v11。
+- [x] 第一次逐行 collider 导入在事务内因 WAL 磁盘空间不足失败；PostgreSQL 自动回滚完整 importer
+  事务，核对确认没有半量 connector/collider 数据，数据库恢复后继续服务。
+- [x] 根据既定“PostgreSQL metadata / object storage large artifacts”边界，将 collider 默认改为
+  `metadata-only`：解析验证 10,295 个文件、1,876,415 条定义并保存 count/hash/parser/storage mode，
+  不在小容量 Supabase 展开 187 万数据库行。
+- [x] connector 正式导入 8,881 个文件、190,419 条定义，parse failure 为 0；active library 恢复
+  `preview_ready=true/relation_ready=true`。
+- [x] Goose v11 删除 Go relation query 未使用的 type/gender 全局索引。
+- [x] 经用户明确授权执行 connector 压缩维护：确认 active definitions 无 ConnectorAnalysis 引用，
+  临时关闭 relation readiness，删除可重建 active definitions，`VACUUM FULL`，再以去除重复 library
+  path/hash/parser JSON 的格式重导。retired library 29,853 条定义及其 464 条历史分析引用保留。
+- [x] 保留 `backend-go/scripts/update-studio-part-library.sh`；脚本要求精确数据库确认、默认完整
+  dry-run、默认 metadata-only collider，并对相同 active/ready manifest 默认 no-op。
+
+真实库最终证据：
+
+```text
+Goose version                         11
+database size before cleanup          546 MB
+after unused index removal            528 MB
+after active delete + VACUUM FULL     291 MB
+after compressed connector rebuild    408 MB
+connector table before                276 MB（初始）/ 258 MB（drop index 后）
+connector table after                 138 MB（heap 110 MB / indexes 28 MB）
+active connector rows                 190,419
+retired connector rows                 29,853
+active raw_params average                 180 bytes（原 404）
+connector source hash                 0aab7080e5d1ba2f365037e22f09ee26518f507f7e4b70be394765221d2be7ac
+collider source count                 1,876,415（metadata-only；stored rows 0）
+collider source hash                  1266cefe0db7cd1db7cca8b94e480bba106bb1e4e03845724a1fa070f821e5b6
+preview_ready / relation_ready        true / true
+```
+
+验证：
+
+```text
+isolated PostgreSQL migration/startup contracts through v10 PASS
+Go partlibrary/parser unit tests                         PASS
+real DB FK/reference guards                              PASS
+real DB post-import count/hash/readiness/size audit       PASS
+git diff --check                                         PASS
+```
+
+i18n 影响：无。此次只修改数据库机器数据、索引、hash/count/parser/storage mode 与开发运维脚本；
+没有修改用户可见文案、公共错误/任务 code、locale/timezone、资源 catalog 或翻译。
+
+后续边界：
+
+- 新 Studio snapshot 会产生新的不可变 library；保留旧 snapshot connector 会增加数据库容量。下一次
+  大版本更新前应评估 Supabase 容量，或把 connector/collider snapshot 进一步改为对象存储 bundle +
+  按 Part 加载，不能依赖反复 `VACUUM FULL` 作为长期数据模型。
+- 精确 clearance/raycast 需要可按 Part 读取的 collider bundle 与空间查询算法；本次 metadata-only
+  只证明输入可解析，不提供精确碰撞结论。
+
+## 45. 上传、BOM 与 Component GLB 主链问题盘点
+
+日期：2026-08-23
+阶段：G8 / 上传后核心产物收敛
+状态：主链 continuation、ready 门禁和默认结果页已完成；GLB 质量问题继续开放
+
+本次确认的产品目标：组件管理上传一个 Studio `.io` 后，Go-only 后台应持续完成真实零件清单
+和 ComponentVersion 整体 GLB；relation/connector/interface、发布校验、发布及精确碰撞不属于
+默认上传完成条件。
+
+代码审查事实：
+
+- [x] `UPLOAD-GLB-01`（P0，Resolved 2026-08-23）：parser v2 的 BOM 与 summary 已改为按
+  Scene 顶层入口实例递归展开；重复/嵌套模型按实例倍增，未使用定义不计入。
+- [x] `UPLOAD-GLB-02`（P0，Resolved 2026-08-23）：Parse Worker 在业务事务中创建首个 Preview
+  Logical Job/Execution、写入 Version preview task，并建立 `Preview -> Parse` dependency；前端不再
+  触发首次 `POST .../preview/materialize`。
+- [x] `UPLOAD-GLB-03`（P1，Resolved 2026-08-23）：Candidate ready 页默认读取并独立展示 Version
+  BOM 与整体 GLB；relation/connector/interface 只有用户开启连接信息开关后才读取。
+- [x] `UPLOAD-GLB-04`（P1，Resolved 2026-08-23）：冻结 Part Library 缺少 ready geometry 时允许
+  partial GLB；BOM 对每个 Part 返回 `ready/failed/missing`，Worker 结果和 Artifact metadata 记录
+  `omittedPartRefs` 与 `complete`。ready source 的路径/哈希/解析故障仍严格失败。
+- [x] `UPLOAD-GLB-05`（P1，Resolved 2026-08-23）：importer、validation、relation 和 preview
+  已统一使用 `backend-go/internal/scene` 的纯 Go world-part expansion。
+- [ ] `UPLOAD-GLB-06`（P2）：当前 GLB 的颜色、BFC/normal、多材质和 TEXMAP 支持有限，不能把
+  普通 mesh 可见等同于 Studio 视觉完全一致。
+- [ ] `UPLOAD-GLB-07`（P2）：当前整体 Component GLB 未压缩；旧 Python meshopt 仅作为行为/效果
+  参考，后续压缩仍必须留在 Go-only Worker 边界，不恢复 Python runtime 依赖。
+- [x] `UPLOAD-GLB-08`（P0，Resolved 2026-08-23）：SceneSnapshot document v2 已使用显式、有序
+  `rootInstances[]`；多个入口分别展开并合并，普通 Studio/MPD 生成一个 identity root，未引用定义不
+  自动推断为 root。数据库 `root_model_id` 保留为单主模型投影，展开权威输入为 document。
+
+已确认不应为本目标移除的边界：Upload Session、原始 Artifact 不可变、SHA-256、SceneSnapshot、
+冻结 Part Library、durable task、Component/Draft Version 和 version-addressed derived GLB。
+Candidate/Relation/Validation 数据模型暂不删除，只从默认上传主链解除关系/发布步骤耦合。
+
+详细影响、验收条件和解决顺序见[当前跟进指南第 7 节](./go_migration_followup_guide.md#7-2026-08-23-上传bom-与整体-glb-主链问题清单)。
+
+验证：
+
+```text
+mandatory migration preflight PASS（principles / plan / api / progress 全文核对）
+code path audit               PASS（frontend upload/preview/BOM；Go ingestion/workbench；legacy Python prewarm 仅作行为基线）
+runtime tests                 NOT RUN（本次只记录问题，不修改运行时代码）
+database/storage mutation     NOT RUN
+```
+
+i18n 影响：无。本次只增加内部工程问题记录，不修改 UI 文案、公共 API/task/error code、
+locale/timezone、用户内容、官方 Part 翻译、资源 catalog、content hash 或 release notes。
+
+后续更新：`UPLOAD-GLB-02/09/10` 已在第 47 节实现并收口，`UPLOAD-GLB-03` 已在第 48 节实现并
+收口。缺件诊断与 partial preview 已在第 50 节完成（`UPLOAD-GLB-04`）。
+
+## 46. BOM 与多 root Scene expansion 修复
+
+日期：2026-08-23
+阶段：G8 / 上传后核心产物收敛
+状态：Completed for parser v2 and BOM contract
+
+完成内容：
+
+- [x] 新增共享纯 Go `internal/scene` 展开器，输入为 SceneSnapshot 的有序 `rootInstances[]` 和
+  model definitions，输出带完整实例路径、规范化 Part 编号、颜色和 world transform 的叶子 Part。
+- [x] 展开按实例计数，不使用全局 model visited 去重；cycle 只按当前递归路径检测，并限制深度及
+  最大展开实例数量。
+- [x] Go importer 的 BOM、`partInstanceCount`、`submodelInstanceCount` 与 geometry hash 投影改为
+  使用共享展开结果；未被 root 使用的 model definition 不进入 BOM。
+- [x] Validation、Go relation detection 和 Component GLB 删除各自递归实现，统一消费共享展开器。
+- [x] parser 默认版本升级为 `component-repo-ldraw-parser-v2`，Snapshot schema 升级为
+  `component-repo-v2`；普通 Studio/MPD 生成一个 identity root instance，显式多 root 文档分别展开。
+- [x] Relation detector 与 Component Preview generator 因实例路径/展开算法变化分别升级为 v3/v2，
+  避免旧 Logical Job 或派生缓存被错误复用。
+- [x] `GET /api/v1/component-versions/:versionId/parts` DTO 不变，仍只读取冻结 BOM 并选择 reviewed
+  Part translation；API 文档补充 `partCount`、`quantity` 和多 root 计数语义。
+
+验证结果：
+
+```text
+focused scene/ingestion/workbench/config/artifact tests PASS
+backend-go make check                                  PASS（go test ./... / go vet / sqlc vet）
+isolated PostgreSQL                                    PASS（Goose v1 -> v11、integration、startup contract）
+multi-root fixture                                     PASS（同模型两个 root = 两组 Part 实例）
+nested multiplier fixture                              PASS（重复 child x nested = 4 个叶子实例）
+unused model fixture                                   PASS（未使用定义不进入 BOM）
+tracked Studio test.io                                 PASS（声明 210 bricks，BOM/summary 均为 210）
+legacy rootModelId adapter                             PASS（只读展开兼容）
+git diff --check                                       PASS
+```
+
+i18n 影响：无资源变更。BOM 编号、数量、实例 ID、root/model ID、parser/schema/generator version 和
+JSON key 都是机器数据；官方 Part 名称仍由 BOM API 按请求 locale 只选择 reviewed translation，
+缺失时返回 source fallback/missing。未修改资源 key、catalog version、content hash 或 release notes。
+
+历史边界：SceneSnapshot 不可变，因此 parser v1 / snapshot v1 已有记录不会被本次代码静默更新；
+旧开发版本若需要新 BOM 语义，应从原始 Artifact 重新导入生成 v2 Snapshot。本次没有连接、修改或
+回填真实 Supabase 数据库。
+
+## 47. 上传流程 API / Worker / Frontend 边界决策
+
+日期：2026-08-23
+阶段：G8 / 上传后核心产物收敛
+状态：Implemented；保留 API 控制的浏览器直传与 Worker 持久异步链
+
+已确认目标边界：
+
+- 浏览器调用 Go API 创建 owner-scoped upload session；API 生成并持久化可信 bucket/objectPath，
+  浏览器使用当前用户 JWT 只向该精确目标直传 Storage。客户端不能指定 key；Storage INSERT RLS
+  复核 pending file/session、owner、expiry 和精确 key。
+- upload complete 由 API 执行 Storage 完成确认、有界校验、短事务和持久任务编排；返回 `202`
+  后本次前端写交互结束。`202` 不表示解析或预览已完成。
+- Go Worker 持久推进 `artifact verify -> import parse/SceneSnapshot/BOM/Draft -> component preview
+  materialize/verified GLB`。关闭、刷新或离开页面不得中断主链，也不得要求浏览器再发起首次 Preview
+  materialize mutation。
+- 面向页面的聚合机器状态为 `processing | ready | failed`。只有 BOM 已落库且 ComponentVersion
+  整体 GLB 已生成、验证并可读取时才是 `ready`；parse task 单独 succeeded 仍不可预览。
+- `processing` 时前端不挂载 Viewer、不请求签名 Preview URL、不展示旧或尚未验证的中间模型，只通过 typed
+  semantic key 渲染处理状态。失败通过稳定 `code + params` 展示。
+- relation detection、connector/interface、validation 和 publish 仍是可保留的后续工作台能力，
+  但不属于普通上传主链的默认完成条件。
+
+当前实现状态：
+
+- [x] `UPLOAD-GLB-10`：确认保留 API 控制的浏览器直传；Alembic `20260823_0024` 将 INSERT policy
+  收紧到 API 已登记的 pending、未过期、owner-scoped 精确 key。authenticated DELETE 仍由既有
+  `20260809_0022` 禁止，补偿/清理由 Worker 服务端凭据执行。
+- [x] `UPLOAD-GLB-02`：Parse Worker 在 SceneSnapshot/BOM/Candidate/Draft 同一事务中创建 Preview
+  Logical Job/Execution 和 `Preview -> Parse` dependency；关闭浏览器不影响后继任务。
+- [x] `UPLOAD-GLB-09`：Import API 返回 `processingStatus` 与 `previewTaskId`，ready 要求 BOM/Draft 和
+  verified Preview Artifact；前端只读轮询聚合状态，ready 前不进入预览页，Preview loader 不再主动写入。
+- [x] `UPLOAD-GLB-03`（Resolved 2026-08-23）：ready 后默认并发读取并独立展示 Version BOM 与整体
+  GLB；relation/connector/interface 初始不请求，只有用户开启连接信息开关后才加载。
+
+本次修订文档：
+
+- `go_backend_migration_principles.md`：增加 Component 上传交互的不可变边界。
+- `go_component_migration_plan.md`：修正 G6/G7/G8 的服务端 continuation 与前端 ready 验收。
+- `api.md`：记录已实现上传主链与精确 Storage RLS，明确 Preview materialize 的重建/恢复定位。
+- `go_task_protocol.md`：补充 parse -> Preview 的幂等、可恢复后继任务契约。
+- `go_g8_frontend_cutover_inventory.md`：修正正常上传的前端状态门禁和网络请求验收。
+- `go_migration_followup_guide.md`：登记 `UPLOAD-GLB-09/10` 并调整解决顺序。
+- `I18N_FIELD_CLASSIFICATION.md`：明确处理状态为机器值，展示由 typed semantic key 完成。
+- `component_repo_storage_and_preview_cache.md`：用后续修订替换浏览器直传的早期 ADR 数据流。
+
+`go_component_schema_baseline.md` 与 `go_part_library_studio_roadmap.md` 本次不修改：聚合状态由现有
+Import、Task、BOM、Version Preview 和 Artifact 状态投影，没有新增持久化列；Part Library 的冻结
+版本、source hash 和几何输入边界也未改变。
+
+验证：
+
+```text
+backend-go make check                    PASS（go test ./... / go vet / sqlc vet）
+isolated PostgreSQL                     PASS（Goose v1 -> v11；Preview dependency/claim gate/Import projection）
+frontend i18n check/test/build          PASS（13 files / 60 tests / production build）
+Python backend pytest                   PASS（298 passed；含 Alembic head 与 Storage policy contract）
+Storage policy migration unit test      PASS（pending owner/expiry/exact-key）
+real Supabase Alembic                   PASS（0023 -> 0024）
+real Storage policy introspection       PASS（helper 存在；INSERT policy 调用 exact-session helper）
+```
+
+i18n 影响：上传处理状态页面继续使用既有 typed semantic key；API/数据库状态保持机器值，任务/失败
+保持 `code + params`。本次未新增生产文案或资源 key，因此 catalog version、content hash 和 release
+notes 无需因本次实现再次变化。
+
+## 48. Candidate 默认 GLB/BOM 与 Connector 按需加载
+
+日期：2026-08-23
+阶段：G8 / 上传 ready 结果页收口
+状态：Implemented；`UPLOAD-GLB-03` Resolved
+
+实现结果：
+
+- [x] Candidate 页面初次加载时并发读取 Draft Version 的只读 Preview 与冻结 BOM，默认结果区直接
+  展示整体 GLB 和零件清单。
+- [x] Preview 与 BOM 分别维护 loading/ready/error 状态；任一读取失败不会隐藏另一项已经成功的结果。
+- [x] 删除 Candidate 页进入时对 relation、connector 和 interface 的 eager GET；默认网络请求不再
+  包含这些连接审核投影。
+- [x] 新增“加载连接信息”开关。只有开启后才并发读取 Candidate relation、connector 和 interface；
+  开关不调用 relation detect mutation，关闭仅隐藏已加载的高级工作台。
+- [x] 组件或 Candidate 路由变化时关闭开关并清空旧连接数据，避免跨版本展示陈旧投影。
+- [x] `docs/api.md`、G8 inventory 与 follow-up guide 已同步默认读取集合和按需加载边界。
+
+验证：
+
+```text
+frontend npm run i18n:check  PASS（2 locales / 10 namespaces / catalog frontend-2026.08.23.1）
+frontend npm test            PASS（13 files / 60 tests）
+frontend npm run build       PASS（TypeScript + Vite production build）
+backend Python pytest        PASS（298 passed；首次沙箱运行因系统 semaphore 权限失败，非沙箱重跑通过）
+```
+
+i18n 影响：新增 `componentRepo:loadConnectorData`、
+`componentRepo:loadConnectorDataDescription` 和 `componentRepo:partsUnavailable` 三个 typed semantic
+key，生产语言 `zh-CN/en-US` 同步；catalog 升级为 `frontend-2026.08.23.1`，content hash 为
+`a1df75fe1221177d4efd58e7818fb311468895007441a96056d65a7633e42b81`，并已更新
+`I18N_RELEASE_NOTES.md`。Part 编号、数量、connector/relation/interface 状态和 API 字段保持机器数据，
+不翻译。
+
+未修改 Go API、Worker、数据库 schema 或 Storage 数据；本次没有连接或写入真实 Supabase。
+真实浏览器网络验收仍属于 G8 总体验收：需记录开关关闭时无 relation/connector/interface 请求，开启后
+才出现对应只读 GET。
+
+## 49. 上传弹窗终点与 Import 处理状态页修正
+
+日期：2026-08-23
+阶段：G8 / API、Worker 与前端交互边界修正
+状态：Implemented and runtime verified
+
+问题事实：
+
+- 后端 upload complete 已正确返回 `202` 并创建 durable verify/parse/preview 链，但前端
+  `createComponentImportWithProgress()` 随后仍在上传弹窗内调用 `waitForComponentImportReady()`；因此
+  弹窗会持续轮询到 GLB ready，与“API 上传交互到 complete 为止”的已批准边界不一致。
+- 2026-08-23 15:40 只读进程检查确认当时只有 Go API，没有 Go Worker。第一次启动 Worker 又因
+  `LDRAW_ROOT` 未配置而 fail closed，因此已排队 Import 没有消费者推进。
+
+修正结果：
+
+- [x] 上传 helper 在 complete `202` 后立即返回 `{importId,taskId,status}`，不再等待 Candidate、BOM
+  或 Preview ready。
+- [x] 所有上传入口收到 complete 后立即关闭弹窗，并导航到可刷新恢复的
+  `/component-repo/imports/:importId`。
+- [x] 新增 Import 状态页：只读轮询 `GET /api/v1/component-imports/:importId`；processing 时只显示
+  typed semantic key 对应的“解析中”，不加载 Viewer/Preview；ready 后才替换导航到 Candidate 页面。
+- [x] 状态页轮询不调用 parse、Preview materialize 或其他 mutation；Worker continuation 仍完全由
+  PostgreSQL durable task 驱动。
+- [x] 上传弹窗文案收敛为只等待文件上传完成，不再把 Worker 处理描述为弹窗 loading 生命周期。
+- [x] 本地 `backend-go/.env` 已配置只读
+  `LDRAW_ROOT='/Applications/Studio 2.0/ldraw'`，并成功启动独立 Go Worker。
+
+真实运行证据：
+
+```text
+Go Worker startup                         PASS（Storage=supabase；Part preview capability enabled）
+latest Import 30c0dc6b-...                succeeded
+component.artifact.verify 9afe35f1-...    succeeded
+component.import.parse b55a167a-...       succeeded
+component.preview.materialize 065775a4... succeeded
+```
+
+上述 Worker 对当前真实数据库和 Supabase Storage 执行了用户已发起上传的正常任务链；启动时也领取了
+历史 queued Preview backlog，其中缺少可用几何输入的旧任务按既有规则终态为
+`component_repo.preview_unavailable`。没有执行 migration、reset、reseed、purge 或额外数据清理。
+Worker 进程在本次开发会话中保持运行。
+
+验证：
+
+```text
+frontend npm run i18n:check  PASS（2 locales / 10 namespaces / catalog frontend-2026.08.23.2）
+frontend npm test            PASS（13 files / 60 tests）
+frontend npm run build       PASS（TypeScript + Vite production build）
+backend Python pytest        PASS（298 passed）
+git diff --check             PASS
+```
+
+i18n 影响：没有新增 key，但修正四组上传弹窗中英文文案，使“上传”和“Worker 处理”不再混为同一
+loading 生命周期。catalog 升级为 `frontend-2026.08.23.2`，content hash 为
+`645fa27f5f45b7c2e112a194a50e6b24246346c2937c07cdeb9d66b4f89e9b04`，并已更新
+`I18N_RELEASE_NOTES.md`。Import/task/status/ID 和路由参数继续作为机器数据，不翻译。
+
+## 50. BOM 几何状态与 Component partial preview
+
+日期：2026-08-23
+阶段：G7/G8 / `UPLOAD-GLB-04`
+状态：Completed；用户真实页面验收通过
+
+实现结果：
+
+- [x] `GET /api/v1/component-versions/:versionId/parts` 在冻结 BOM 上 LEFT JOIN 同一 Part Library 的
+  geometry，逐项返回稳定机器枚举 `geometryStatus=ready/failed/missing`；缺少 Part 主记录或 geometry
+  记录统一为 `missing`。
+- [x] Component Preview Worker 不再用 ready geometry 行数等于 BOM 种类数作为整件门禁；非 ready
+  Part 的实例从 GLB scene 省略，其他实例继续生成真实 mesh，完整 BOM 不删减。
+- [x] 任务结果和 derived Artifact metadata 写入稳定排序的 `omittedPartRefs` 与 `complete`，不暴露
+  本地文件路径、原始解析异常或 SQL 信息。
+- [x] 已声明 ready 的 source 若在 Worker 本地缺失、读取失败、SHA-256 漂移或递归解析失败，仍按
+  `component_repo.preview_unavailable` 失败；partial preview 只表达冻结 Part Library 的几何覆盖率，
+  不掩盖运行环境与快照一致性错误。
+- [x] generator 升级为 `component-preview-studio-ldraw-glb-v3`，旧 v2 状态通过现有 stale 机制重建。
+- [x] Candidate 默认结果页和 Component 详情页均对非 ready Part 显示 typed semantic key
+  `componentRepo:previewGeometryMissing`，同时保留名称、Part 编号与数量。
+
+验证：
+
+```text
+backend-go make check            PASS
+isolated PostgreSQL contracts   PASS（含 BOM ready/failed/missing 与 partial GLB）
+frontend i18n check             PASS（2 locales / 10 namespaces / frontend-2026.08.23.3）
+frontend tests                  PASS（13 files / 61 tests）
+frontend production build       PASS
+Python backend pytest           PASS（298 passed；仅因沙箱 semaphore 权限曾失败，沙箱外通过）
+Go API / Worker health          PASS（新版进程连接当前 Supabase）
+真实页面功能                     PASS（用户确认缺件标注与其余 GLB 渲染正常）
+```
+
+i18n 影响：新增一个用户可见 typed semantic key，`zh-CN/en-US` 同步；catalog 升级为
+`frontend-2026.08.23.3`，content hash 为
+`f79746ec4a2c52ec9061622ed0f43ff454eacdaaa761684a195ff1a3924bd726`。Part 编号、数量以及
+`ready/failed/missing` 状态为稳定机器数据，不翻译。
+
+## 51. 发布与可选版本验证解耦
+
+日期：2026-08-24
+阶段：G7/G8 / 版本生命周期与详情页
+状态：Implemented and migrated
+
+已确认的当前产品规则：
+
+- [x] owner 发布 Draft 不要求先生成或通过 ValidationReport。
+- [x] `component.validate` 保持用户显式触发的持久异步任务；API 不同步执行验证。
+- [x] Candidate 当前关联的 Draft 或 Published Version 都可触发验证；验证失败不会阻止发布、撤销发布
+  或隐式改变版本生命周期。
+- [x] Version 关联最近一次通过或失败报告；Component 详情页允许 owner 触发验证，并在报告
+  `passed=true` 时展示“已通过验证”状态。
+- [x] 既有 `validationLevel=publish` 暂作为稳定机器值保留，其含义已修订为版本级质量验证，不能再解释
+  为发布数据库门禁。
+
+实现内容：
+
+- 新增 Goose v12，删除 `component_versions_require_valid_publish_report` trigger 及对应函数；Down 可恢复
+  旧门禁，API/Worker startup 仍不执行 migration。
+- `PublishVersion` 删除旧 trigger 错误映射，继续在 serializable transaction 中完成旧 published 版本
+  deprecate、目标发布与 Component current version 更新。
+- Validation service 接受 Draft/Published；Worker 无论通过或失败都把最新报告关联到 Version，且继续用
+  interface/structure/geometry、Part Library source hash 和 validator version 约束确定性输入。validator
+  升级为 `component-repo-validator-v2`，避免复用旧版只关联通过报告的成功 Logical Job。
+- Component 详情页读取已有报告、提供 owner-only 显式验证按钮并展示完整结构化 checks；发布按钮与验证按钮
+  相互独立。Draft 报告只对 owner 可见，active Component 的非 Draft 报告沿用 Version 公开读取边界，
+  因而其他可见用户也能看到“已通过”状态。
+- 新增稳定错误 `component_repo.validation_unavailable`，旧 `component_repo.publish_validation_failed` 资源仅
+  保留给历史持久任务的显示兼容，不再由当前发布路径产生。
+
+验证结果：
+
+```text
+go tool sqlc generate / sqlc vet       PASS
+Go focused/full tests + go vet         PASS
+isolated PostgreSQL                     PASS（Goose 0 -> v12、v12 down/up、重复 up）
+publication contract                    PASS（无 ValidationReport 直接发布）
+published validation contract           PASS（Published Version 异步验证并关联最新报告）
+frontend i18n check/test/build           PASS（2 locales / 10 namespaces / 61 tests）
+Python backend pytest                    PASS（298 tests；multiprocessing 用例在沙箱外运行）
+real Supabase Goose                      PASS（postgres v11 -> v12）
+real publish-gate trigger count          0
+```
+
+i18n 影响：详情页复用既有“验证 / 已通过 / 验证结果”typed semantic key；新增稳定错误
+`component_repo.validation_unavailable` 的中英文资源。catalog 升级为 `frontend-2026.08.24.1`，
+content hash 为 `27e0a34eea2255209feb1f11d163c3c2ff1027a0f7ef0e94740f507321241d4c`。
+Version/Candidate/Report/Task ID、`passed`、validator version 和 error code 继续作为机器数据，不翻译。
+
+真实环境：已确认目标为 Supabase EU West `postgres` 开发数据库，Goose 从 v11 升级到 v12；升级后
+`component_versions_require_valid_publish_report` 非内部 trigger 数为 0。没有执行 reset、reseed、数据删除
+或 `storage` policy 修改。
+
+## 52. Component 状态收敛与 Import 历史
+
+日期：2026-08-24
+阶段：G8 / Component Repo 前端切换后续
+状态：Completed
+
+当前产品边界：
+
+- [x] Component 列表只展示“全部 / 草稿 / 已发布”，公开筛选机器值只允许 `draft/active`；
+  `archived` 继续作为 soft delete 内部状态，不在正常列表出现。
+- [x] Import 的 `processing/ready/failed` 只属于上传后的异步解析/BOM/GLB 聚合状态，不再映射成
+  Component 状态；Task、Preview 和 Upload Session 的失败状态没有被全局删除。
+- [x] 新增全局 `/component-repo/imports` 导入记录页，并在 Component 详情原版本历史位置增加
+  “版本记录 / 导入记录”Tab。
+
+实现内容：
+
+- 新增 owner-scoped `GET /api/v1/component-imports`，支持 `page/pageSize/processingStatus/query/componentId`；
+  返回文件原名、大小、类型、关联 Component/Candidate/Draft、聚合状态、结构化 failure 与时间字段，
+  不返回 Storage key、provider/bucket 或 Worker payload。
+- Component 关联筛选同时覆盖更新导入的 `target_component_id` 和新建导入的
+  `Import -> Candidate -> Draft Version -> component_id`，因此同一 Component 的初次导入和后续更新均可回溯。
+- Import 审计关联优先选择未删除 Version；Version 后续软删除时回退最近历史 Version，因此版本列表删除不会让
+  该次导入从 Component 详情历史中消失。
+- 列表聚合 Import、SceneSnapshot、Draft、Preview Task 与 verified Preview Artifact；状态筛选和计数使用
+  相同 SQL 判定。缺少部分 Part geometry 但整体 partial GLB 已 verified 时仍为 ready。
+- 全局记录页提供搜索、状态筛选、分页、手动刷新和结果入口；只有当前页含 processing 且页面可见时每 5 秒刷新，
+  不为每条记录单独轮询。
+- 未新增 PostgreSQL 表或 migration；复用既有 `imports_owner_created_idx`，数据访问继续由 sqlc/pgx 完成。
+
+验证：
+
+```text
+backend-go make check          PASS（Go 全量测试、gofmt、go vet、sqlc vet）
+backend-go make test-postgres  PASS（Goose 0 -> v12；Import history owner/component/filter contract）
+frontend npm run i18n:check    PASS（2 locales / 10 namespaces / frontend-2026.08.24.2）
+frontend npm test              PASS（13 files / 62 tests）
+frontend npm run build         PASS（TypeScript + Vite production build）
+backend Python pytest          PASS（298 tests；multiprocessing 用例沙箱外重跑）
+local browser DOM/visual       PASS（组件列表仅三项；全局入口、筛选与响应式布局可见；运行中的旧 Go API 需重启加载新路由）
+```
+
+i18n 影响：新增 Import 历史页面和 Tab 的 `zh-CN/en-US` typed semantic keys；catalog 升级为
+`frontend-2026.08.24.2`，content hash 为
+`51167620152381700db4ca56a0fafef3a90d629847bd28053cd7ab952a234929`。Import/Component 状态、ID、
+文件大小和时间继续作为机器数据；上传文件名按用户原文显示，failure 继续由 `code + params` 本地化。
+
+## 53. Component Version Preview Box 与列表占用尺寸
+
+日期：2026-08-24
+阶段：G7/G8 / Preview 派生数据完善
+状态：Implemented；隔离 PostgreSQL 已验证，真实 Supabase 待部署新 Worker 后受控回填
+
+问题与边界：
+
+- 旧 Preview Worker 只生成 GLB Artifact，没有计算或回填任何整体 Box；Component 列表一直读取
+  `components.logical_*`，因此现有 10 个非删除 Component 均显示空尺寸，其中 5 个已有 ready Preview。
+- 尺寸属于 ComponentVersion 及其冻结 SceneSnapshot，不属于可被任意异步任务直接更新的 Component。
+  当前发布版本必须稳定优先；尚未发布的组件才显示最新 Draft 的派生尺寸。
+- 多 Root、递归子模型和任意旋转统一按实际 GLB 实例的 world matrix 求解，不能只统计 BOM 数量，也不能只
+  变换 Part 局部 AABB 的 min/max 两个角点。
+
+实现内容：
+
+- [x] 新增 Goose v13：`component_versions.preview_bbox_min/max`、三项逻辑尺寸和
+  `preview_bounds_complete`，并增加三维数组、min/max、非负尺寸和整组 NULL/非 NULL 一致性约束。
+- [x] Preview generator 升级为 `component-preview-studio-ldraw-glb-v4`。Go Worker 对 scene 包递归展开的
+  全部 Root 与实例逐三角形顶点应用 world matrix，合并整体 LDraw 世界坐标 AABB；尺寸换算为
+  X/20 stud、Z/20 stud、Y/8 plate，并按数据库精度保留四位小数。
+- [x] Artifact upsert、Version ready、AABB、逻辑尺寸与完整性在同一 pgx transaction 内提交；generation/task
+  条件继续阻止过期执行回填当前版本状态。
+- [x] 缺少 geometry 的实例继续只从 GLB 省略，Box 描述实际渲染 GLB 且
+  `preview_bounds_complete=false`；BOM 保持完整。全部实例均缺少几何时允许空场景 GLB ready，Box 保持 NULL。
+- [x] Component 详情、普通列表、Group member 与 Group search 统一投影当前发布 Version；
+  `current_version_id` 为空时选择最新 Draft。旧 `components.logical_*` 只作历史兼容回退，前端 DTO 与展示无需修改。
+- [x] 新增 Go-only `cmd/preview-bounds-backfill` 与
+  `backend-go/scripts/backfill-component-preview-bounds.sh`。维护进程只计数/调度 durable task；脚本要求输入精确
+  数据库目标并先执行 Goose，几何计算和数据库回填仍由更新后的 Go Worker 异步完成，可重复执行。
+
+验证：
+
+```text
+backend-go make generate       PASS
+backend-go make check          PASS（Go 全量测试、gofmt、go vet、sqlc vet）
+backend-go make test-postgres  PASS（Goose 0 -> v13、v13 down/up、重复 up）
+Preview AABB unit contract     PASS（多 Root + 旋转；partial geometry；空场景）
+PostgreSQL workbench contract  PASS（Box 事务回填、发布版本/最新 Draft logicalSize 投影、dry-run/force backfill 调度）
+frontend i18n check/test/build PASS（2 locales / 10 namespaces / 62 tests；既有 DTO 与展示契约不变）
+```
+
+i18n 影响：无。AABB、stud/plate 数值、完整性、generator version 和 task 状态均为机器字段；未新增或修改
+用户可见文案、typed semantic key、资源文件、catalog version、content hash 或 release notes。本阶段为
+Component Repo Go-only 实现，未运行也不要求 Python 回归。
+
+真实环境只读核对：目标 Supabase `postgres` 当前仍为 Goose v12；存在 5 个未删除 ready Preview，生成器
+分布为 v1=1、v3=4，均属于 v4 历史回填范围。v13 migration、v4 API/Worker 和历史任务调度必须按此顺序
+部署。当前本机仍有连接该库的旧 Worker，不识别 v4 payload，因此本次没有提前迁移或调度真实任务。部署并
+确认新版 Worker 后再对已确认的 Supabase 目标执行脚本，并以版本 Box 非空数量和 pending/failed task 数
+完成验收。
+
+## 54. G8 Go 页面刷新会话确认与前端登录态收敛
+
+日期：2026-08-25
+阶段：G8 / Go 系统后端认证边界与前端刷新流程
+状态：Implemented and locally verified
+
+问题事实与决策：
+
+- 前端 Header 原先直接读取 Supabase SDK 的本地 `session.user`；Go API 已拒绝过期或无效 JWT 时，
+  API error 不会通知 `AuthContext`，因此右上角可能继续显示旧邮箱。
+- `getSession()` 只负责恢复浏览器缓存和刷新临近过期的 token，不能单独作为 Go 系统后端已接受当前
+  actor 的证据。
+- 大量用户场景不应让每个业务 API 都远程访问 Supabase Auth；远程确认固定在页面完整刷新和认证 token
+  变化边界，同一页面对相同 access token 去重。普通业务请求继续只执行本地 JWT/JWKS 校验。
+
+实现内容：
+
+- [x] Go 新增 `GET /api/v1/auth/session`。认证 middleware 先校验 JWT 签名、时间、issuer、audience 和
+  UUID subject；handler 再用公开 project key 和当前用户 JWT 请求 Supabase Auth user endpoint。
+- [x] Provider user ID 必须与 JWT actor ID 一致；成功只返回最小 `{authenticated,user:{id,email?}}`
+  投影，不透传 provider payload，不记录 token，也不访问 PostgreSQL。
+- [x] Provider `401/403` 映射为 `401 auth.session_invalid`；timeout、rate limit 和 `5xx` 映射为
+  `503 auth.session_verification_unavailable`；其他非成功状态保持结构化
+  `auth.session_verification_failed + status`。只有明确 session invalid 才允许前端清理本地会话。
+- [x] `AuthProvider` 在 Go 确认完成前不向 Header 暴露本地缓存用户；成功后才显示用户信息。网络或
+  provider 暂不可用时隐藏未经确认的信息但保留 Supabase 本地 session，下一次刷新可重试。
+- [x] 通用 API client 只对 `401 auth.session_invalid` 发送进程内认证失效通知，并携带该请求 token
+  供 `AuthProvider` 与当前 token 比对；旧 token 的延迟 `401` 不会清理刚刷新的新 token。页面运行期间的
+  Go API 明确拒绝仍会同步清空 Header；普通 `401`、网络错误和 `5xx` 不触发误退出。
+- [x] 更新 Go env 示例、README 和 API 契约。未新增数据库 schema、migration、任务类型或 Python
+  认证入口。
+- [x] 修正既有 ES256 tamper 测试：由修改 Base64 未使用尾位改为实际翻转签名字节，确保测试确实覆盖
+  无效签名而不改变 verifier 生产逻辑。
+
+验证：
+
+```text
+backend-go make check          PASS（Go 全量测试、gofmt、go vet、sqlc vet）
+Go session focused contracts  PASS（用户匹配、JWT、provider invalid/outage、路由响应）
+frontend npm run i18n:check    PASS（2 locales / 10 namespaces / frontend-2026.08.24.2）
+frontend npm test              PASS（14 files / 65 tests）
+frontend npm run build         PASS（TypeScript + Vite production build；既有 chunk-size warning）
+backend Python pytest          PASS（298 tests / 6 个既有 warning；multiprocessing 用例沙箱外运行）
+```
+
+i18n 影响：页面登录状态和既有认证错误展示发生变化，但没有新增/修改用户可见文案或资源 key；复用
+`auth.session_invalid`、`auth.session_verification_unavailable`、`auth.session_verification_failed`、
+`auth.user_payload_invalid` 与 `auth.verification_not_configured`。catalog version、content hash 和 release
+notes 不变。用户 ID、email、JWT claims、HTTP status 和进程内通知标识均为机器数据或用户身份原文，不翻译。
+
+未连接、迁移或修改真实数据库和 Supabase Storage；真实浏览器仍需在部署新版 Go API 后，用已登录会话
+确认刷新时仅出现一次 `/api/v1/auth/session`，并分别验收有效、明确失效和 provider 暂不可用三条路径。
+
+## 55. 历史 Preview 降级与 Component owner 操作恢复
+
+日期：2026-08-25
+阶段：G8 / Component 详情页容错与授权投影
+状态：Implemented and locally verified
+
+问题结论：
+
+- 页面显示 `component_repo.preview_unavailable` 不是因为历史数据只缺少“尺寸”字段。真实库中的历史 GLB
+  使用 v1/v3 generator；当前代码要求 v4，因此 Preview GET 返回 stale/无 URL，前端 adapter 将其转换为
+  preview unavailable。v13 与 v4 历史回填完成前，三维预览保持不可用是预期的派生数据状态。
+- 详情页此前把 Preview 加载与 Component 主体放在同一个失败边界。Preview stale 会让页面进入全局错误态，
+  即使 Component、Version 和 owner 数据已经成功返回。
+- 删除按钮又依赖 `AuthContext.user.id === component.ownerId`。页面刷新会话确认期间，业务 API 可以已经使用
+  有效 token 返回 Component，但 Header 用户投影仍可能暂时为空，从而错误隐藏发布和未发布 Component 的
+  owner 操作。
+
+实现内容：
+
+- [x] Component 可见查询新增稳定机器字段 `ownedByActor`，由 Go API 使用已鉴权 actor 与数据库 owner 比较；
+  Component 详情、列表、Group member/search 使用同一投影。真正的 DELETE 仍由 Go service owner 条件强制授权。
+- [x] 详情页发布、验证和“删除整个组件”改用服务端 `ownedByActor`；旧开发 API 缺少该字段时才回退原
+  `ownerId` 比较。服务端字段已返回时不再等待浏览器 Auth user 投影。
+- [x] Component、Version、Group 和历史记录属于详情页主数据；Version Preview 是独立可重建派生数据。
+  Preview stale/failed 现在只在三维区域显示错误，不再设置整页错误，也不阻断 owner 操作和版本/导入记录。
+- [x] 发布状态不参与整个 Component 的删除按钮判断。当前发布 Version 仍不能单独删除；owner 可以使用
+  页面顶部“删除组件”执行既有 soft delete，未发布 Component 同样适用。
+
+验证：
+
+```text
+backend-go make check                 PASS（Go 全量测试、gofmt、go vet、sqlc vet）
+backend-go make test-postgres         PASS（owner/non-owner ownedByActor、删除授权与 Goose v13）
+frontend i18n check                  PASS（资源未变化）
+frontend tests                       PASS（14 files / 65 tests）
+frontend production build            PASS
+Chrome 已登录运行态                    PASS（历史 Preview 错误仅留在预览区；Published 显示 Delete Component/Validate；Draft 显示 Delete Component/Validate/Publish）
+```
+
+运行新版 API 前，本机 `127.0.0.1:8080` 仍由 09:21 启动的旧二进制监听，因此响应缺少
+`ownedByActor`，按钮不会仅靠前端热更新恢复。本次只重启 Go API、未停止 Worker；新版 API 启动后完成上述
+浏览器验收。这也说明部署时 API 与前端必须同时更新，不能只发布前端。
+
+i18n 影响：无新增或修改文案。复用既有 `component_repo.preview_unavailable`、删除组件、发布和验证语义 key；
+`ownedByActor`、Preview status、generator version、owner ID 与 Component status 都是机器字段，不翻译。
+
+## 56. G8 Component Repo Box 尺寸搜索迁移收口
+
+日期：2026-08-25
+阶段：G8 / Component 目录查询
+状态：Implemented and locally verified
+
+问题结论：
+
+- [x] 组件仓库搜索已迁移到 Go：前端请求
+  `GET /api/v1/component-groups/:groupId/components/search`，由 Gin Handler、Go Component Service 和 sqlc
+  查询执行，Python 不在调用链中。
+- [x] 当前运行 API 日志中的该路由请求均为 `200`，未复现用户看到的历史 `500`；旧实现仅做名称/UUID
+  模糊查询，尺寸输入不会产生正确的尺寸结果。本次同时补齐尺寸语义并使用 PostgreSQL 集成测试覆盖 SQL。
+
+实现内容：
+
+- [x] `query` 完整匹配 `a x b` 或 `a x b x c` 时进入尺寸模式，兼容 `x/X/×`、空格和小数；其他输入继续
+  作为名称/UUID 搜索，避免组件名称中的局部数字被误判。
+- [x] 输入和 Version Box 三维都按升序归一化。三值逐维匹配；两值枚举 `ab/ac/bc`；每一维严格使用
+  `> target-1 AND < target+1`，恰好相差 1 的边界不命中。
+- [x] 尺寸来源与列表展示一致：当前发布 Version 优先，无发布版本时取最新 Draft，旧 Component 尺寸只作
+  历史回退。任一尺寸为空时不参与尺寸搜索。
+- [x] 结果查询和状态统计复用相同尺寸过滤条件，保证 `items/total/totalPages/statusCounts` 一致。移除前端
+  adapter 中从未传输的旧 `allowPlanarRotation/sizeTolerance` 占位参数；容差固定为当前批准的开区间规则。
+
+验证：
+
+```text
+backend-go make generate       PASS
+backend-go make check          PASS（Go tests、go vet、sqlc vet；httptest 需沙箱外本机端口）
+backend-go make test-postgres  PASS（Goose 0 -> v13；三值、两值 ab/ac/bc、开区间边界）
+frontend i18n check/test/build PASS（2 locales / 10 namespaces / 65 tests；既有 chunk-size warning）
+Chrome 已登录运行态           PASS（名称 `red`、三值 `11x12x20`/`1.1x5x6`、两值 `5x6` 均命中预期单条记录；开区间边界无结果；Go 路由均为 200）
+```
+
+i18n 影响：无。尺寸数值、解析维数、查询条件和分页/状态统计均为机器数据；没有新增或修改用户可见文案、
+typed semantic key、资源文件、catalog version、content hash 或 release notes。Component Repo 保持 Go-only，
+未运行也不要求 Python 回归。
+
+## 57. G8 Component 搜索条件确认与标签交互
+
+日期：2026-08-25
+阶段：G8 / Component Repo 前端查询交互
+状态：Implemented and locally verified
+
+- [x] 搜索输入改为 draft/applied 两层状态；键入内容不会立即请求，按 Enter 后才固化并调用既有 Go 搜索接口。
+- [x] 已应用条件以保留用户原文的标签显示在搜索框右侧；每次 Enter 追加条件，大小写相同的重复条件不重复
+  添加。每个标签的 `×` 只移除自身并重置分页，其他标签继续生效。
+- [x] 多个标签通过重复 `query` 参数传给 Go API，并按 AND 组合；普通文字、UUID 与二维/三维尺寸条件可复合。
+  空输入不会意外清除已应用条件。状态筛选和 Group 切换继续与全部已应用条件组合，不读取未确认的输入草稿。
+- [x] 新增 `componentRepo:activeSearchCondition` 与 `componentRepo:clearSearchCondition` 无障碍语义 key；资源版本
+  升级为 `frontend-2026.08.25.1`，content hash 为
+  `0d75a5beb557077fd3cb96260c051118b400c6231e0dfdadea4ded01e28055f1`。
+
+验证：
+
+```text
+frontend i18n check/test/build PASS（2 locales / 10 namespaces / 65 tests；既有 chunk-size warning）
+Chrome 已登录运行态           PASS（输入 5x6 未回车不请求/不出现标签；Enter 后命中单条并显示标签；× 后恢复三条且标签消失）
+```
+
+i18n 分类：标签值是用户查询原文，不翻译；标签容器与清除按钮是系统 UI 文案，使用 typed semantic key。
+Go API 的响应结构、数据库 schema 与尺寸容差未改变；请求契约将 `query` 明确为最多重复 8 次的 AND 条件。
+
+## 58. G8 Component 复合搜索条件追加修复
+
+日期：2026-08-25
+阶段：G8 / Component Repo 查询契约与前端标签状态
+状态：Implemented and locally verified
+
+- [x] 修复第二次 Enter 覆盖首个标签的问题：前端 applied state 从单字符串调整为条件数组，单个 `×` 只删除
+  对应条件。
+- [x] 前端 adapter 使用重复 `query` 参数；Gin Handler 使用 `QueryArray`，Go Service 对条件裁剪、大小写去重，
+  并把文字条件与尺寸条件分流。
+- [x] PostgreSQL 使用 `NOT EXISTS` 反例查询实现所有条件的 AND 语义；多个尺寸条件通过内部 JSON recordset
+  参数化执行，不动态拼接 SQL。结果列表和状态统计继续使用同一条件，缺少 Box 不会因 SQL NULL 误通过。
+- [x] 最大条件数为 8，每项最多 200 字符；超过边界返回既有结构化 request validation error。
+
+验证：
+
+```text
+backend-go make check          PASS（Go tests、go vet、sqlc vet）
+backend-go make test-postgres  PASS（文字 + 多尺寸 AND、复合不匹配、状态统计一致）
+frontend i18n check/test/build PASS（2 locales / 10 namespaces / 65 tests；既有 chunk-size warning）
+Chrome 已登录运行态           PASS（先加 5x6，再加 door，两个标签同时保留并命中同一组件；删除 door 后 5x6 继续生效；全部删除后恢复三条）
+```
+
+i18n 影响：交互行为变化但资源不变，继续复用 `activeSearchCondition` 与 `clearSearchCondition`；标签内容保持
+用户查询原文。catalog 仍为 `frontend-2026.08.25.1`。
+
+## 59. G8 Part Search Go API 切换
+
+日期：2026-08-25
+阶段：G8 / Part Library 查询与前端 legacy API 退出
+状态：Implemented and locally verified；真实 active library 的源名称待受控重导
+
+原接口功能盘点：
+
+- 旧 `POST /api/fitting/candidates/recall` 是 Python fitting 域通用画像召回，包含
+  `part/submodel/component`、profile status/irregular、bbox/logical size、connector/category/color、
+  fuzzy key、score、分页与 legacy 图片补全。
+- `/part-search` 页面实际只传 `candidateTypes=['part']`、搜索框 `query`、
+  `includeIrregular=false` 和页码；未使用显式 bbox、connector、category、color、component/submodel 或
+  `key` 契约。因此本次不把未使用的 fitting 算法字段复制进 Component Repo Go API。
+
+实现内容：
+
+- [x] 新增认证 `POST /api/v1/parts/search`，只读取 active Studio Part Library 的 `parts +
+  part_geometries`，不访问 legacy `public.fitting_candidate_profiles/rb_part_images`。
+- [x] 搜索框继续支持空格/中英文逗号分段、二维/三维精确尺寸、二维平面旋转、名称关键词至少一个命中、
+  尺寸候选至少一个命中；名称集合与尺寸集合按 AND 组合。
+- [x] 只返回 geometry ready 的 Part，排除 sticker/decal；使用 PostgreSQL count、命中关键词数和
+  `source_name/ldraw_part_num` 稳定分页，`pageSize` 最大 200。
+- [x] 响应返回实际 `partLibraryVersionId`，前端 Part 详情链接使用同一不可变快照；前端不再并行读取
+  active library 或调用 `/api/fitting/candidates/recall`，因此关闭 legacy API 后页面搜索仍走 Go。
+- [x] Go Studio importer 升级为 v3：离线读取顶层 LDraw 文件头描述并固化到 `parts.source_name`；
+  API 请求不读取 `LDRAW_ROOT`。维护脚本将 importer version 纳入 no-op 判定，相同 manifest 的 v2
+  snapshot 也会在明确执行脚本时受控重导。
+- [x] 图片不从 legacy 表跨 schema 读取；Go 响应明确 `imageUrl=null`，前端继续显示已有占位图。
+- [x] `docs/api.md` 已记录旧功能点、当前迁移覆盖与未迁移的 fitting 算法边界；字段分类同步改为 Go
+  Part Search 源内容投影。
+
+验证：
+
+```text
+backend-go make check          PASS（Go 全量 tests、gofmt、go vet、sqlc vet）
+backend-go make test-postgres  PASS（Goose 0 -> v13；关键词+编号+二维尺寸、failed geometry 排除、importer source_name）
+frontend i18n check            PASS（2 locales / 10 namespaces / frontend-2026.08.25.1）
+frontend tests                 PASS（14 files / 65 tests）
+frontend production build     PASS（仅既有 Vite/chunk-size warning）
+```
+
+i18n 影响：Part Search 名称从 legacy 画像源快照切换为 Studio importer 固化的 LDraw 源描述，仍属于
+源内容，不选择 reviewed translation；用户 query 不保存、不翻译；Part 编号、尺寸、library ID、状态和
+JSON key 保持机器值。没有新增或修改用户可见文案、typed semantic key 或资源，因此 catalog version、
+content hash 和 release notes 不变。
+
+遗留：本次没有连接或修改真实 Supabase。真实 active library 当前若仍由 importer v2 产生，名称可能仍等于
+Part 编号；需要用户确认精确数据库目标后运行 `backend-go/scripts/update-studio-part-library.sh`，由 v3 importer
+受控重建 `source_name`。旧 Python recall service 仍供 Component Repo 之外的 fitting 算法内部调用；
+`/part-search` 已不再依赖它，不应为了本页面删除其他域仍使用的 Python service。
+
+## 60. Part Search 前端认证注入修复
+
+日期：2026-08-25
+阶段：G8 / Part Search Go API 前端切换收口
+状态：Implemented
+
+- [x] 定位 `/api/v1/parts/search` 返回 `401` 的原因：页面直接调用无认证的通用 `requestJson`，请求没有
+  `Authorization` header，因此在进入 Go Part Search Handler 前即被认证中间件拒绝；不是搜索 SQL、
+  active Part Library 或 Go JWT/JWKS 校验逻辑故障。
+- [x] 新增共享 `authenticatedRequestJson` 边界，统一读取当前 Supabase session access token、保留业务
+  headers 并注入 Bearer token；Part Search 页面切换到该入口。
+- [x] 增加回归测试，固定 Bearer token 和 `Content-Type` 同时存在的不变量。
+- [x] `docs/api.md` 补充前端认证调用约束和 Part Search 的认证执行流。
+
+验证：
+
+```text
+frontend npm run i18n:check PASS（2 locales / 10 namespaces / frontend-2026.08.25.1）
+frontend npm test           PASS（15 files / 66 tests）
+frontend npm run build      PASS（仅既有 Vite deprecation/chunk-size warning）
+```
+
+i18n 影响：无用户可见或 locale-sensitive 变化；没有新增文案、semantic key、资源或持久化内容，catalog
+version、content hash 与 release notes 不变。
+
+## 61. Part Preview meshopt GLB v2 与全库预生成
+
+日期：2026-08-25
+阶段：G8 / Part Preview 派生资产与真实 Storage 回填
+状态：Completed and verified；真实全库回填完成
+
+实现内容：
+
+- [x] Part generator 提升为 `part-preview-ldraw-meshopt-glb-v2`：Worker 将 LDraw Y-down/LDU 坐标烘焙为
+  项目 Y-up/stud 坐标，反转反射后的三角形 winding，生成可复用索引和 60° 折角法线；前端只为没有
+  NORMAL 的历史 GLB 运行 `toCreasedNormals`，避免每次打开复制并重算法线。
+- [x] 原生/CLI 压缩边界固定为 gltfpack 1.2，输出必须声明 `EXT_meshopt_compression`，否则任务稳定失败；
+  前端既有 `GLTFLoader.setMeshoptDecoder` 直接解码。压缩器升级必须同步提升 generator version。
+  本机 GitHub Release 原生包下载遇到 CDN framing/stall，初期批次使用同版本官方 npm WASM CLI；随后从
+  meshoptimizer v1.2 官方源码构建原生 `gltfpack`，最终批次使用原生可执行文件完成。`install-gltfpack.sh`
+  保留原生优先和固定版本校验，资产扩展和内容寻址语义不变。
+- [x] 最终 GLB 按字节 SHA-256 写入当前 `component-artifacts` bucket 的
+  `component-repo/part-library-assets/glb/{generator}/{shaPrefix}/{sha}.glb`。Artifact 是无 owner、不可变、
+  内容寻址的全局派生资源；`part_previews.artifact_id` 保存 Part 绑定，通用 Task 的 owner-scoped
+  `result_artifact_id` 保持为空，结构化 result 仍返回 artifact ID。
+- [x] GET 只暴露当前 generator 的 ready Artifact；v1/未知 generator 投影为 pending。单 Part materialize 在
+  generator 过期或 Storage 丢失时递增 generation，不让迟到的旧 Worker 覆盖 v2。
+- [x] 新增 `component.part_preview.prebuild` durable task 和默认 dry-run 的
+  `backend-go/scripts/prebuild-part-previews.sh`。脚本打印精确数据库/bucket/prefix，只有
+  `CONFIRM_DATABASE_TARGET + PART_PREVIEW_PREBUILD_EXECUTE=1` 才写任务；Worker 一次批量冻结候选，按
+  face count 从轻到重、8 路受控生成，每个成功 Part 只执行一次内容寻址 Storage PUT 和一次原子
+  Artifact upsert + preview ready SQL。单 Part retryable 压缩/Storage 故障最多短重试三次，永久源缺陷
+  记录稳定 `code + stage params` 并继续。
+- [x] `WORKER_TASK_TYPES` 支持专用能力进程；`start-part-preview-prebuild-worker.sh` 只 claim prebuild，且关闭
+  通用上传维护。本次真实库另有 queued Artifact verify/Import parse，专用 Worker 没有推进这些任务。
+- [x] 保留 `install-gltfpack.sh` 与 prebuild/start 脚本，Studio/LDraw 零件更新并激活新 Part Library 后可重复
+  dry-run、确认目标、调度；ready 当前 generator 自动跳过。
+
+真实执行证据：
+
+```text
+database target  postgres@2a05:d018:8eb:2f01:8a32:92ac:c6f3:52f/128:5432
+storage target   supabase/component-artifacts/component-repo/part-library-assets
+library          c8176a73-eccb-4db3-ba72-30edf5f9fd23
+matched initial  24,373
+final task       b71acb19-2b22-4551-8280-5bff8643335f (execution 5, succeeded)
+final result     matched=6,095 / ready=6,095 / failed=0
+library total    24,373 ready / 0 pending / 0 failed
+artifacts        19,885 distinct content-addressed objects / 291 MB stored / 345 MB logical references
+integrity        0 missing objects / 0 size mismatch / 0 wrong key, owner, bucket or artifact contract
+maintenance      post-completion dry-run matched=0
+sample object    component-repo/part-library-assets/glb/part-preview-ldraw-meshopt-glb-v2/
+                 5a/5a3b64570b87555e52715ab2f30170d684d3aac48dc5d3e775073b51d4264014.glb
+sample metadata  owner_id IS NULL; SHA equals filename; 44,336 bytes; EXT_meshopt_compression
+Storage info     HTTP 200
+download/decode  SHA-256 PASS；EXT_meshopt_compression + KHR_mesh_quantization；Three MeshoptDecoder PASS
+```
+
+早期 execution 1-4 用于真实链路和吞吐诊断：确认 source hash 一致后，发现 Supabase object info 对不存在对象
+返回不稳定，改为内容寻址幂等 PUT；随后把逐 Part 多次远程 SQL 合并为 500 条一批的候选准备和单条原子 finalize。
+Supabase Session Pool 达到 15 连接上限后，专用 Worker 收缩为一个数据库会话、外层一个任务并把租约延长为 5 分钟；
+Part 内部仍保持 8 路几何/Storage 并发。已 ready 的 v2 Artifact 在重试间保持有效，execution 5 只处理剩余
+6,095 条并一次成功。另有 queued Artifact verify/Import parse 在整个专用回填期间均未被消费。
+
+验证：
+
+```text
+gltfpack 1.2 real smoke      PASS（输出 EXT_meshopt_compression）
+backend-go make check        PASS
+backend-go make test-postgres PASS（Goose 0 -> v13；全量 API/task/workbench contract）
+frontend npm run i18n:check  PASS（2 locales / 10 namespaces / frontend-2026.08.25.1）
+frontend npm test            PASS（15 files / 66 tests）
+frontend npm run build       PASS（仅既有 Vite/chunk-size warning）
+real Supabase Artifact       PASS（global owner、content key、SHA、metadata 与 Storage info）
+```
+
+i18n 影响：无用户可见或 locale-sensitive 变化；generator version、SHA、Storage key、task type 和 failure stage
+均为稳定机器值。没有新增文案、semantic key、资源或持久化内容，catalog version、content hash 与 release notes
+不变。
+
+## 62. Supabase 数据库容量审计与 migrated public Part source 清理
+
+日期：2026-08-25
+阶段：G8 / Go-only 数据边界与开发数据库容量维护
+状态：Completed and verified（精确安全子集；范围外依赖数据保留）
+
+审计结论：
+
+- 清理前 `pg_database_size=500,337,811 bytes`（PostgreSQL 显示 477 MiB），已经超过 Supabase Free
+  500 MB database size 阈值；项目当时 `default_transaction_read_only=off`，当前连接 20/60，因此根因是容量，
+  不是连接数。
+- schema 主要占用为 `component_repo=303 MB`、`public=123 MB`、`storage=37 MB`。19,885 个去重 Part GLB
+  在 `component_repo.artifacts` 与 provider-owned `storage.objects` 各有一条元数据，二者合计约 62 MB；
+  291 MB GLB 对象正文位于 Storage，不计入 PostgreSQL database size。
+- 原计划中的 8 张 migrated `public` Part/Connector source 表约 68 MB，但其中 5 张仍被 1,956 条
+  DEM、shape profile、shadow include 或历史 connector analysis 记录通过 `NO ACTION` 外键引用。没有使用
+  `CASCADE`，也没有扩展清理到其他业务域。
+
+真实执行：
+
+- [x] 新增默认 dry-run 的 `backend-go/scripts/cleanup-migrated-public-part-source-data.sh`。执行要求精确
+  `CONFIRM_DATABASE_TARGET`，先验证 active Go Part Library 的 Parts/geometry/connector 不变量，再检查未来是否
+  新增外键子表。
+- [x] 仅清空无外键子项、已进入 Go 权威库的
+  `public.connector_instances`（29,853）、`public.ldraw_part_geometry`（24,214）和
+  `public.xref_part_numbers`（25,384）；使用单事务 `TRUNCATE`，不重置 sequence，不使用 `CASCADE`。
+- [x] 清理前通过 2,000 行短连接分片保存 41 个 CSV 数据文件；manifest 固化三表行数和分片数，所有文件
+  SHA-256 校验通过。真实恢复目录为
+  `/private/tmp/ctbz-public-part-source-20260825T222000Z`，总大小约 15 MB。
+- [x] 清理后 `pg_database_size=468,757,651 bytes`（447 MiB），实际回收 31,580,160 bytes；三张目标表均为
+  0 行，数据库仍可写。
+- [x] active Part Library `c8176a73-eccb-4db3-ba72-30edf5f9fd23` 保持 24,426 Parts、24,426 geometries、
+  190,419 connector definitions；当前 meshopt v2 preview 保持 24,373 ready。
+- [x] `public.part_connector_definitions`、`ldraw_files`、`ldraw_parts`、`ldraw_shadow_meta_raw`、
+  `ldraw_shadow_files` 及其范围外子表全部保留。retired Part Library 仍被 6 个 ComponentVersion、7 个 Import 和
+  7 个 ConnectorAnalysis 引用，也未清理。
+
+验证：
+
+```text
+bash -n maintenance script       PASS
+shellcheck maintenance script    PASS
+dry-run / exact DB confirmation  PASS
+41 CSV shards + MANIFEST SHA-256 PASS
+post-cleanup table counts        0 / 0 / 0
+post-cleanup Go Part invariants  PASS
+database size                    500,337,811 -> 468,757,651 bytes
+```
+
+本次没有 API route、request/response、授权或执行流变化，因此 `docs/api.md` 不变。i18n 影响为：当前 Go UI/API
+无用户可见或 locale-sensitive 变化；清理对象是已迁移 legacy source 的机器/源数据，未修改当前官方 Part
+translation、用户内容、semantic key、catalog version、content hash 或 release notes。旧 Python
+Part/Connector 数据读取会得到空表，这是 Component Repo Go-only 清理的明确副作用。
+
+## 63. Part Search meshopt GLB 静态缩略图
+
+日期：2026-08-26
+阶段：G8 / Part Search 预览投影
+状态：Implemented
+
+实现内容：
+
+- [x] `POST /api/v1/parts/search` 在既有 Part/geometry 查询中可选关联当前
+  `part-preview-ldraw-meshopt-glb-v2` ready preview 与 verified Artifact；不读取对象正文、不创建 Task，且不暴露
+  Storage key。
+- [x] Go Storage 边界增加同 bucket 批量签名，Supabase 使用一次 `POST /storage/v1/object/sign/{bucket}` 签名
+  当前页去重后的 key。单 path 失败只省略对应 URL；批次请求失败时 Search 保留完整文本结果并令
+  `previewModel=null`，不会把 Storage 短暂故障放大为搜索 500。
+- [x] Search item 增加可选
+  `previewModel={artifactId,format,compression,url,sha256,byteLength}`；`imageUrl` 继续为 null 兼容字段。真实
+  Storage 中已有的全库 GLB 是唯一远程正文，本次不新增数据库表、Artifact 或缩略图 Storage 对象。
+- [x] `/part-search` 使用 `IntersectionObserver` 提前 400px 按需加载；GLB 下载并发限制为 4，meshopt 解码后的
+  GPU 渲染串行复用一个离屏 WebGL context，不为 20 张卡片创建常驻 canvas、OrbitControls 或 RAF。
+- [x] 缩略图使用与 Part 详情页相同的 Y-up 模型和初始相机方向，输出静态 256px WebP；卡片继续使用普通
+  `<img>`。结果以内存 128 条和 IndexedDB 100 MB/2,000 条两级缓存保存，cache key 包含 renderer version、
+  Artifact ID 与 SHA；翻页或搜索切换会中止尚未完成的下载/排队渲染，失败仅回退既有占位图。
+- [x] `docs/api.md` 同步当前 Search response、批量签名降级和前端执行边界。
+
+验证：
+
+```text
+go tool sqlc generate                         PASS
+backend-go make check                        PASS（全量 tests、gofmt、go vet、sqlc vet）
+backend-go make test-postgres                PASS（Goose 0 -> v13；Search preview JOIN/批量签名集成契约）
+frontend npm run i18n:check                  PASS（2 locales / 10 namespaces / frontend-2026.08.25.1）
+frontend npm test                            PASS（15 files / 66 tests）
+frontend npm run build                       PASS（仅既有 Vite deprecation/chunk-size warning）
+```
+
+i18n 影响：无用户可见或 locale-sensitive 变化；没有新增文案、semantic key、资源、API error code 或持久化
+内容。`previewModel` 字段名、format/compression、Artifact ID/SHA 均为稳定机器值，catalog version、content hash
+与 release notes 不变。

@@ -11,6 +11,187 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countPartPreviewPrebuildCandidates = `-- name: CountPartPreviewPrebuildCandidates :one
+SELECT count(*)::bigint
+FROM component_repo.part_previews preview
+JOIN component_repo.part_geometries geometry
+  ON geometry.part_library_version_id = preview.part_library_version_id
+ AND geometry.ldraw_part_num = preview.ldraw_part_num
+WHERE preview.part_library_version_id = $1
+  AND geometry.geometry_status = 'ready'
+  AND (preview.status <> 'ready'
+       OR preview.generator_version IS DISTINCT FROM $2)
+`
+
+type CountPartPreviewPrebuildCandidatesParams struct {
+	PartLibraryVersionID pgtype.UUID
+	GeneratorVersion     *string
+}
+
+func (q *Queries) CountPartPreviewPrebuildCandidates(ctx context.Context, arg CountPartPreviewPrebuildCandidatesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPartPreviewPrebuildCandidates, arg.PartLibraryVersionID, arg.GeneratorVersion)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countSearchableParts = `-- name: CountSearchableParts :one
+SELECT count(*)::bigint
+FROM component_repo.parts part
+JOIN component_repo.part_geometries geometry
+  ON geometry.part_library_version_id = part.part_library_version_id
+ AND geometry.ldraw_part_num = part.ldraw_part_num
+WHERE part.part_library_version_id = $1
+  AND geometry.geometry_status = 'ready'
+  AND position('sticker' IN lower(part.source_name)) = 0
+  AND position('decal' IN lower(part.source_name)) = 0
+  AND (
+      cardinality($2::text[]) = 0
+      OR EXISTS (
+          SELECT 1
+          FROM unnest($2::text[]) keyword(value)
+          WHERE position(keyword.value IN lower(part.source_name)) > 0
+             OR position(keyword.value IN lower(part.ldraw_part_num)) > 0
+      )
+  )
+  AND (
+      jsonb_array_length($3::jsonb) = 0
+      OR EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements($3::jsonb) dimension(value)
+          WHERE geometry.logical_width_stud IS NOT NULL
+            AND geometry.logical_depth_stud IS NOT NULL
+            AND (
+                (
+                    jsonb_array_length(dimension.value) = 2
+                    AND least(geometry.logical_width_stud, geometry.logical_depth_stud) = (dimension.value ->> 0)::double precision
+                    AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud) = (dimension.value ->> 1)::double precision
+                )
+                OR (
+                    jsonb_array_length(dimension.value) = 3
+                    AND geometry.logical_height_plate IS NOT NULL
+                    AND least(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 0)::double precision
+                    AND geometry.logical_width_stud + geometry.logical_depth_stud + geometry.logical_height_plate
+                        - least(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate)
+                        - greatest(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 1)::double precision
+                    AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 2)::double precision
+                )
+            )
+      )
+  )
+`
+
+type CountSearchablePartsParams struct {
+	PartLibraryVersionID pgtype.UUID
+	Keywords             []string
+	Dimensions           []byte
+}
+
+// 零件搜索只读取指定的不可变 Part Library；名称/编号关键词按“至少命中一个”组合，
+// 尺寸片段也按候选集合组合，但关键词集合与尺寸集合之间必须同时满足。
+func (q *Queries) CountSearchableParts(ctx context.Context, arg CountSearchablePartsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSearchableParts, arg.PartLibraryVersionID, arg.Keywords, arg.Dimensions)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const finalizePartPreviewArtifact = `-- name: FinalizePartPreviewArtifact :one
+WITH artifact AS (
+  INSERT INTO component_repo.artifacts (
+      id, owner_id, artifact_type, source_kind, original_filename,
+      storage_provider, storage_bucket, storage_key, sha256, file_size,
+      mime_type, immutable, verification_status, verified_at, uploaded_by, metadata
+  ) VALUES (
+      $6, NULL, 'part_preview_glb', 'derived',
+      $7, $8, $9,
+      $10, $11, $12, 'model/gltf-binary',
+      true, 'verified', now(), $13, $14
+  )
+  ON CONFLICT (id) DO UPDATE SET
+      storage_key = EXCLUDED.storage_key,
+      sha256 = EXCLUDED.sha256,
+      file_size = EXCLUDED.file_size,
+      verification_status = 'verified',
+      verified_at = now(),
+      metadata = EXCLUDED.metadata,
+      deleted_at = NULL
+  RETURNING id
+)
+UPDATE component_repo.part_previews preview
+SET artifact_id = artifact.id, status = 'ready',
+    generator_version = $1,
+    failure_code = NULL, failure_params = NULL, updated_at = now()
+FROM artifact
+WHERE preview.part_library_version_id = $2
+  AND preview.ldraw_part_num = $3
+  AND preview.task_id = $4
+  AND preview.generation = $5
+  AND preview.status IN ('pending', 'running')
+RETURNING preview.generation
+`
+
+type FinalizePartPreviewArtifactParams struct {
+	GeneratorVersion     *string
+	PartLibraryVersionID pgtype.UUID
+	LdrawPartNum         string
+	TaskID               pgtype.UUID
+	Generation           int32
+	ArtifactID           pgtype.UUID
+	OriginalFilename     string
+	StorageProvider      string
+	StorageBucket        string
+	StorageKey           string
+	Sha256               string
+	FileSize             int64
+	UploadedBy           pgtype.UUID
+	Metadata             []byte
+}
+
+// Artifact upsert 与 Part 绑定必须同语句原子提交；全局 Artifact 为 NULL owner，Task owner 只记 uploaded_by。
+func (q *Queries) FinalizePartPreviewArtifact(ctx context.Context, arg FinalizePartPreviewArtifactParams) (int32, error) {
+	row := q.db.QueryRow(ctx, finalizePartPreviewArtifact,
+		arg.GeneratorVersion,
+		arg.PartLibraryVersionID,
+		arg.LdrawPartNum,
+		arg.TaskID,
+		arg.Generation,
+		arg.ArtifactID,
+		arg.OriginalFilename,
+		arg.StorageProvider,
+		arg.StorageBucket,
+		arg.StorageKey,
+		arg.Sha256,
+		arg.FileSize,
+		arg.UploadedBy,
+		arg.Metadata,
+	)
+	var generation int32
+	err := row.Scan(&generation)
+	return generation, err
+}
+
+const getActivePartPreviewPrebuildLibrary = `-- name: GetActivePartPreviewPrebuildLibrary :one
+SELECT id, source_hash, created_by
+FROM component_repo.part_library_versions
+WHERE status = 'active'
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+type GetActivePartPreviewPrebuildLibraryRow struct {
+	ID         pgtype.UUID
+	SourceHash string
+	CreatedBy  pgtype.UUID
+}
+
+func (q *Queries) GetActivePartPreviewPrebuildLibrary(ctx context.Context) (GetActivePartPreviewPrebuildLibraryRow, error) {
+	row := q.db.QueryRow(ctx, getActivePartPreviewPrebuildLibrary)
+	var i GetActivePartPreviewPrebuildLibraryRow
+	err := row.Scan(&i.ID, &i.SourceHash, &i.CreatedBy)
+	return i, err
+}
+
 const getPartPreview = `-- name: GetPartPreview :one
 SELECT library.id AS part_library_version_id, library.source_hash AS part_library_source_hash,
        part.ldraw_part_num, part.source_name, part.content_locale,
@@ -121,6 +302,26 @@ func (q *Queries) GetPartPreview(ctx context.Context, arg GetPartPreviewParams) 
 	return i, err
 }
 
+const getPartPreviewPrebuildLibrary = `-- name: GetPartPreviewPrebuildLibrary :one
+SELECT id, source_hash, created_by
+FROM component_repo.part_library_versions
+WHERE id = $1
+  AND status = 'active'
+`
+
+type GetPartPreviewPrebuildLibraryRow struct {
+	ID         pgtype.UUID
+	SourceHash string
+	CreatedBy  pgtype.UUID
+}
+
+func (q *Queries) GetPartPreviewPrebuildLibrary(ctx context.Context, partLibraryVersionID pgtype.UUID) (GetPartPreviewPrebuildLibraryRow, error) {
+	row := q.db.QueryRow(ctx, getPartPreviewPrebuildLibrary, partLibraryVersionID)
+	var i GetPartPreviewPrebuildLibraryRow
+	err := row.Scan(&i.ID, &i.SourceHash, &i.CreatedBy)
+	return i, err
+}
+
 const getPartPreviewTaskInput = `-- name: GetPartPreviewTaskInput :one
 SELECT library.source_hash AS part_library_source_hash,
        geometry.source_relative_path, geometry.source_file_hash,
@@ -171,7 +372,9 @@ func (q *Queries) GetPartPreviewTaskInput(ctx context.Context, arg GetPartPrevie
 }
 
 const getPreviewActivePartLibraryVersion = `-- name: GetPreviewActivePartLibraryVersion :one
-SELECT id, source_name, source_hash, status, created_at
+SELECT id, source_name, source_hash, status,
+       preview_ready, relation_ready, connector_count, collider_count,
+       created_at
 FROM component_repo.part_library_versions
 WHERE status = 'active'
 ORDER BY created_at DESC, id DESC
@@ -179,11 +382,15 @@ LIMIT 1
 `
 
 type GetPreviewActivePartLibraryVersionRow struct {
-	ID         pgtype.UUID
-	SourceName string
-	SourceHash string
-	Status     string
-	CreatedAt  pgtype.Timestamptz
+	ID             pgtype.UUID
+	SourceName     string
+	SourceHash     string
+	Status         string
+	PreviewReady   bool
+	RelationReady  bool
+	ConnectorCount int32
+	ColliderCount  int32
+	CreatedAt      pgtype.Timestamptz
 }
 
 func (q *Queries) GetPreviewActivePartLibraryVersion(ctx context.Context) (GetPreviewActivePartLibraryVersionRow, error) {
@@ -194,9 +401,68 @@ func (q *Queries) GetPreviewActivePartLibraryVersion(ctx context.Context) (GetPr
 		&i.SourceName,
 		&i.SourceHash,
 		&i.Status,
+		&i.PreviewReady,
+		&i.RelationReady,
+		&i.ConnectorCount,
+		&i.ColliderCount,
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listPreparedPartPreviewPrebuildCandidates = `-- name: ListPreparedPartPreviewPrebuildCandidates :many
+SELECT preview.ldraw_part_num, preview.generation,
+       geometry.source_relative_path, geometry.source_file_hash, geometry.face_count
+FROM component_repo.part_previews preview
+JOIN component_repo.part_geometries geometry
+  ON geometry.part_library_version_id = preview.part_library_version_id
+ AND geometry.ldraw_part_num = preview.ldraw_part_num
+WHERE preview.part_library_version_id = $1
+  AND preview.task_id = $2
+  AND preview.generator_version = $3
+  AND preview.status <> 'ready'
+  AND geometry.geometry_status = 'ready'
+`
+
+type ListPreparedPartPreviewPrebuildCandidatesParams struct {
+	PartLibraryVersionID pgtype.UUID
+	TaskID               pgtype.UUID
+	GeneratorVersion     *string
+}
+
+type ListPreparedPartPreviewPrebuildCandidatesRow struct {
+	LdrawPartNum       string
+	Generation         int32
+	SourceRelativePath string
+	SourceFileHash     string
+	FaceCount          int32
+}
+
+// 只读取已经绑定本次 task/generator 的非 ready 行；任务重试不会重新解释 active library。
+func (q *Queries) ListPreparedPartPreviewPrebuildCandidates(ctx context.Context, arg ListPreparedPartPreviewPrebuildCandidatesParams) ([]ListPreparedPartPreviewPrebuildCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listPreparedPartPreviewPrebuildCandidates, arg.PartLibraryVersionID, arg.TaskID, arg.GeneratorVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPreparedPartPreviewPrebuildCandidatesRow{}
+	for rows.Next() {
+		var i ListPreparedPartPreviewPrebuildCandidatesRow
+		if err := rows.Scan(
+			&i.LdrawPartNum,
+			&i.Generation,
+			&i.SourceRelativePath,
+			&i.SourceFileHash,
+			&i.FaceCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockPartPreviewState = `-- name: LockPartPreviewState :one
@@ -256,31 +522,30 @@ func (q *Queries) LockPartPreviewState(ctx context.Context, arg LockPartPreviewS
 	return i, err
 }
 
-const markPartPreviewReady = `-- name: MarkPartPreviewReady :execrows
+const markPartPreviewPrebuildFailed = `-- name: MarkPartPreviewPrebuildFailed :execrows
 UPDATE component_repo.part_previews
-SET artifact_id = $1, status = 'ready',
-    generator_version = $2,
-    failure_code = NULL, failure_params = NULL, updated_at = now()
+SET status = 'failed', failure_code = $1,
+    failure_params = $2, updated_at = now()
 WHERE part_library_version_id = $3
   AND ldraw_part_num = $4
   AND task_id = $5
   AND generation = $6
-  AND status = 'running'
+  AND status IN ('pending', 'running')
 `
 
-type MarkPartPreviewReadyParams struct {
-	ArtifactID           pgtype.UUID
-	GeneratorVersion     *string
+type MarkPartPreviewPrebuildFailedParams struct {
+	FailureCode          *string
+	FailureParams        []byte
 	PartLibraryVersionID pgtype.UUID
 	LdrawPartNum         string
 	TaskID               pgtype.UUID
 	Generation           int32
 }
 
-func (q *Queries) MarkPartPreviewReady(ctx context.Context, arg MarkPartPreviewReadyParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markPartPreviewReady,
-		arg.ArtifactID,
-		arg.GeneratorVersion,
+func (q *Queries) MarkPartPreviewPrebuildFailed(ctx context.Context, arg MarkPartPreviewPrebuildFailedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markPartPreviewPrebuildFailed,
+		arg.FailureCode,
+		arg.FailureParams,
 		arg.PartLibraryVersionID,
 		arg.LdrawPartNum,
 		arg.TaskID,
@@ -315,6 +580,197 @@ func (q *Queries) MarkPartPreviewRunning(ctx context.Context, arg MarkPartPrevie
 	return result.RowsAffected(), nil
 }
 
+const preparePartPreviewPrebuildCandidateBatch = `-- name: PreparePartPreviewPrebuildCandidateBatch :execrows
+WITH candidate AS (
+  SELECT preview.part_library_version_id, preview.ldraw_part_num
+  FROM component_repo.part_previews preview
+  JOIN component_repo.part_geometries geometry
+    ON geometry.part_library_version_id = preview.part_library_version_id
+   AND geometry.ldraw_part_num = preview.ldraw_part_num
+  WHERE preview.part_library_version_id = $3
+    AND geometry.geometry_status = 'ready'
+    AND preview.status <> 'ready'
+    AND (preview.task_id IS DISTINCT FROM $1
+         OR preview.generator_version IS DISTINCT FROM $2
+         OR preview.status = 'failed')
+  ORDER BY preview.ldraw_part_num
+  FOR UPDATE OF preview SKIP LOCKED
+  LIMIT $4
+)
+UPDATE component_repo.part_previews preview
+SET task_id = $1, status = 'pending',
+    generator_version = $2,
+    generation = CASE
+      WHEN preview.task_id IS DISTINCT FROM $1
+        OR preview.generator_version IS DISTINCT FROM $2
+      THEN preview.generation + 1
+      ELSE preview.generation
+    END,
+    artifact_id = NULL, failure_code = NULL, failure_params = NULL, updated_at = now()
+FROM candidate
+WHERE preview.part_library_version_id = candidate.part_library_version_id
+  AND preview.ldraw_part_num = candidate.ldraw_part_num
+`
+
+type PreparePartPreviewPrebuildCandidateBatchParams struct {
+	TaskID               pgtype.UUID
+	GeneratorVersion     *string
+	PartLibraryVersionID pgtype.UUID
+	BatchSize            int32
+}
+
+// 分批冻结 generation/task 归属，避免 Supabase pooler 对大 UPDATE 触发 statement/response 限制。
+func (q *Queries) PreparePartPreviewPrebuildCandidateBatch(ctx context.Context, arg PreparePartPreviewPrebuildCandidateBatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, preparePartPreviewPrebuildCandidateBatch,
+		arg.TaskID,
+		arg.GeneratorVersion,
+		arg.PartLibraryVersionID,
+		arg.BatchSize,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const searchParts = `-- name: SearchParts :many
+SELECT part.part_library_version_id, part.ldraw_part_num, part.source_name,
+       part.content_locale, geometry.logical_width_stud,
+       geometry.logical_depth_stud, geometry.logical_height_plate,
+       geometry.logical_size_derivation_status, preview.artifact_id AS preview_artifact_id,
+       artifact.storage_key AS preview_storage_key, artifact.sha256 AS preview_sha256,
+       artifact.file_size AS preview_file_size,
+       (
+           SELECT count(*)::integer
+           FROM unnest($1::text[]) keyword(value)
+           WHERE position(keyword.value IN lower(part.source_name)) > 0
+              OR position(keyword.value IN lower(part.ldraw_part_num)) > 0
+       ) AS matched_keyword_count
+FROM component_repo.parts part
+JOIN component_repo.part_geometries geometry
+  ON geometry.part_library_version_id = part.part_library_version_id
+ AND geometry.ldraw_part_num = part.ldraw_part_num
+LEFT JOIN component_repo.part_previews preview
+  ON preview.part_library_version_id = part.part_library_version_id
+ AND preview.ldraw_part_num = part.ldraw_part_num
+ AND preview.status = 'ready'
+ AND preview.generator_version = $2
+LEFT JOIN component_repo.artifacts artifact
+  ON artifact.id = preview.artifact_id
+ AND artifact.artifact_type = 'part_preview_glb'
+ AND artifact.verification_status = 'verified'
+ AND artifact.deleted_at IS NULL
+WHERE part.part_library_version_id = $3
+  AND geometry.geometry_status = 'ready'
+  AND position('sticker' IN lower(part.source_name)) = 0
+  AND position('decal' IN lower(part.source_name)) = 0
+  AND (
+      cardinality($1::text[]) = 0
+      OR EXISTS (
+          SELECT 1
+          FROM unnest($1::text[]) keyword(value)
+          WHERE position(keyword.value IN lower(part.source_name)) > 0
+             OR position(keyword.value IN lower(part.ldraw_part_num)) > 0
+      )
+  )
+  AND (
+      jsonb_array_length($4::jsonb) = 0
+      OR EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements($4::jsonb) dimension(value)
+          WHERE geometry.logical_width_stud IS NOT NULL
+            AND geometry.logical_depth_stud IS NOT NULL
+            AND (
+                (
+                    jsonb_array_length(dimension.value) = 2
+                    AND least(geometry.logical_width_stud, geometry.logical_depth_stud) = (dimension.value ->> 0)::double precision
+                    AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud) = (dimension.value ->> 1)::double precision
+                )
+                OR (
+                    jsonb_array_length(dimension.value) = 3
+                    AND geometry.logical_height_plate IS NOT NULL
+                    AND least(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 0)::double precision
+                    AND geometry.logical_width_stud + geometry.logical_depth_stud + geometry.logical_height_plate
+                        - least(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate)
+                        - greatest(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 1)::double precision
+                    AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 2)::double precision
+                )
+            )
+      )
+  )
+ORDER BY matched_keyword_count DESC, lower(part.source_name), part.ldraw_part_num
+LIMIT $6
+OFFSET $5
+`
+
+type SearchPartsParams struct {
+	Keywords             []string
+	GeneratorVersion     *string
+	PartLibraryVersionID pgtype.UUID
+	Dimensions           []byte
+	PageOffset           int32
+	PageSize             int32
+}
+
+type SearchPartsRow struct {
+	PartLibraryVersionID        pgtype.UUID
+	LdrawPartNum                string
+	SourceName                  string
+	ContentLocale               string
+	LogicalWidthStud            *float64
+	LogicalDepthStud            *float64
+	LogicalHeightPlate          *float64
+	LogicalSizeDerivationStatus string
+	PreviewArtifactID           pgtype.UUID
+	PreviewStorageKey           *string
+	PreviewSha256               *string
+	PreviewFileSize             *int64
+	MatchedKeywordCount         int32
+}
+
+// 排序先按命中的名称/编号关键词数量，再按源名称和 LDraw 编号稳定排序；分页不会依赖本地化文案。
+// 当前 generator 的 ready Artifact 作为可选只读投影返回，Search 不创建任务，也不读取对象正文。
+func (q *Queries) SearchParts(ctx context.Context, arg SearchPartsParams) ([]SearchPartsRow, error) {
+	rows, err := q.db.Query(ctx, searchParts,
+		arg.Keywords,
+		arg.GeneratorVersion,
+		arg.PartLibraryVersionID,
+		arg.Dimensions,
+		arg.PageOffset,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchPartsRow{}
+	for rows.Next() {
+		var i SearchPartsRow
+		if err := rows.Scan(
+			&i.PartLibraryVersionID,
+			&i.LdrawPartNum,
+			&i.SourceName,
+			&i.ContentLocale,
+			&i.LogicalWidthStud,
+			&i.LogicalDepthStud,
+			&i.LogicalHeightPlate,
+			&i.LogicalSizeDerivationStatus,
+			&i.PreviewArtifactID,
+			&i.PreviewStorageKey,
+			&i.PreviewSha256,
+			&i.PreviewFileSize,
+			&i.MatchedKeywordCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setPartPreviewTask = `-- name: SetPartPreviewTask :exec
 UPDATE component_repo.part_previews
 SET task_id = $1, status = 'pending',
@@ -341,80 +797,4 @@ func (q *Queries) SetPartPreviewTask(ctx context.Context, arg SetPartPreviewTask
 		arg.LdrawPartNum,
 	)
 	return err
-}
-
-const upsertPartPreviewArtifact = `-- name: UpsertPartPreviewArtifact :one
-INSERT INTO component_repo.artifacts (
-    id, owner_id, artifact_type, source_kind, original_filename,
-    storage_provider, storage_bucket, storage_key, sha256, file_size,
-    mime_type, immutable, verification_status, verified_at, uploaded_by, metadata
-) VALUES (
-    $1, $2, 'part_preview_glb', 'derived',
-    $3, $4, $5,
-    $6, $7, $8, 'model/gltf-binary',
-    true, 'verified', now(), $9, $10
-)
-ON CONFLICT (id) DO UPDATE SET
-    storage_key = EXCLUDED.storage_key,
-    sha256 = EXCLUDED.sha256,
-    file_size = EXCLUDED.file_size,
-    verification_status = 'verified',
-    verified_at = now(),
-    metadata = EXCLUDED.metadata,
-    deleted_at = NULL
-RETURNING id, owner_id, artifact_type, source_kind, original_filename,
-          storage_provider, storage_bucket, storage_key, sha256, file_size,
-          mime_type, immutable, verification_status, verified_at, uploaded_by,
-          uploaded_at, metadata, deleted_at, derived_from_artifact_id
-`
-
-type UpsertPartPreviewArtifactParams struct {
-	ID               pgtype.UUID
-	OwnerID          pgtype.UUID
-	OriginalFilename string
-	StorageProvider  string
-	StorageBucket    string
-	StorageKey       string
-	Sha256           string
-	FileSize         int64
-	UploadedBy       pgtype.UUID
-	Metadata         []byte
-}
-
-func (q *Queries) UpsertPartPreviewArtifact(ctx context.Context, arg UpsertPartPreviewArtifactParams) (ComponentRepoArtifact, error) {
-	row := q.db.QueryRow(ctx, upsertPartPreviewArtifact,
-		arg.ID,
-		arg.OwnerID,
-		arg.OriginalFilename,
-		arg.StorageProvider,
-		arg.StorageBucket,
-		arg.StorageKey,
-		arg.Sha256,
-		arg.FileSize,
-		arg.UploadedBy,
-		arg.Metadata,
-	)
-	var i ComponentRepoArtifact
-	err := row.Scan(
-		&i.ID,
-		&i.OwnerID,
-		&i.ArtifactType,
-		&i.SourceKind,
-		&i.OriginalFilename,
-		&i.StorageProvider,
-		&i.StorageBucket,
-		&i.StorageKey,
-		&i.Sha256,
-		&i.FileSize,
-		&i.MimeType,
-		&i.Immutable,
-		&i.VerificationStatus,
-		&i.VerifiedAt,
-		&i.UploadedBy,
-		&i.UploadedAt,
-		&i.Metadata,
-		&i.DeletedAt,
-		&i.DerivedFromArtifactID,
-	)
-	return i, err
 }

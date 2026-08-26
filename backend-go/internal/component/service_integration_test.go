@@ -4,18 +4,13 @@ package component
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
-	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
-	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -45,7 +40,7 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create component: %v", err)
 	}
-	if created.Name != "  用户组件  " || created.Description == nil || *created.Description != " 保留原文 " || created.ContentLocale != "zh-CN" || created.OwnerID == nil || *created.OwnerID != uuidutil.String(actorA) {
+	if created.Name != "  用户组件  " || created.Description == nil || *created.Description != " 保留原文 " || created.ContentLocale != "zh-CN" || created.OwnerID == nil || *created.OwnerID != uuidutil.String(actorA) || !created.OwnedByActor {
 		t.Fatalf("unexpected created component: %+v", created)
 	}
 	if _, err := service.GetComponent(ctx, actorB, created.ID, "en-US"); errorCode(err) != "component_repo.component_not_found" {
@@ -102,6 +97,21 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 		*updatedVersion.ReleaseNote != releaseNote || updatedVersion.ReleaseNoteLocale == nil || *updatedVersion.ReleaseNoteLocale != "zh-CN" {
 		t.Fatalf("update draft version: %+v, %v", updatedVersion, err)
 	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE component_repo.component_versions
+		SET preview_bbox_min=ARRAY[0,0,0]::float8[],
+		    preview_bbox_max=ARRAY[40,24,20]::float8[],
+		    logical_width_stud=2, logical_depth_stud=1,
+		    logical_height_plate=3, preview_bounds_complete=true
+		WHERE id=$1`, mustUUID(t, version.ID)); err != nil {
+		t.Fatalf("seed draft preview bounds: %v", err)
+	}
+	draftList, err := service.ListComponents(ctx, actorA, ComponentListRequest{PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN"})
+	if err != nil || len(draftList.Items) != 1 || draftList.Items[0].LogicalSize == nil ||
+		draftList.Items[0].LogicalSize.WidthStud != 2 || draftList.Items[0].LogicalSize.DepthStud != 1 ||
+		draftList.Items[0].LogicalSize.HeightPlate != 3 {
+		t.Fatalf("latest draft logical size projection: %+v, %v", draftList, err)
+	}
 	_, err = pool.Exec(ctx, `
 		INSERT INTO component_repo.component_versions
 			(id, component_id, component_candidate_id, version_label, source_artifact_id,
@@ -119,13 +129,12 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	if _, err := service.GetVersion(ctx, actorB, version.ID); errorCode(err) != "component_repo.version_not_found" {
 		t.Fatalf("cross-user draft version read code = %q", errorCode(err))
 	}
-	seedPassingPublishValidation(t, ctx, pool, actorA, version.ID)
 	published, err := service.PublishVersion(ctx, actorA, version.ID)
 	if err != nil || published.Status != "published" || published.PublishedAt == nil {
 		t.Fatalf("publish version: %+v, %v", published, err)
 	}
 	visible, err := service.GetComponent(ctx, actorB, created.ID, "en-US")
-	if err != nil || visible.Status != "active" || visible.CurrentVersionID == nil || *visible.CurrentVersionID != version.ID {
+	if err != nil || visible.Status != "active" || visible.CurrentVersionID == nil || *visible.CurrentVersionID != version.ID || visible.OwnedByActor {
 		t.Fatalf("published component visibility: %+v, %v", visible, err)
 	}
 	if _, err := service.GetVersion(ctx, actorB, version.ID); err != nil {
@@ -144,67 +153,6 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	}
 	if _, err := service.GetComponent(ctx, actorB, created.ID, "en-US"); errorCode(err) != "component_repo.component_not_found" {
 		t.Fatalf("deleted component public read code = %q, error = %v", errorCode(err), err)
-	}
-	if _, err := service.PurgeComponent(ctx, actorA, created.ID, PurgeComponentInput{
-		ConfirmComponentName: "wrong name", DeleteStorageObjects: true,
-		Locale: "zh-CN", Timezone: "Asia/Shanghai",
-	}); errorCode(err) != "component_repo.component_purge_confirmation_failed" {
-		t.Fatalf("purge confirmation code = %q, error = %v", errorCode(err), err)
-	}
-	purge, err := service.PurgeComponent(ctx, actorA, created.ID, PurgeComponentInput{
-		ConfirmComponentName: created.Name, DeleteStorageObjects: true,
-		Locale: "zh-CN", Timezone: "Asia/Shanghai",
-	})
-	if err != nil || purge.Status != task.StatusQueued {
-		t.Fatalf("schedule component purge: %+v, %v", purge, err)
-	}
-	queue := task.NewService(pool)
-	claimed, ok, err := queue.Claim(ctx, "component-purge-test", []string{task.ComponentPurgeType}, time.Minute)
-	if err != nil || !ok || uuidutil.String(claimed.ID) != purge.TaskID {
-		t.Fatalf("claim component purge: %+v ok=%v err=%v", claimed, ok, err)
-	}
-	purgeStore := newComponentPurgeTestStore()
-	result, err := NewPurgeTaskHandler(pool, purgeStore).Handle(ctx, claimed)
-	if err != nil {
-		t.Fatalf("handle component purge: %v", err)
-	}
-	if err := queue.Complete(ctx, "component-purge-test", claimed, result); err != nil {
-		t.Fatalf("complete component purge: %v", err)
-	}
-	assertComponentPurged(t, pool, created.ID, purge.TaskID, purgeStore)
-}
-
-func seedPassingPublishValidation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, actor pgtype.UUID, versionID string) {
-	t.Helper()
-	versionUUID := mustUUID(t, versionID)
-	candidateUUID := mustUUID(t, "20000000-0000-0000-0000-000000000013")
-	payload := json.RawMessage(`{"candidateId":"20000000-0000-0000-0000-000000000013","versionId":"` + versionID + `","validationLevel":"publish","validatorVersion":"component-repo-validator-v1"}`)
-	queue := task.NewService(pool)
-	created, _, err := queue.Enqueue(ctx, task.EnqueueInput{OwnerID: actor, TaskType: task.ComponentValidateType, Payload: payload, Locale: "zh-CN", Timezone: "Asia/Shanghai", CreatedBy: actor, IdempotencyKey: "g3-publish-validation", MaxAttempts: 1})
-	if err != nil {
-		t.Fatalf("enqueue validation fixture: %v", err)
-	}
-	claimed, ok, err := queue.Claim(ctx, "g3-validation-worker", []string{task.ComponentValidateType}, time.Minute)
-	if err != nil || !ok {
-		t.Fatalf("claim validation fixture: %v", err)
-	}
-	if err := queue.Complete(ctx, "g3-validation-worker", claimed, task.Result{Payload: json.RawMessage(`{"passed":true}`)}); err != nil {
-		t.Fatalf("complete validation fixture: %v", err)
-	}
-	reportID := mustUUID(t, "20000000-0000-0000-0000-000000000041")
-	_, err = pool.Exec(ctx, `
-		INSERT INTO component_repo.validation_reports (
-			id, component_candidate_id, component_version_id, owner_id, task_id,
-			validation_level, passed, checks, issues, validator_version,
-			interface_signature, structure_hash, geometry_hash)
-		VALUES ($1, $2, $3, $4, $5, 'publish', true, '[]', '[]',
-			'component-repo-validator-v1', repeat('1',64), repeat('2',64), repeat('3',64))`,
-		reportID, candidateUUID, versionUUID, actor, mustUUID(t, created.ID))
-	if err != nil {
-		t.Fatalf("seed validation report: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE component_repo.component_versions SET validation_report_id=$1 WHERE id=$2`, reportID, versionUUID); err != nil {
-		t.Fatalf("attach validation report: %v", err)
 	}
 }
 
@@ -335,10 +283,39 @@ func testGroupsMembershipsAndSubscriptions(t *testing.T, service *Service, actor
 		t.Fatalf("component group ids: %+v, %v", groupIDs, err)
 	}
 	search, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
-		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN", Query: "用户", Statuses: []string{"active"},
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN", Queries: []string{"用户"}, Statuses: []string{"active"},
 	})
 	if err != nil || search.Total != 1 || len(search.Items) != 1 || search.Items[0].ID != componentID || search.StatusCounts["active"] != 1 {
 		t.Fatalf("group component search: %+v, %v", search, err)
+	}
+	for _, sizeQuery := range []string{"1x2x3", "1x2", "1x3", "2x3"} {
+		sizeSearch, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
+			PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN", Queries: []string{sizeQuery}, Statuses: []string{"active"},
+		})
+		if err != nil || sizeSearch.Total != 1 || len(sizeSearch.Items) != 1 || sizeSearch.Items[0].ID != componentID || sizeSearch.StatusCounts["active"] != 1 {
+			t.Fatalf("size search %q: %+v, %v", sizeQuery, sizeSearch, err)
+		}
+	}
+	// 开区间必须排除恰好相差 1 的边界：组件最小维度为 1，查询 0 的上边界也是 1。
+	boundarySearch, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN", Queries: []string{"0x2x3"}, Statuses: []string{"active"},
+	})
+	if err != nil || boundarySearch.Total != 0 || len(boundarySearch.Items) != 0 || boundarySearch.StatusCounts["active"] != 0 {
+		t.Fatalf("open interval boundary search: %+v, %v", boundarySearch, err)
+	}
+	compoundSearch, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN",
+		Queries: []string{"用户", "1x3", "2x3"}, Statuses: []string{"active"},
+	})
+	if err != nil || compoundSearch.Total != 1 || len(compoundSearch.Items) != 1 || compoundSearch.Items[0].ID != componentID {
+		t.Fatalf("compound text and size search: %+v, %v", compoundSearch, err)
+	}
+	compoundMiss, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN",
+		Queries: []string{"用户", "0x2x3"}, Statuses: []string{"active"},
+	})
+	if err != nil || compoundMiss.Total != 0 || len(compoundMiss.Items) != 0 {
+		t.Fatalf("compound search must require every condition: %+v, %v", compoundMiss, err)
 	}
 	members, err := service.ListGroupMembers(ctx, actorA, firstID, "zh-CN", PageRequest{})
 	if err != nil || len(members.Items) != 1 || members.Items[0].ID != componentID {
@@ -540,126 +517,6 @@ func resetComponentRepo(t *testing.T, pool *pgxpool.Pool) {
 	if err != nil {
 		t.Fatalf("reset component_repo fixtures: %v", err)
 	}
-}
-
-func assertComponentPurged(t *testing.T, pool *pgxpool.Pool, componentID, purgeTaskID string, store *componentPurgeTestStore) {
-	t.Helper()
-	ctx := context.Background()
-	expectedDeleted := []string{"g3/pending.ldr"}
-	for _, key := range expectedDeleted {
-		if store.deleted[key] != 1 {
-			t.Fatalf("storage key %s deleted %d times, want once; deleted=%v", key, store.deleted[key], store.deleted)
-		}
-	}
-	if store.deleted["g3/fixture.ldr"] != 0 {
-		t.Fatalf("shared storage key must not be deleted: %v", store.deleted)
-	}
-	if store.deleted["g3/foreign.ldr"] != 0 {
-		t.Fatalf("foreign storage key must not be deleted: %v", store.deleted)
-	}
-	var componentName string
-	var componentDescription *string
-	var componentTags []string
-	var componentDeleted bool
-	if err := pool.QueryRow(ctx, `
-		SELECT name, description, tags, deleted_at IS NOT NULL
-		FROM component_repo.components
-		WHERE id=$1`, componentID).Scan(&componentName, &componentDescription, &componentTags, &componentDeleted); err != nil {
-		t.Fatalf("read redacted component: %v", err)
-	}
-	if componentName != "[deleted component]" || componentDescription != nil || len(componentTags) != 0 || !componentDeleted {
-		t.Fatalf("component was not redacted: name=%q description=%v tags=%v deleted=%v", componentName, componentDescription, componentTags, componentDeleted)
-	}
-	var versionCount, versionRedactedCount, ownerImportCount, ownerArtifactCount, tombstonedArtifactCount int
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*), count(*) FILTER (
-			WHERE deleted_at IS NOT NULL AND release_note IS NULL AND version_label LIKE 'deleted-%'
-		)
-		FROM component_repo.component_versions
-		WHERE component_id=$1`, componentID).Scan(&versionCount, &versionRedactedCount); err != nil {
-		t.Fatalf("count versions: %v", err)
-	}
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM component_repo.imports
-		WHERE id IN (
-			'20000000-0000-0000-0000-000000000011',
-			'20000000-0000-0000-0000-000000000031'
-		)`).Scan(&ownerImportCount); err != nil {
-		t.Fatalf("count owner imports: %v", err)
-	}
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM component_repo.artifacts
-		WHERE id IN (
-			'20000000-0000-0000-0000-000000000010',
-			'20000000-0000-0000-0000-000000000030'
-		)`).Scan(&ownerArtifactCount); err != nil {
-		t.Fatalf("count owner artifacts: %v", err)
-	}
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM component_repo.artifacts
-		WHERE id IN (
-			'20000000-0000-0000-0000-000000000010',
-			'20000000-0000-0000-0000-000000000030'
-		)
-		  AND deleted_at IS NOT NULL`).Scan(&tombstonedArtifactCount); err != nil {
-		t.Fatalf("count tombstoned artifacts: %v", err)
-	}
-	if versionCount != 1 || versionRedactedCount != 1 || ownerImportCount != 2 || ownerArtifactCount != 2 || tombstonedArtifactCount != 1 {
-		t.Fatalf("unexpected redaction counts: versions=%d redactedVersions=%d imports=%d artifacts=%d tombstonedArtifacts=%d", versionCount, versionRedactedCount, ownerImportCount, ownerArtifactCount, tombstonedArtifactCount)
-	}
-	var foreignTarget *string
-	if err := pool.QueryRow(ctx, `
-		SELECT target_component_id::text
-		FROM component_repo.imports
-		WHERE id='20000000-0000-0000-0000-000000000021'`).Scan(&foreignTarget); err != nil {
-		t.Fatalf("foreign import retained: %v", err)
-	}
-	if foreignTarget == nil || *foreignTarget != componentID {
-		t.Fatalf("foreign import target_component_id = %v, want retained component reference", foreignTarget)
-	}
-	var purgePayload string
-	if err := pool.QueryRow(ctx, `SELECT payload::text FROM component_repo.tasks WHERE id=$1`, purgeTaskID).Scan(&purgePayload); err != nil {
-		t.Fatalf("purge task retained: %v", err)
-	}
-	if strings.Contains(purgePayload, "storageObjects") || strings.Contains(purgePayload, "g3/fixture.ldr") {
-		t.Fatalf("purge task payload was not redacted: %s", purgePayload)
-	}
-}
-
-type componentPurgeTestStore struct {
-	deleted map[string]int
-}
-
-func newComponentPurgeTestStore() *componentPurgeTestStore {
-	return &componentPurgeTestStore{deleted: map[string]int{}}
-}
-
-func (*componentPurgeTestStore) Provider() string { return "test" }
-func (*componentPurgeTestStore) Bucket() string   { return "test" }
-func (*componentPurgeTestStore) Head(context.Context, string) (storage.ObjectMetadata, error) {
-	return storage.ObjectMetadata{}, storage.ErrUnavailable
-}
-func (*componentPurgeTestStore) HeadForUser(context.Context, string, string) (storage.ObjectMetadata, error) {
-	return storage.ObjectMetadata{}, storage.ErrUnavailable
-}
-func (*componentPurgeTestStore) Open(context.Context, string) (io.ReadCloser, error) {
-	return nil, storage.ErrUnavailable
-}
-func (*componentPurgeTestStore) Put(context.Context, string, string, io.Reader, int64) error {
-	return storage.ErrUnavailable
-}
-func (s *componentPurgeTestStore) Delete(_ context.Context, key string) error {
-	s.deleted[key]++
-	return nil
-}
-func (*componentPurgeTestStore) SignDownload(context.Context, string, time.Duration) (string, error) {
-	return "", storage.ErrUnavailable
-}
-func (*componentPurgeTestStore) SignDownloadForUser(context.Context, string, time.Duration, string) (string, error) {
-	return "", storage.ErrUnavailable
 }
 
 func mustUUID(t *testing.T, value string) pgtype.UUID {

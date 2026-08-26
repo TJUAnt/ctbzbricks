@@ -1,10 +1,17 @@
 # Go 后端迁移原则
 
-> 状态：Approved target architecture
+> 状态：Approved target architecture（Component Repo Go-only）
 > 生效日期：2026-08-06
+> Component Repo Go-only 修订：2026-08-22
+> Component 上传边界修订：2026-08-23
+> 发布与验证边界修订：2026-08-24
 > 首个迁移域：Component Repo
 > 路线图：[go_component_migration_plan.md](./go_component_migration_plan.md)
 > 进度台账：[go_migration_progress.md](./go_migration_progress.md)
+
+文档口径冲突时按以下顺序解释：本文的长期原则与已确认决策优先；阶段范围以迁移计划为准；
+schema、任务和 Part Library 细节分别以专项 contract/roadmap 为准；当前完成事实以进度台账最后记录为准；
+带日期的 inventory、Review 和执行记录只描述当时事实，不能覆盖后续目标决策。
 
 ## 1. 目标
 
@@ -19,7 +26,7 @@ PostgreSQL + 对象存储
         ↓
 PostgreSQL 持久化任务队列
         ↓
-Go Worker / Python Worker
+Go Worker
 ```
 
 目标技术栈：
@@ -34,7 +41,21 @@ Gin + PostgreSQL + sqlc + pgx/v5 + pgxpool + Goose
 - Goose 负责版本化数据库 migration；sqlc 不承担 migration。
 - PostgreSQL 保存业务数据、任务、任务状态和 outbox。
 - 对象存储保存上传源文件和大型派生文件。
-- Go 是系统主体；Python 只作为科学计算、复杂算法和迁移期算法插件。
+- Go 是系统主体。
+- **Component Repo 的目标运行时是 Go-only**：公共 API、事务编排、持久任务消费、解析、
+  关系检测、校验、预览和 Part Library 工具链最终都由 Go 承担，不以 Python 进程作为功能可用前提。
+- 其他尚未迁移领域是否保留 Python，由各自路线图单独决定；不得据此声称整个 BrickBuilder
+  后端已经 Go-only。
+
+### 1.1 Component Repo Go-only 决策边界
+
+- `component.relations.detect` 已迁移为 Go Worker handler；Component Repo 不再允许 Python task
+  consumer。不得新增 Python task type、公共 API 或持久化模型。
+- 新增 Component Repo 功能默认直接使用 Go。若现有 Python 算法阻碍功能开发，应先固定输入、输出、
+  golden fixture 和 PostgreSQL 不变量，再迁移为 Go handler。
+- 语言无关的任务协议用于保证迁移期间可替换和可验收，不表示执行语言可以永久漂移。
+- Component Repo Go-only 完成的判据是：停止 Python 进程后，完整 Component Repo 业务链路仍可运行，
+  且仓库不再保留 Component Repo Python 公共路由或任务执行入口。
 
 ## 2. 开发阶段策略
 
@@ -45,7 +66,7 @@ Gin + PostgreSQL + sqlc + pgx/v5 + pgxpool + Goose
 - 不保留 MySQL fallback。
 - 不做双写、影子流量、灰度兼容层或 Gin 到 FastAPI 的业务代理。
 - 不逐函数翻译 Python；按目标领域模型和事务边界重新实现。
-- 新 Go 能力完成验收后直接切换前端，并删除对应 Python 组件路由与服务。
+- 新 Go 能力完成验收后直接切换前端，并删除对应 Python 组件路由、Worker 入口与仅服务该实现的代码。
 
 历史 ADR 仍用于解释组件领域不变量。若历史文档的技术实现与本文冲突，以本文的 Go 目标架构为准；领域数据完整性、对象所有权、国际化和安全不变量继续有效。
 
@@ -79,6 +100,37 @@ Gin 请求链路只执行有界的验证、查询、事务和任务创建。以�
 
 这些工作必须通过持久化任务交给 Worker。API 返回任务 ID，客户端查询状态和结果。
 
+#### 3.2.1 Component 上传交互边界
+
+Component Repo 的普通上传流程固定为以下边界：
+
+- Go Backend API 拥有上传控制面：校验 actor/session/file metadata，生成并持久化不可由客户端指定的
+  owner-scoped bucket/object key，再把该精确上传目标返回浏览器。
+- 浏览器使用当前用户 JWT 直接把文件正文传到 Object Storage；Storage INSERT RLS 必须把写入限制到
+  actor 自己仍为 pending、未过期的 upload session 精确 key。浏览器不得拼接任意 key，也不得删除已完成
+  或已关联 Artifact 的对象。
+- API 不中转或缓存整个文件，也不在上传请求中解析模型、计算 BOM 或生成 GLB。
+- 浏览器调用 upload complete 后，API 做 Storage 完成确认、有界校验、短事务和持久任务编排，
+  以 `202 Accepted` 结束本次写交互。返回 `202` 不表示解析或 GLB 已完成。
+- `artifact verify -> component import parse/BOM -> component preview materialize` 必须由服务端持久任务链
+  继续推进。关闭、刷新或离开页面不得中断任务，也不得依赖浏览器再发起一次 materialize 请求才能得到
+  上传主结果。
+- 上传主结果只有在 BOM 已落库且 ComponentVersion 整体 GLB 已生成并验证后才是 `ready`。在此之前，
+  前端只能读取并展示 `processing` 状态，不得挂载三维预览器、请求预览 URL 或展示旧的、尚未验证的
+  任务中间产物。
+- Component GLB 允许受控 partial preview：冻结 Part Library 中 geometry 为 `failed/missing` 的 Part
+  保留在 BOM，并以稳定机器状态明确标注；Worker 跳过这些实例后仍可生成 verified GLB。任务结果和
+  Artifact metadata 必须记录 `omittedPartRefs` 与 `complete`。若 geometry 已声明 `ready`，但 Worker
+  本地 source 缺失、哈希漂移或递归解析失败，仍属于环境/快照一致性错误，不能静默降级。
+- relation detection、connector/interface、validation 和 publish 是后续工作台能力，不属于普通上传主链的
+  默认完成条件。
+- ComponentVersion 发布与验证相互独立：owner 可以直接发布 Draft；`component.validate` 是用户显式触发的
+  可选异步质量报告，不是发布前置条件。Draft/Published 都可验证，详情页只在当前报告 `passed=true` 时
+  展示已通过状态；验证失败不得撤销、阻止或隐式改变版本发布状态。
+
+`processing/ready/failed` 等为稳定机器状态。界面文案必须通过 typed semantic i18n key 渲染；不得在
+TS/TSX 中硬编码“解析中”或其他最终译文。失败继续使用稳定 `code + params`。
+
 ### 3.3 Worker 分工
 
 Go Worker 默认负责：
@@ -88,11 +140,13 @@ Go Worker 默认负责：
 - 对象存储读写和派生资产编排；
 - 适合高并发或低延迟的确定性计算。
 
-Python Worker 负责：
+对于 Component Repo，上述列表不是“Go 适合做什么”的建议，而是最终执行边界。即使算法原先使用
+NumPy、SciPy、OpenCV、OR-Tools 或 Python 3D 库，也必须通过可验证的 Go 实现、受控数据生成步骤
+或已批准的外部基础设施消除 Python 运行时依赖；引入外部基础设施需要单独架构决策。
 
-- NumPy、SciPy、OpenCV、OR-Tools 和机器学习；
-- 复杂 3D、拟合或已有 Python 算法插件；
-- 尚未迁移到 Go 的组件算法，但不得继续承载公共 HTTP API。
+Component Repo 不允许 Python task consumer；原 `component.relations.detect` 过渡 Worker 已在
+Go handler 通过 PostgreSQL E2E 后删除。任务协议仍必须与实现语言无关，以保证持久状态、恢复和
+可验收性，而不是为另一个运行时保留入口。
 
 任务协议必须与实现语言无关。任务结果写回 PostgreSQL 和对象存储，不能只存在于进程内内存。
 
@@ -249,11 +303,11 @@ Go 迁移不得建立第二套本地化机制，必须遵守仓库 i18n 文档�
 
 一个 Go 迁移阶段只有在以下条件全部满足后才能标记完成：
 
-- 目标功能由 Go API 或明确的 Worker 边界承担。
+- Component Repo 目标功能由 Go API 或 Go Worker 承担；临时 Python Worker 不能计入 Go-only 完成。
 - schema migration、sqlc queries 和生成代码一致。
 - PostgreSQL 集成测试覆盖成功、失败、授权和并发路径。
 - API 错误、多语言内容边界和任务上下文符合现有架构。
 - 计算未进入 Gin 长请求链路。
 - 对象存储部分失败和任务重试具有幂等或补偿策略。
 - 文档和 `go_migration_progress.md` 已更新。
-- 被替代的 Python 公共路由和死代码已删除，除非路线图明确保留为算法插件。
+- 被替代的 Component Repo Python 公共路由、Worker 入口和仅服务该实现的死代码已删除。

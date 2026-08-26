@@ -32,6 +32,22 @@ func TestImportStudioLibraryWritesComponentRepoSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateStudioManifest: %v", err)
 	}
+	seedPool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seedPool.Exec(ctx, `
+		TRUNCATE component_repo.part_library_versions CASCADE;
+		INSERT INTO component_repo.part_library_versions
+			(id, source_name, source_hash, connector_count, status, created_by)
+		VALUES
+			('00000000-0000-4000-8000-000000000999', 'previous', repeat('f', 64), 0, 'active',
+			 '00000000-0000-4000-8000-000000000123')
+	`); err != nil {
+		seedPool.Close()
+		t.Fatal(err)
+	}
+	seedPool.Close()
 	result, err := ImportStudioLibrary(ctx, ImportOptions{
 		DatabaseURL:  databaseURL,
 		ManifestPath: manifest.ManifestPath,
@@ -49,18 +65,27 @@ func TestImportStudioLibraryWritesComponentRepoSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	var libraryCount, partCount, readyCount, failedCount, previewCount int
+	var libraryCount, activeCount, retiredPrevious, partCount, readyCount, failedCount, previewCount int
+	var sourceName string
 	if err := pool.QueryRow(ctx, `
 		SELECT
 		  (SELECT count(*) FROM component_repo.part_library_versions WHERE id = $1::uuid AND status = 'active'),
+		  (SELECT count(*) FROM component_repo.part_library_versions WHERE status = 'active'),
+		  (SELECT count(*) FROM component_repo.part_library_versions WHERE id = '00000000-0000-4000-8000-000000000999' AND status = 'retired'),
 		  (SELECT count(*) FROM component_repo.parts WHERE part_library_version_id = $1::uuid),
 		  (SELECT count(*) FROM component_repo.part_geometries WHERE part_library_version_id = $1::uuid AND geometry_status = 'ready'),
 		  (SELECT count(*) FROM component_repo.part_geometries WHERE part_library_version_id = $1::uuid AND geometry_status = 'failed'),
 		  (SELECT count(*) FROM component_repo.part_previews WHERE part_library_version_id = $1::uuid)
-	`, result.LibraryID).Scan(&libraryCount, &partCount, &readyCount, &failedCount, &previewCount); err != nil {
+	`, result.LibraryID).Scan(&libraryCount, &activeCount, &retiredPrevious, &partCount, &readyCount, &failedCount, &previewCount); err != nil {
 		t.Fatal(err)
 	}
-	if libraryCount != 1 || partCount != 2 || readyCount != 1 || failedCount != 1 || previewCount != 2 {
-		t.Fatalf("counts library/parts/ready/failed/previews = %d/%d/%d/%d/%d", libraryCount, partCount, readyCount, failedCount, previewCount)
+	if libraryCount != 1 || activeCount != 1 || retiredPrevious != 1 || partCount != 2 || readyCount != 1 || failedCount != 1 || previewCount != 2 {
+		t.Fatalf("counts library/active/retired/parts/ready/failed/previews = %d/%d/%d/%d/%d/%d/%d", libraryCount, activeCount, retiredPrevious, partCount, readyCount, failedCount, previewCount)
+	}
+	if err := pool.QueryRow(ctx, `SELECT source_name FROM component_repo.parts WHERE part_library_version_id=$1::uuid AND ldraw_part_num='3001.dat'`, result.LibraryID).Scan(&sourceName); err != nil {
+		t.Fatal(err)
+	}
+	if sourceName != "Brick" {
+		t.Fatalf("source name = %q, want Brick", sourceName)
 	}
 }

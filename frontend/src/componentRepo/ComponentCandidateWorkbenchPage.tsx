@@ -23,6 +23,7 @@ import {
   getComponentVersion,
   listComponentVersions,
   listRelations,
+  loadComponentVersionParts,
   loadComponentVersionPreview,
   publishVersion,
   rejectRelation,
@@ -36,6 +37,7 @@ import {
   type ComponentInterfaceResponse,
   type ComponentRelationCandidateResponse,
   type ComponentValidationReportResponse,
+  type ComponentVersionPartsResponse,
   type ComponentVersionPreviewModelResponse,
   type ComponentVersionResponse,
 } from './componentRepoApi';
@@ -50,7 +52,10 @@ type CandidateWorkbenchState = {
   component: ComponentResponse | null;
   currentVersion: ComponentVersionResponse | null;
   preview: ComponentPreviewResponse | ComponentVersionPreviewModelResponse | null;
+  partDetails: ComponentVersionPartsResponse | null;
   previewStatus: 'idle' | 'loading' | 'error';
+  partsStatus: 'idle' | 'loading' | 'ready' | 'error';
+  connectorStatus: 'idle' | 'loading' | 'ready' | 'error';
   validationReport: ComponentValidationReportResponse | null;
   publishedVersion: ComponentVersionResponse | null;
   loading: boolean;
@@ -70,6 +75,7 @@ export function ComponentCandidateWorkbenchPage() {
     resetViewRef.current = reset;
   }, []);
   const [isUploadOpen, setIsUploadOpen] = React.useState(false);
+  const [connectorToolsEnabled, setConnectorToolsEnabled] = React.useState(false);
   const [state, setState] = React.useState<CandidateWorkbenchState>({
     relations: [],
     freeConnectors: [],
@@ -78,7 +84,10 @@ export function ComponentCandidateWorkbenchPage() {
     component: null,
     currentVersion: null,
     preview: null,
-    previewStatus: 'idle',
+    partDetails: null,
+    previewStatus: 'loading',
+    partsStatus: 'loading',
+    connectorStatus: 'idle',
     validationReport: null,
     publishedVersion: null,
     loading: false,
@@ -128,18 +137,42 @@ export function ComponentCandidateWorkbenchPage() {
       relations,
       freeConnectors,
       interfaces: connectorAnalysis.externalInterfaces,
+      connectorStatus: 'ready',
     }));
   }, [candidateId]);
+
+  // Connector、关系和接口数据属于高级审核能力，只在用户明确开启后加载。
+  const loadConnectorData = React.useCallback(async () => {
+    setState((current) => ({ ...current, connectorStatus: 'loading' }));
+    try {
+      await refreshReviewData();
+    } catch (error) {
+      setState((current) => ({ ...current, connectorStatus: 'error' }));
+      throw error;
+    }
+  }, [refreshReviewData]);
 
   React.useEffect(() => {
     let active = true;
     const loadContext = async () => {
-      setState((current) => ({ ...current, loading: true, error: null }));
+      setConnectorToolsEnabled(false);
+      setState((current) => ({
+        ...current,
+        relations: [],
+        freeConnectors: [],
+        interfaces: [],
+        preview: null,
+        partDetails: null,
+        previewStatus: 'loading',
+        partsStatus: 'loading',
+        connectorStatus: 'idle',
+        loading: true,
+        error: null,
+      }));
       try {
         let component: ComponentResponse | null = null;
         let currentVersion: ComponentVersionResponse | null = null;
         let candidate: ComponentCandidateResponse;
-        let preview: ComponentPreviewResponse | ComponentVersionPreviewModelResponse;
         if (componentId) {
           const [loadedComponent, versions] = await Promise.all([
             getComponent(componentId),
@@ -153,7 +186,6 @@ export function ComponentCandidateWorkbenchPage() {
             throw new Error(tr('componentRepo:candidateIdIsMissing'));
           }
           candidate = await getCandidate(selectedVersion.componentCandidateId);
-          preview = await loadComponentVersionPreview(currentVersion.id);
         } else {
           if (!routeCandidateId) throw new Error(tr('componentRepo:candidateIdIsMissing'));
           candidate = await getCandidate(routeCandidateId);
@@ -164,8 +196,17 @@ export function ComponentCandidateWorkbenchPage() {
             getComponent(candidate.componentId),
             getComponentVersion(candidate.draftVersionId),
           ]);
-          preview = await loadComponentVersionPreview(currentVersion.id);
         }
+        if (!currentVersion) throw new Error(tr('componentRepo:draftVersionUnavailable'));
+        // 默认视图只需要 Worker 已产出的整件 GLB 和 BOM，两者可以并发读取。
+        const [previewResult, partsResult] = await Promise.all([
+          loadComponentVersionPreview(currentVersion.id)
+            .then((preview) => ({ preview, failed: false }))
+            .catch(() => ({ preview: null, failed: true })),
+          loadComponentVersionParts(currentVersion.id)
+            .then((partDetails) => ({ partDetails, failed: false }))
+            .catch(() => ({ partDetails: null, failed: true })),
+        ]);
         if (!active) return;
         setCandidateId(candidate.id);
         setComponentName(component?.name ?? '');
@@ -179,8 +220,10 @@ export function ComponentCandidateWorkbenchPage() {
           candidate,
           component,
           currentVersion,
-          preview,
-          previewStatus: 'idle',
+          preview: previewResult.preview,
+          partDetails: partsResult.partDetails,
+          previewStatus: previewResult.failed ? 'error' : 'idle',
+          partsStatus: partsResult.failed ? 'error' : 'ready',
           publishedVersion: (
             currentVersion && currentVersion.id === component?.currentVersionId
               ? currentVersion
@@ -194,6 +237,7 @@ export function ComponentCandidateWorkbenchPage() {
             ...current,
             loading: false,
             previewStatus: 'error',
+            partsStatus: 'error',
             error: error instanceof Error ? error.message : appConfig.texts.loadFailed,
           }));
         }
@@ -202,10 +246,6 @@ export function ComponentCandidateWorkbenchPage() {
     void loadContext();
     return () => { active = false; };
   }, [componentId, routeCandidateId, tr]);
-
-  React.useEffect(() => {
-    if (candidateId) void runTask(refreshReviewData);
-  }, [candidateId, refreshReviewData, runTask]);
 
   const detect = () =>
     runTask(async () => {
@@ -336,7 +376,72 @@ export function ComponentCandidateWorkbenchPage() {
         </div>
       </section>
 
-      <section className="component-repo-workbench">
+      <section className="component-detail-grid">
+        <article className="component-repo-panel component-detail-wide-panel">
+          <div className="component-repo-panel-title component-candidate-parts-title">
+            <Boxes aria-hidden="true" />
+            <span>{tr('componentRepo:partsList')}</span>
+            <small>
+              {tr('componentRepo:partCount')}: {state.partDetails?.partCount ?? 0}
+            </small>
+          </div>
+          {state.partsStatus === 'loading' ? (
+            <div className="asset-loading">{appConfig.texts.loading}</div>
+          ) : state.partsStatus === 'error' ? (
+            <div className="asset-error">{tr('componentRepo:partsUnavailable')}</div>
+          ) : state.partDetails && state.partDetails.parts.length > 0 ? (
+            <div className="component-candidate-part-list">
+              {state.partDetails.parts.map((part) => (
+                <article
+                  className={`component-repo-card component-candidate-part-card${part.geometryStatus === 'ready' ? '' : ' is-unavailable'}`}
+                  key={part.partRef}
+                >
+                  <div>
+                    <strong>{part.name ?? part.partRef}</strong>
+                    <span>×{part.quantity}</span>
+                  </div>
+                  <span>{part.partRef}</span>
+                  {part.geometryStatus !== 'ready' ? (
+                    <small>{tr('componentRepo:previewGeometryMissing')}</small>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="asset-empty">{tr('componentRepo:noParts')}</div>
+          )}
+        </article>
+      </section>
+
+      <section className="component-candidate-connector-control">
+        <div>
+          <strong>{tr('componentRepo:loadConnectorData')}</strong>
+          <span>{tr('componentRepo:loadConnectorDataDescription')}</span>
+        </div>
+        <label className="component-candidate-connector-switch">
+          <input
+            aria-label={tr('componentRepo:loadConnectorData')}
+            checked={connectorToolsEnabled}
+            disabled={state.connectorStatus === 'loading'}
+            onChange={(event) => {
+              const enabled = event.target.checked;
+              setConnectorToolsEnabled(enabled);
+              if (enabled && state.connectorStatus !== 'ready') {
+                void runTask(loadConnectorData);
+              }
+            }}
+            role="switch"
+            type="checkbox"
+          />
+        </label>
+      </section>
+
+      {connectorToolsEnabled && state.connectorStatus === 'loading' ? (
+        <div className="asset-loading">{appConfig.texts.loading}</div>
+      ) : null}
+
+      {connectorToolsEnabled && state.connectorStatus === 'ready' ? (
+        <section className="component-repo-workbench">
         <aside className="component-repo-panel">
           <div className="component-repo-panel-title">
             <Boxes aria-hidden="true" />
@@ -482,16 +587,17 @@ export function ComponentCandidateWorkbenchPage() {
             </div>
           ) : null}
         </aside>
-      </section>
+        </section>
+      ) : null}
       {isUploadOpen && state.component ? (
         <ComponentUploadDialog
           baseVersionId={state.component.currentVersionId ?? state.currentVersion?.id}
           onClose={() => setIsUploadOpen(false)}
-          onUploaded={(result) => {
+          onUploadCompleted={(result) => {
             setIsUploadOpen(false);
-            navigate(routeFor('componentRepoCandidate').replace(
-              ':candidateId',
-              encodeURIComponent(result.id),
+            navigate(routeFor('componentRepoImportStatus').replace(
+              ':importId',
+              encodeURIComponent(result.importId),
             ));
           }}
           targetComponentId={state.component.id}

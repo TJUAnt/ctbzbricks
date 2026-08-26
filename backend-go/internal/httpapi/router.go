@@ -30,7 +30,7 @@ func NewApplicationRouter(cfg config.Config, pool *pgxpool.Pool, logger *slog.Lo
 		pool,
 		logger,
 		component.NewHandler(component.NewService(pool), logger),
-		artifact.NewHandler(artifact.NewService(pool, objectStore, cfg.Storage).WithImportConfig(cfg.Import), logger),
+		artifact.NewHandler(artifact.NewService(pool, objectStore, cfg.Storage).WithImportConfig(cfg.Import).WithLogger(logger), logger),
 		ingestion.NewHandler(ingestion.NewService(pool), logger),
 		task.NewHTTPHandler(task.NewService(pool), logger),
 		auth.NewVerifier(cfg.Auth),
@@ -68,9 +68,13 @@ func newRouter(
 	healthHandler := health.NewHandler(databasePinger, cfg.Database.ConnectTimeout, logger)
 	router.GET("/health/live", healthHandler.Live)
 	router.GET("/health/ready", healthHandler.Ready)
-	if componentHandler != nil && verifier != nil {
+	if verifier != nil {
 		apiV1 := router.Group("/api/v1", authenticationMiddleware(verifier))
-		componentHandler.Register(apiV1)
+		// 页面刷新只通过这个 Go 入口二次确认 Supabase 会话；普通业务 API 仍只承担本地 JWT 校验。
+		auth.NewSessionHandler(auth.NewSupabaseSessionValidator(cfg.Auth), logger).Register(apiV1)
+		if componentHandler != nil {
+			componentHandler.Register(apiV1)
+		}
 		if artifactHandler != nil {
 			artifactHandler.Register(apiV1)
 		}

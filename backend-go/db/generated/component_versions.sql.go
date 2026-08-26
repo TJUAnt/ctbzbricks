@@ -31,7 +31,9 @@ RETURNING id, component_id, component_candidate_id, version_label, revision, sta
           structure_hash, geometry_hash, preview_artifact_id, preview_status,
           preview_generator_version, preview_failure_code, preview_failure_params,
           release_note, release_note_locale, metadata, created_by, created_at,
-          published_at, deleted_at, deleted_by, preview_task_id, preview_generation
+          published_at, deleted_at, deleted_by, preview_task_id, preview_generation,
+          preview_bbox_min, preview_bbox_max, logical_width_stud,
+          logical_depth_stud, logical_height_plate, preview_bounds_complete
 `
 
 type CreateComponentVersionParams struct {
@@ -106,6 +108,12 @@ func (q *Queries) CreateComponentVersion(ctx context.Context, arg CreateComponen
 		&i.DeletedBy,
 		&i.PreviewTaskID,
 		&i.PreviewGeneration,
+		&i.PreviewBboxMin,
+		&i.PreviewBboxMax,
+		&i.LogicalWidthStud,
+		&i.LogicalDepthStud,
+		&i.LogicalHeightPlate,
+		&i.PreviewBoundsComplete,
 	)
 	return i, err
 }
@@ -226,7 +234,9 @@ SELECT v.id, v.component_id, v.component_candidate_id, v.version_label, v.revisi
        v.preview_failure_code, v.preview_failure_params, v.release_note,
        v.release_note_locale, v.metadata, v.created_by, v.created_at,
        v.published_at, v.deleted_at, v.deleted_by, v.preview_task_id,
-       v.preview_generation
+       v.preview_generation, v.preview_bbox_min, v.preview_bbox_max,
+       v.logical_width_stud, v.logical_depth_stud, v.logical_height_plate,
+       v.preview_bounds_complete
 FROM component_repo.component_versions v
 JOIN component_repo.components c ON c.id = v.component_id
 WHERE v.id = $1
@@ -274,6 +284,12 @@ func (q *Queries) GetVisibleComponentVersion(ctx context.Context, arg GetVisible
 		&i.DeletedBy,
 		&i.PreviewTaskID,
 		&i.PreviewGeneration,
+		&i.PreviewBboxMin,
+		&i.PreviewBboxMax,
+		&i.LogicalWidthStud,
+		&i.LogicalDepthStud,
+		&i.LogicalHeightPlate,
+		&i.PreviewBoundsComplete,
 	)
 	return i, err
 }
@@ -287,7 +303,9 @@ SELECT v.id, v.component_id, v.component_candidate_id, v.version_label, v.revisi
        v.preview_failure_code, v.preview_failure_params, v.release_note,
        v.release_note_locale, v.metadata, v.created_by, v.created_at,
        v.published_at, v.deleted_at, v.deleted_by, v.preview_task_id,
-       v.preview_generation
+       v.preview_generation, v.preview_bbox_min, v.preview_bbox_max,
+       v.logical_width_stud, v.logical_depth_stud, v.logical_height_plate,
+       v.preview_bounds_complete
 FROM component_repo.component_versions v
 JOIN component_repo.components c ON c.id = v.component_id
 WHERE v.component_id = $1
@@ -350,6 +368,12 @@ func (q *Queries) ListVisibleComponentVersions(ctx context.Context, arg ListVisi
 			&i.DeletedBy,
 			&i.PreviewTaskID,
 			&i.PreviewGeneration,
+			&i.PreviewBboxMin,
+			&i.PreviewBboxMax,
+			&i.LogicalWidthStud,
+			&i.LogicalDepthStud,
+			&i.LogicalHeightPlate,
+			&i.PreviewBoundsComplete,
 		); err != nil {
 			return nil, err
 		}
@@ -486,7 +510,10 @@ RETURNING version.id, version.component_id, version.component_candidate_id,
           version.preview_failure_params, version.release_note,
           version.release_note_locale, version.metadata, version.created_by,
           version.created_at, version.published_at, version.deleted_at,
-          version.deleted_by, version.preview_task_id, version.preview_generation
+          version.deleted_by, version.preview_task_id, version.preview_generation,
+          version.preview_bbox_min, version.preview_bbox_max,
+          version.logical_width_stud, version.logical_depth_stud,
+          version.logical_height_plate, version.preview_bounds_complete
 `
 
 type UpdateOwnedDraftComponentVersionParams struct {
@@ -545,6 +572,12 @@ func (q *Queries) UpdateOwnedDraftComponentVersion(ctx context.Context, arg Upda
 		&i.DeletedBy,
 		&i.PreviewTaskID,
 		&i.PreviewGeneration,
+		&i.PreviewBboxMin,
+		&i.PreviewBboxMax,
+		&i.LogicalWidthStud,
+		&i.LogicalDepthStud,
+		&i.LogicalHeightPlate,
+		&i.PreviewBoundsComplete,
 	)
 	return i, err
 }

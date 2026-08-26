@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/scene"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
@@ -40,34 +41,10 @@ type validationPayload struct {
 	InputHash        string `json:"inputHash"`
 }
 
-type sceneTransform struct {
-	Position map[string]float64 `json:"position"`
-	Matrix   []float64          `json:"matrix"`
-}
-
-type sceneReference struct {
-	InstanceID    string         `json:"instanceId"`
-	ReferenceName string         `json:"referenceName"`
-	ReferenceKind string         `json:"referenceKind"`
-	TargetModelID string         `json:"targetModelId"`
-	ColorCode     string         `json:"colorCode"`
-	Transform     sceneTransform `json:"transform"`
-}
-
-type sceneModel struct {
-	ModelID    string           `json:"modelId"`
-	References []sceneReference `json:"references"`
-}
-
-type sceneDocument struct {
-	RootModelID string       `json:"rootModelId"`
-	Models      []sceneModel `json:"models"`
-}
-
 func (h *ValidationTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTask) (task.Result, error) {
 	var payload validationPayload
 	if err := strictTaskPayload(claimed.Payload, &payload); err != nil || payload.ValidationLevel != "publish" || payload.ValidatorVersion != ValidatorVersion {
-		return task.Result{}, &task.Failure{Code: "component_repo.publish_validation_failed", Params: map[string]any{}, Retryable: false}
+		return task.Result{}, &task.Failure{Code: "component_repo.validation_unavailable", Params: map[string]any{}, Retryable: false}
 	}
 	candidateID, err := uuidutil.Parse(payload.CandidateID)
 	if err != nil {
@@ -105,10 +82,9 @@ func (h *ValidationTaskHandler) Handle(ctx context.Context, claimed task.Claimed
 		if createErr != nil {
 			return db.CreateValidationReportRow{}, createErr
 		}
-		if passed {
-			if attachErr := q.AttachPassingValidationReport(ctx, db.AttachPassingValidationReportParams{ReportID: reportID, VersionID: versionID, CandidateID: candidateID, InterfaceSignature: input.InterfaceSignature, StructureHash: input.StructureHash, GeometryHash: input.GeometryHash}); attachErr != nil {
-				return db.CreateValidationReportRow{}, attachErr
-			}
+		// 验证是可选质量报告而非发布门禁；无论通过与否都关联最新报告，详情页才能稳定恢复结果。
+		if attachErr := q.AttachLatestValidationReport(ctx, db.AttachLatestValidationReportParams{ReportID: reportID, VersionID: versionID, CandidateID: candidateID, InterfaceSignature: input.InterfaceSignature, StructureHash: input.StructureHash, GeometryHash: input.GeometryHash}); attachErr != nil {
+			return db.CreateValidationReportRow{}, attachErr
 		}
 		return created, nil
 	})
@@ -153,73 +129,25 @@ func validateInput(input db.GetValidationTaskInputRow) ([]map[string]any, []map[
 }
 
 func analyzeScene(raw json.RawMessage) (map[string]int, int, bool, bool) {
-	var document sceneDocument
-	if json.Unmarshal(raw, &document) != nil || document.RootModelID == "" || len(document.Models) == 0 {
+	// 发布校验直接消费共享场景展开结果，避免 BOM 校验与 Preview 对 root/递归规则产生漂移。
+	expanded, err := scene.ExpandJSON(raw)
+	if err != nil {
 		return nil, 0, false, false
 	}
-	models := make(map[string]sceneModel, len(document.Models))
-	for _, model := range document.Models {
-		if model.ModelID == "" {
-			return nil, 0, false, false
-		}
-		if _, duplicate := models[model.ModelID]; duplicate {
-			return nil, 0, false, false
-		}
-		models[model.ModelID] = model
-	}
-	partRefs := map[string]int{}
-	partCount := 0
+	partRefs := expanded.BOM()
+	partCount := len(expanded.Parts)
 	minPosition := [3]float64{math.Inf(1), math.Inf(1), math.Inf(1)}
 	maxPosition := [3]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1)}
-	active := map[string]bool{}
-	var expand func(string, [16]float64, int) bool
-	expand = func(modelID string, parent [16]float64, depth int) bool {
-		if depth > 64 || active[modelID] {
-			return false
-		}
-		model, exists := models[modelID]
-		if !exists {
-			return false
-		}
-		active[modelID] = true
-		defer delete(active, modelID)
-		for _, reference := range model.References {
-			if reference.InstanceID == "" || reference.ReferenceName == "" {
-				return false
+	for _, part := range expanded.Parts {
+		for index, value := range part.Matrix[12:15] {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return nil, 0, false, false
 			}
-			local, err := glTFMatrix(reference.Transform)
-			if err != nil {
-				return false
-			}
-			world := multiply4(parent, local)
-			switch reference.ReferenceKind {
-			case "submodel":
-				if reference.TargetModelID == "" || !expand(reference.TargetModelID, world, depth+1) {
-					return false
-				}
-			case "part":
-				name := strings.ToLower(strings.TrimSpace(reference.ReferenceName))
-				if name == "" {
-					return false
-				}
-				partRefs[name]++
-				partCount++
-				for index, value := range world[12:15] {
-					if math.IsNaN(value) || math.IsInf(value, 0) {
-						return false
-					}
-					minPosition[index] = math.Min(minPosition[index], value)
-					maxPosition[index] = math.Max(maxPosition[index], value)
-				}
-			default:
-				return false
-			}
+			minPosition[index] = math.Min(minPosition[index], value)
+			maxPosition[index] = math.Max(maxPosition[index], value)
 		}
-		return true
 	}
-	identity := [16]float64{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}
-	valid := expand(document.RootModelID, identity, 0)
-	return partRefs, partCount, valid, valid && partCount > 0 && minPosition[0] <= maxPosition[0]
+	return partRefs, partCount, true, partCount > 0 && minPosition[0] <= maxPosition[0]
 }
 
 func validBOM(bom, actual map[string]int) bool {
@@ -301,12 +229,6 @@ func (h *PreviewTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTas
 	) {
 		return task.Result{}, previewFailure(payload.VersionID, false)
 	}
-	if input.PreviewStatus == "ready" && input.PreviewArtifactID.Valid {
-		return task.Result{Payload: mustJSON(map[string]any{"versionId": payload.VersionID, "artifactId": uuidutil.String(input.PreviewArtifactID), "generatorVersion": payload.GeneratorVersion}), ArtifactID: input.PreviewArtifactID}, nil
-	}
-	if err := h.q.MarkVersionPreviewRunning(ctx, db.MarkVersionPreviewRunningParams{VersionID: versionID, TaskID: claimed.ID}); err != nil {
-		return task.Result{}, err
-	}
 	worldParts, err := collectComponentWorldParts(input.Document)
 	if err != nil {
 		return task.Result{}, previewFailure(payload.VersionID, false)
@@ -318,8 +240,20 @@ func (h *PreviewTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTas
 	if err != nil {
 		return task.Result{}, err
 	}
-	if len(geometryRows) != len(requiredPartRefs) {
-		return task.Result{}, previewFailure(payload.VersionID, false)
+	readyPartRefs := make(map[string]bool, len(geometryRows))
+	for _, row := range geometryRows {
+		readyPartRefs[row.LdrawPartNum] = true
+	}
+	omittedPartRefs := missingComponentPartRefs(requiredPartRefs, readyPartRefs)
+	if input.PreviewStatus == "ready" && input.PreviewArtifactID.Valid {
+		return task.Result{Payload: mustJSON(map[string]any{
+			"versionId": payload.VersionID, "artifactId": uuidutil.String(input.PreviewArtifactID),
+			"generatorVersion": payload.GeneratorVersion, "omittedPartRefs": omittedPartRefs,
+			"complete": len(omittedPartRefs) == 0,
+		}), ArtifactID: input.PreviewArtifactID}, nil
+	}
+	if err := h.q.MarkVersionPreviewRunning(ctx, db.MarkVersionPreviewRunningParams{VersionID: versionID, TaskID: claimed.ID}); err != nil {
+		return task.Result{}, err
 	}
 	trianglesByPart := make(map[string][]ldrawTriangle, len(geometryRows))
 	for _, row := range geometryRows {
@@ -342,7 +276,9 @@ func (h *PreviewTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTas
 		}
 		trianglesByPart[row.LdrawPartNum] = triangles
 	}
-	glb, err := buildComponentGLB(worldParts, trianglesByPart, payload.GeneratorVersion)
+	// Part Library 未提供 ready geometry 时保留 BOM 事实，但从整体预览中跳过对应实例。
+	// 已声明 ready 的 source 缺失、哈希漂移或解析失败仍属于运行环境/快照错误，不能静默降级。
+	glb, bounds, err := buildComponentGLB(worldParts, trianglesByPart, payload.GeneratorVersion)
 	if err != nil {
 		return task.Result{}, previewFailure(payload.VersionID, false)
 	}
@@ -363,13 +299,26 @@ func (h *PreviewTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTas
 			Metadata: mustJSON(map[string]any{
 				"derivedBy": PreviewMaterializeType, "generatorVersion": payload.GeneratorVersion,
 				"versionId": payload.VersionID, "partLibraryVersionId": uuidutil.String(input.PartLibraryVersionID),
-				"partLibrarySourceHash": input.PartLibrarySourceHash,
+				"partLibrarySourceHash": input.PartLibrarySourceHash, "omittedPartRefs": omittedPartRefs,
+				"complete": len(omittedPartRefs) == 0,
 			}),
 			DerivedFromArtifactID: input.SourceArtifactID,
 		}); upsertErr != nil {
 			return struct{}{}, upsertErr
 		}
-		if readyErr := q.MarkVersionPreviewReady(ctx, db.MarkVersionPreviewReadyParams{ArtifactID: artifactID, GeneratorVersion: stringPointer(payload.GeneratorVersion), VersionID: versionID, TaskID: claimed.ID, PreviewGeneration: payload.Generation}); readyErr != nil {
+		readyParams := db.MarkVersionPreviewReadyParams{
+			ArtifactID: artifactID, GeneratorVersion: stringPointer(payload.GeneratorVersion),
+			VersionID: versionID, TaskID: claimed.ID, PreviewGeneration: payload.Generation,
+		}
+		if bounds != nil {
+			readyParams.PreviewBboxMin = bounds.minimum[:]
+			readyParams.PreviewBboxMax = bounds.maximum[:]
+			readyParams.LogicalWidthStud = previewNumeric(bounds.logicalWidthStud)
+			readyParams.LogicalDepthStud = previewNumeric(bounds.logicalDepthStud)
+			readyParams.LogicalHeightPlate = previewNumeric(bounds.logicalHeightPlate)
+			readyParams.PreviewBoundsComplete = boolPointer(bounds.complete)
+		}
+		if readyErr := q.MarkVersionPreviewReady(ctx, readyParams); readyErr != nil {
 			return struct{}{}, readyErr
 		}
 		return struct{}{}, nil
@@ -377,7 +326,10 @@ func (h *PreviewTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTas
 	if err != nil {
 		return task.Result{}, err
 	}
-	return task.Result{Payload: mustJSON(map[string]any{"versionId": payload.VersionID, "artifactId": artifactText, "generatorVersion": payload.GeneratorVersion}), ArtifactID: artifactID}, nil
+	return task.Result{Payload: mustJSON(map[string]any{
+		"versionId": payload.VersionID, "artifactId": artifactText, "generatorVersion": payload.GeneratorVersion,
+		"omittedPartRefs": omittedPartRefs, "complete": len(omittedPartRefs) == 0,
+	}), ArtifactID: artifactID}, nil
 }
 
 type componentWorldPart struct {
@@ -387,70 +339,31 @@ type componentWorldPart struct {
 	matrix     [16]float64
 }
 
+// componentPreviewBounds 保存 Preview 实际渲染几何在 LDraw 世界坐标中的整体 AABB。
+// logicalSize 使用 LEGO 业务单位投影；complete=false 表示 Box 只覆盖可渲染零件。
+type componentPreviewBounds struct {
+	minimum            [3]float64
+	maximum            [3]float64
+	logicalWidthStud   float64
+	logicalDepthStud   float64
+	logicalHeightPlate float64
+	complete           bool
+}
+
 func collectComponentWorldParts(raw json.RawMessage) ([]componentWorldPart, error) {
-	var document sceneDocument
-	if err := json.Unmarshal(raw, &document); err != nil {
-		return nil, err
-	}
-	models := map[string]sceneModel{}
-	for _, item := range document.Models {
-		if item.ModelID == "" {
-			return nil, errors.New("component preview model missing")
-		}
-		if _, exists := models[item.ModelID]; exists {
-			return nil, errors.New("component preview duplicate model")
-		}
-		models[item.ModelID] = item
-	}
-	worldParts := []componentWorldPart{}
-	active := map[string]bool{}
-	var expand func(string, [16]float64, int) error
-	expand = func(modelID string, parent [16]float64, depth int) error {
-		if depth > 64 || active[modelID] {
-			return errors.New("component preview recursion exceeded")
-		}
-		item, ok := models[modelID]
-		if !ok {
-			return errors.New("component preview model missing")
-		}
-		active[modelID] = true
-		defer delete(active, modelID)
-		for _, ref := range item.References {
-			local, err := glTFMatrix(ref.Transform)
-			if err != nil {
-				return err
-			}
-			world := multiply4(parent, local)
-			if ref.ReferenceKind == "submodel" {
-				if err := expand(ref.TargetModelID, world, depth+1); err != nil {
-					return err
-				}
-				continue
-			}
-			if ref.ReferenceKind == "part" {
-				partRef := strings.ToLower(strings.TrimSpace(ref.ReferenceName))
-				if ref.InstanceID == "" || partRef == "" {
-					return errors.New("component preview part missing")
-				}
-				colorCode := strings.TrimSpace(ref.ColorCode)
-				if colorCode == "" {
-					colorCode = "16"
-				}
-				worldParts = append(worldParts, componentWorldPart{
-					instanceID: ref.InstanceID,
-					partRef:    partRef,
-					colorCode:  colorCode,
-					matrix:     world,
-				})
-				continue
-			}
-			return errors.New("component preview reference unsupported")
-		}
-		return nil
-	}
-	identity := [16]float64{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}
-	if document.RootModelID == "" || expand(document.RootModelID, identity, 0) != nil || len(worldParts) == 0 {
+	// Relation 与 GLB 保留既有内部结构，但实例集合和 world transform 统一来自 scene 包。
+	expanded, err := scene.ExpandJSON(raw)
+	if err != nil || len(expanded.Parts) == 0 {
 		return nil, errors.New("component preview unavailable")
+	}
+	worldParts := make([]componentWorldPart, 0, len(expanded.Parts))
+	for _, part := range expanded.Parts {
+		worldParts = append(worldParts, componentWorldPart{
+			instanceID: part.InstanceID,
+			partRef:    part.PartRef,
+			colorCode:  part.ColorCode,
+			matrix:     part.Matrix,
+		})
 	}
 	return worldParts, nil
 }
@@ -468,7 +381,20 @@ func uniqueComponentPartRefs(parts []componentWorldPart) []string {
 	return result
 }
 
-func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]ldrawTriangle, generator string) ([]byte, error) {
+// missingComponentPartRefs 返回缺少 ready geometry 的稳定排序 Part 编号，用于任务结果和产物元数据。
+func missingComponentPartRefs(required []string, readyPartRefs map[string]bool) []string {
+	missing := make([]string, 0)
+	for _, partRef := range required {
+		if !readyPartRefs[partRef] {
+			missing = append(missing, partRef)
+		}
+	}
+	return missing
+}
+
+// buildComponentGLB 同时生成整体 GLB 与多 Root 展开后的世界空间 Box。
+// Box 只统计真正写入 GLB 的三角形；缺失几何不会阻断预览，但会将完整性标记为 false。
+func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]ldrawTriangle, generator string) ([]byte, *componentPreviewBounds, error) {
 	bin := &bytes.Buffer{}
 	bufferViews := []any{}
 	accessors := []any{}
@@ -479,14 +405,30 @@ func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]
 	rootNode := map[string]any{"name": "Component Preview", "scale": []float64{0.05, -0.05, 0.05}, "children": []int{}}
 	nodes := []any{rootNode}
 	rootChildren := []int{}
+	minimum := [3]float64{math.Inf(1), math.Inf(1), math.Inf(1)}
+	maximum := [3]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1)}
+	renderedParts := 0
 	for _, part := range parts {
+		// 缺少几何的实例只从 GLB 场景中省略；BOM 仍由独立接口完整返回。
+		if len(trianglesByPart[part.partRef]) == 0 {
+			continue
+		}
+		renderedParts++
+		// 使用每个实例的 world matrix 变换所有顶点，旋转、多层子模型与多个 Root
+		// 都统一落入同一个 AABB；不能只变换局部 min/max 两个角点。
+		for _, triangle := range trianglesByPart[part.partRef] {
+			for _, vertex := range triangle {
+				point := transformComponentPoint(part.matrix, [3]float64{vertex.x, vertex.y, vertex.z})
+				for axis, value := range point {
+					minimum[axis] = math.Min(minimum[axis], value)
+					maximum[axis] = math.Max(maximum[axis], value)
+				}
+			}
+		}
 		meshKey := part.partRef + "\x00" + part.colorCode
 		meshIndex, exists := meshIndexByKey[meshKey]
 		if !exists {
 			triangles := trianglesByPart[part.partRef]
-			if len(triangles) == 0 {
-				return nil, errors.New("component preview part geometry missing")
-			}
 			materialIndex, exists := materialIndexByColor[part.colorCode]
 			if !exists {
 				materialIndex = len(materials)
@@ -497,13 +439,13 @@ func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]
 			positionOffset := bin.Len()
 			for _, value := range positions {
 				if err := binary.Write(bin, binary.LittleEndian, value); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			}
 			indexOffset := bin.Len()
 			for _, value := range indices {
 				if err := binary.Write(bin, binary.LittleEndian, value); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			}
 			positionView := len(bufferViews)
@@ -540,24 +482,29 @@ func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]
 		bin.WriteByte(0)
 	}
 	gltf := map[string]any{
-		"asset":       map[string]any{"version": "2.0", "generator": generator},
-		"scene":       0,
-		"scenes":      []any{map[string]any{"nodes": []int{0}}},
-		"nodes":       nodes,
-		"meshes":      meshes,
-		"materials":   materials,
-		"buffers":     []any{map[string]any{"byteLength": bin.Len()}},
-		"bufferViews": bufferViews,
-		"accessors":   accessors,
+		"asset":  map[string]any{"version": "2.0", "generator": generator},
+		"scene":  0,
+		"scenes": []any{map[string]any{"nodes": []int{0}}},
+		"nodes":  nodes,
+	}
+	if bin.Len() > 0 {
+		gltf["meshes"] = meshes
+		gltf["materials"] = materials
+		gltf["buffers"] = []any{map[string]any{"byteLength": bin.Len()}}
+		gltf["bufferViews"] = bufferViews
+		gltf["accessors"] = accessors
 	}
 	jsonChunk, err := json.Marshal(gltf)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for len(jsonChunk)%4 != 0 {
 		jsonChunk = append(jsonChunk, ' ')
 	}
-	total := 12 + 8 + len(jsonChunk) + 8 + bin.Len()
+	total := 12 + 8 + len(jsonChunk)
+	if bin.Len() > 0 {
+		total += 8 + bin.Len()
+	}
 	output := &bytes.Buffer{}
 	output.WriteString("glTF")
 	_ = binary.Write(output, binary.LittleEndian, uint32(2))
@@ -565,10 +512,37 @@ func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]
 	_ = binary.Write(output, binary.LittleEndian, uint32(len(jsonChunk)))
 	output.WriteString("JSON")
 	output.Write(jsonChunk)
-	_ = binary.Write(output, binary.LittleEndian, uint32(bin.Len()))
-	output.WriteString("BIN\x00")
-	output.Write(bin.Bytes())
-	return output.Bytes(), nil
+	if bin.Len() > 0 {
+		_ = binary.Write(output, binary.LittleEndian, uint32(bin.Len()))
+		output.WriteString("BIN\x00")
+		output.Write(bin.Bytes())
+	}
+	var bounds *componentPreviewBounds
+	if renderedParts > 0 {
+		bounds = &componentPreviewBounds{
+			minimum: minimum, maximum: maximum,
+			logicalWidthStud:   roundPreviewSize((maximum[0] - minimum[0]) / 20),
+			logicalDepthStud:   roundPreviewSize((maximum[2] - minimum[2]) / 20),
+			logicalHeightPlate: roundPreviewSize((maximum[1] - minimum[1]) / 8),
+			complete:           renderedParts == len(parts),
+		}
+	}
+	return output.Bytes(), bounds, nil
+}
+
+// roundPreviewSize 与数据库 numeric(12,4) 精度保持一致，避免不同读取路径出现浮点尾差。
+func roundPreviewSize(value float64) float64 {
+	return math.Round(value*10000) / 10000
+}
+
+func previewNumeric(value float64) pgtype.Numeric {
+	var numeric pgtype.Numeric
+	_ = numeric.Scan(fmt.Sprintf("%.4f", value))
+	return numeric
+}
+
+func boolPointer(value bool) *bool {
+	return &value
 }
 
 func ldrawTrianglesToBuffers(triangles []ldrawTriangle) ([]float32, []uint32, [3]float64, [3]float64) {
@@ -622,35 +596,6 @@ func previewGeneratorStale(status string, generator *string) bool {
 	return *generator != PreviewGeneratorVersion
 }
 
-func glTFMatrix(value sceneTransform) ([16]float64, error) {
-	if len(value.Matrix) != 9 || len(value.Position) != 3 {
-		return [16]float64{}, errors.New("invalid transform")
-	}
-	for _, axis := range []string{"x", "y", "z"} {
-		number, exists := value.Position[axis]
-		if !exists || math.IsNaN(number) || math.IsInf(number, 0) {
-			return [16]float64{}, errors.New("invalid transform")
-		}
-	}
-	for _, number := range value.Matrix {
-		if math.IsNaN(number) || math.IsInf(number, 0) {
-			return [16]float64{}, errors.New("invalid transform")
-		}
-	}
-	return [16]float64{value.Matrix[0], value.Matrix[3], value.Matrix[6], 0, value.Matrix[1], value.Matrix[4], value.Matrix[7], 0, value.Matrix[2], value.Matrix[5], value.Matrix[8], 0, value.Position["x"], value.Position["y"], value.Position["z"], 1}, nil
-}
-
-func multiply4(a, b [16]float64) [16]float64 {
-	var result [16]float64
-	for column := 0; column < 4; column++ {
-		for row := 0; row < 4; row++ {
-			for k := 0; k < 4; k++ {
-				result[column*4+row] += a[k*4+row] * b[column*4+k]
-			}
-		}
-	}
-	return result
-}
 func deterministicUUID(value string) pgtype.UUID {
 	sum := sha256.Sum256([]byte(value))
 	var data [16]byte
@@ -663,7 +608,7 @@ func validationResult(id pgtype.UUID, passed bool) task.Result {
 	return task.Result{Payload: mustJSON(map[string]any{"validationReportId": uuidutil.String(id), "passed": passed})}
 }
 func permanentValidation(candidateID string) *task.Failure {
-	return &task.Failure{Code: "component_repo.publish_validation_failed", Params: map[string]any{"candidateId": candidateID}, Retryable: false}
+	return &task.Failure{Code: "component_repo.validation_unavailable", Params: map[string]any{"candidateId": candidateID}, Retryable: false}
 }
 func previewFailure(versionID string, retryable bool) *task.Failure {
 	return &task.Failure{Code: "component_repo.preview_unavailable", Params: map[string]any{"versionId": versionID}, Retryable: retryable}

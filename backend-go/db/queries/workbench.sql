@@ -4,6 +4,8 @@ SELECT candidate.id, candidate.owner_id, candidate.status,
        candidate.relation_detection_task_id, candidate.relation_detection_version,
        snapshot.schema_version, snapshot.parser_version AS snapshot_parser_version,
        import_job.part_library_version_id, part_library.source_hash AS part_library_source_hash,
+       part_library.relation_ready AS part_library_relation_ready,
+       part_library.connector_source_hash, part_library.connector_parser_version,
        import_job.locale, import_job.timezone,
        version.id AS draft_version_id, version.status AS draft_version_status
 FROM component_repo.candidates candidate
@@ -293,19 +295,31 @@ FROM component_repo.validation_reports
 WHERE task_id = sqlc.arg(task_id)
   AND owner_id = sqlc.arg(owner_id);
 
--- name: GetOwnedValidationReport :one
-SELECT id, component_candidate_id, component_version_id, validation_level,
-       passed, checks, issues, validator_version, created_at
-FROM component_repo.validation_reports
-WHERE id = sqlc.arg(report_id)
-  AND owner_id = sqlc.arg(owner_id);
+-- name: GetVisibleValidationReport :one
+-- Draft 报告只对 owner 可见；发布后的质量标识沿用 ComponentVersion 的公开读取边界。
+SELECT report.id, report.component_candidate_id, report.component_version_id,
+       report.validation_level, report.passed, report.checks, report.issues,
+       report.validator_version, report.created_at
+FROM component_repo.validation_reports report
+JOIN component_repo.component_versions version
+  ON version.id = report.component_version_id
+JOIN component_repo.components component ON component.id = version.component_id
+WHERE report.id = sqlc.arg(report_id)
+  AND report.component_version_id IS NOT NULL
+  AND version.deleted_at IS NULL
+  AND component.deleted_at IS NULL
+  AND (
+      component.owner_id = sqlc.arg(actor_id)
+      OR (component.status = 'active' AND version.status <> 'draft')
+  );
 
--- name: AttachPassingValidationReport :exec
+-- name: AttachLatestValidationReport :exec
+-- 验证不再是发布门禁；Draft/Published 都保留最近一次报告，失败报告也必须可在详情页追溯。
 UPDATE component_repo.component_versions
 SET validation_report_id = sqlc.arg(report_id)
 WHERE id = sqlc.arg(version_id)
   AND component_candidate_id = sqlc.arg(candidate_id)
-  AND status = 'draft'
+  AND status IN ('draft', 'published')
   AND interface_signature = sqlc.arg(interface_signature)
   AND structure_hash = sqlc.arg(structure_hash)
   AND geometry_hash = sqlc.arg(geometry_hash);
@@ -318,13 +332,13 @@ SELECT version.id, version.component_id, component.owner_id,
        version.preview_failure_params, version.preview_task_id,
        version.preview_generation, component.content_locale,
        version.part_library_version_id, version.structure_hash, version.geometry_hash,
-       part_library.source_hash AS part_library_source_hash,
+       COALESCE(part_library.source_hash, '') AS part_library_source_hash,
        import_job.timezone
 FROM component_repo.component_versions version
 JOIN component_repo.components component ON component.id = version.component_id
 JOIN component_repo.candidates candidate ON candidate.id = version.component_candidate_id
 JOIN component_repo.imports import_job ON import_job.id = candidate.import_id
-JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
+LEFT JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
 WHERE version.id = sqlc.arg(version_id)
   AND component.owner_id = sqlc.arg(actor_id)
   AND version.deleted_at IS NULL
@@ -338,13 +352,13 @@ SELECT version.id, version.component_id, component.owner_id,
        version.preview_failure_params, version.preview_task_id,
        version.preview_generation, component.content_locale,
        version.part_library_version_id, version.structure_hash, version.geometry_hash,
-       part_library.source_hash AS part_library_source_hash,
+       COALESCE(part_library.source_hash, '') AS part_library_source_hash,
        import_job.timezone
 FROM component_repo.component_versions version
 JOIN component_repo.components component ON component.id = version.component_id
 JOIN component_repo.candidates candidate ON candidate.id = version.component_candidate_id
 JOIN component_repo.imports import_job ON import_job.id = candidate.import_id
-JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
+LEFT JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
 WHERE version.id = sqlc.arg(version_id)
   AND component.owner_id = sqlc.arg(actor_id)
   AND version.deleted_at IS NULL
@@ -424,7 +438,13 @@ RETURNING id, owner_id, artifact_type, source_kind, original_filename,
 UPDATE component_repo.component_versions
 SET preview_artifact_id = sqlc.arg(artifact_id), preview_status = 'ready',
     preview_generator_version = sqlc.arg(generator_version),
-    preview_failure_code = NULL, preview_failure_params = NULL
+    preview_failure_code = NULL, preview_failure_params = NULL,
+    preview_bbox_min = sqlc.narg(preview_bbox_min),
+    preview_bbox_max = sqlc.narg(preview_bbox_max),
+    logical_width_stud = sqlc.narg(logical_width_stud),
+    logical_depth_stud = sqlc.narg(logical_depth_stud),
+    logical_height_plate = sqlc.narg(logical_height_plate),
+    preview_bounds_complete = sqlc.narg(preview_bounds_complete)
 WHERE id = sqlc.arg(version_id)
   AND preview_task_id = sqlc.arg(task_id)
   AND preview_generation = sqlc.arg(preview_generation);
@@ -435,6 +455,30 @@ SET preview_status = 'failed', preview_failure_code = sqlc.arg(failure_code),
     preview_failure_params = sqlc.arg(failure_params)
 WHERE id = sqlc.arg(version_id)
   AND preview_task_id = sqlc.arg(task_id);
+
+-- name: CountPreviewBoundsBackfillCandidates :one
+SELECT count(*)::bigint
+FROM component_repo.component_versions version
+JOIN component_repo.components component ON component.id = version.component_id
+WHERE version.deleted_at IS NULL
+  AND component.deleted_at IS NULL
+  AND version.preview_status = 'ready'
+  AND version.preview_artifact_id IS NOT NULL
+  AND version.preview_bbox_min IS NULL
+  AND version.preview_generator_version IS DISTINCT FROM sqlc.arg(generator_version);
+
+-- name: ListPreviewBoundsBackfillCandidates :many
+SELECT version.id AS version_id, component.owner_id
+FROM component_repo.component_versions version
+JOIN component_repo.components component ON component.id = version.component_id
+WHERE version.deleted_at IS NULL
+  AND component.deleted_at IS NULL
+  AND version.preview_status = 'ready'
+  AND version.preview_artifact_id IS NOT NULL
+  AND version.preview_bbox_min IS NULL
+  AND version.preview_generator_version IS DISTINCT FROM sqlc.arg(generator_version)
+ORDER BY version.created_at, version.id
+LIMIT sqlc.arg(batch_size);
 
 -- name: GetVisibleVersionPreview :one
 SELECT version.id, version.preview_artifact_id, version.preview_status,
@@ -475,11 +519,15 @@ SELECT requested.ldraw_part_num::text AS ldraw_part_num,
        translation.name AS translated_name,
        translation.locale AS translated_locale,
        part.source_name,
-       part.content_locale AS source_locale
+       part.content_locale AS source_locale,
+       COALESCE(geometry.geometry_status, 'missing')::text AS geometry_status
 FROM unnest(sqlc.arg(ldraw_part_nums)::text[]) requested(ldraw_part_num)
 LEFT JOIN component_repo.parts part
   ON part.part_library_version_id = sqlc.arg(part_library_version_id)
  AND part.ldraw_part_num = requested.ldraw_part_num
+LEFT JOIN component_repo.part_geometries geometry
+  ON geometry.part_library_version_id = sqlc.arg(part_library_version_id)
+ AND geometry.ldraw_part_num = requested.ldraw_part_num
 LEFT JOIN component_repo.part_translations translation
   ON translation.part_library_version_id = part.part_library_version_id
  AND translation.ldraw_part_num = part.ldraw_part_num

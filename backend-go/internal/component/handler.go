@@ -30,7 +30,6 @@ func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/components/:componentId", h.getComponent)
 	group.PATCH("/components/:componentId", h.updateComponent)
 	group.DELETE("/components/:componentId", h.deleteComponent)
-	group.POST("/components/:componentId/purge", h.purgeComponent)
 
 	group.GET("/components/:componentId/versions", h.listVersions)
 	group.POST("/components/:componentId/versions", h.createVersion)
@@ -106,17 +105,6 @@ func (h *Handler) updateComponent(c *gin.Context) {
 func (h *Handler) deleteComponent(c *gin.Context) {
 	actor, _ := actorFromContext(c)
 	h.writeNoContent(c, h.service.DeleteComponent(c.Request.Context(), actor.ID, c.Param("componentId")))
-}
-
-func (h *Handler) purgeComponent(c *gin.Context) {
-	actor, _ := actorFromContext(c)
-	var input PurgeComponentInput
-	if err := decodeJSON(c, &input); err != nil {
-		h.writeError(c, validationError("body"))
-		return
-	}
-	result, err := h.service.PurgeComponent(c.Request.Context(), actor.ID, c.Param("componentId"), input)
-	h.writeJSON(c, http.StatusAccepted, result, err)
 }
 
 func (h *Handler) listVersions(c *gin.Context) {
@@ -243,6 +231,7 @@ func (h *Handler) listGroupMembers(c *gin.Context) {
 	h.writeJSON(c, http.StatusOK, result, err)
 }
 
+// searchGroupComponents 接收可重复 query 参数，并把复合条件交给 Service 以 AND 语义执行。
 func (h *Handler) searchGroupComponents(c *gin.Context) {
 	actor, _ := actorFromContext(c)
 	page, err := pageFromQuery(c)
@@ -251,7 +240,7 @@ func (h *Handler) searchGroupComponents(c *gin.Context) {
 		return
 	}
 	result, err := h.service.SearchGroupComponents(c.Request.Context(), actor.ID, c.Param("groupId"), ComponentGroupSearchRequest{
-		PageRequest: page, Locale: c.Query("locale"), Query: c.Query("query"), Statuses: c.QueryArray("status"),
+		PageRequest: page, Locale: c.Query("locale"), Queries: c.QueryArray("query"), Statuses: c.QueryArray("status"),
 	})
 	h.writeJSON(c, http.StatusOK, result, err)
 }

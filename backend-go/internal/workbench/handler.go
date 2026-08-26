@@ -1,8 +1,10 @@
 package workbench
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -21,6 +23,7 @@ func NewHandler(service *Service, logger *slog.Logger) *Handler {
 	return &Handler{service: service, logger: logger}
 }
 
+// Register 注册 Component Workbench 与 Part Library 的认证路由；读取接口不得隐式调度派生任务。
 func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/component-candidates/:candidateId/relations", h.listRelations)
 	group.POST("/component-candidates/:candidateId/relations/detect", h.detectRelations)
@@ -34,8 +37,27 @@ func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/component-versions/:versionId/preview", h.preview)
 	group.POST("/component-versions/:versionId/preview/materialize", h.materializePreview)
 	group.GET("/part-library-versions/active", h.activePartLibraryVersion)
+	group.POST("/parts/search", h.searchParts)
 	group.GET("/part-library-versions/:partLibraryVersionId/parts/:ldrawPartNum/preview", h.partPreview)
 	group.POST("/part-library-versions/:partLibraryVersionId/parts/:ldrawPartNum/preview/materialize", h.materializePartPreview)
+}
+
+// searchParts 只执行 active Part Library 上的有界 PostgreSQL 查询，不解析 LDraw 文件，也不创建后台任务。
+func (h *Handler) searchParts(c *gin.Context) {
+	var input PartSearchRequest
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		apierror.Write(c, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "body"}))
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		apierror.Write(c, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "body"}))
+		return
+	}
+	value, err := h.service.SearchParts(c.Request.Context(), input)
+	h.write(c, http.StatusOK, value, err)
 }
 
 func (h *Handler) detectRelations(c *gin.Context) {
@@ -68,6 +90,8 @@ func (h *Handler) listInterfaces(c *gin.Context) {
 	value, err := h.service.ListInterfaces(c.Request.Context(), actor.ID, c.Param("candidateId"))
 	h.write(c, http.StatusOK, gin.H{"items": value}, err)
 }
+
+// validate 只调度持久化异步校验并返回 taskId；它不发布版本，也不在 HTTP 请求内执行校验算法。
 func (h *Handler) validate(c *gin.Context) {
 	actor, _ := auth.ActorFromGin(c)
 	value, err := h.service.Validate(c.Request.Context(), actor.ID, c.Param("candidateId"))

@@ -396,11 +396,14 @@ function prepareLoadedComponent(component: THREE.Object3D): THREE.Object3D {
     const sourceGeometry = mesh.geometry;
     let geometry = processed.get(sourceGeometry);
     if (!geometry) {
-      geometry = toCreasedNormals(sourceGeometry, CREASE_ANGLE_RADIANS);
+      // Part GLB v2 已由 Worker 固化折角法线；仅为历史模型补算法线，避免每次打开都复制并重算 meshopt 解码后的几何。
+      geometry = sourceGeometry.getAttribute('normal')
+        ? sourceGeometry
+        : toCreasedNormals(sourceGeometry, CREASE_ANGLE_RADIANS);
       geometry.computeBoundingBox();
       geometry.computeBoundingSphere();
       processed.set(sourceGeometry, geometry);
-      sourceGeometry.dispose();
+      if (geometry !== sourceGeometry) sourceGeometry.dispose();
     }
     mesh.geometry = geometry;
     mesh.castShadow = true;

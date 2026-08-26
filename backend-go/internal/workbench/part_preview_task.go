@@ -27,11 +27,11 @@ import (
 )
 
 type PartPreviewTaskHandler struct {
-	pool      *pgxpool.Pool
 	q         *db.Queries
 	store     storage.Store
 	keyPrefix string
 	files     map[string]string
+	optimizer PartGLBOptimizer
 }
 
 type partPreviewPayload struct {
@@ -42,14 +42,15 @@ type partPreviewPayload struct {
 	InputHash            string `json:"inputHash"`
 }
 
-func NewPartPreviewTaskHandler(pool *pgxpool.Pool, store storage.Store, keyPrefix, ldrawRoot string) (*PartPreviewTaskHandler, error) {
+// NewPartPreviewTaskHandler 创建 Part GLB 物化入口；LDraw 展开和 meshopt 压缩都在 Worker 边界内完成。
+func NewPartPreviewTaskHandler(pool *pgxpool.Pool, store storage.Store, keyPrefix, ldrawRoot string, optimizer PartGLBOptimizer) (*PartPreviewTaskHandler, error) {
 	files, err := indexLDrawFiles(ldrawRoot)
 	if err != nil {
 		return nil, err
 	}
 	return &PartPreviewTaskHandler{
-		pool: pool, q: db.New(pool), store: store,
-		keyPrefix: strings.Trim(keyPrefix, "/"), files: files,
+		q: db.New(pool), store: store,
+		keyPrefix: strings.Trim(keyPrefix, "/"), files: files, optimizer: optimizer,
 	}, nil
 }
 
@@ -57,21 +58,26 @@ func (h *PartPreviewTaskHandler) Handle(ctx context.Context, claimed task.Claime
 	var payload partPreviewPayload
 	if err := strictTaskPayload(claimed.Payload, &payload); err != nil ||
 		payload.GeneratorVersion != PartPreviewGeneratorVersion || payload.Generation < 0 {
-		return task.Result{}, partPreviewFailure(payload, false)
+		return task.Result{}, partPreviewFailure(payload, false, "payload_invalid")
 	}
+	return h.materialize(ctx, claimed, payload)
+}
+
+// materialize 执行单个 Part 的确定性物化；按需任务与全库预生成共用该入口，避免两套 GLB 语义漂移。
+func (h *PartPreviewTaskHandler) materialize(ctx context.Context, claimed task.ClaimedTask, payload partPreviewPayload) (task.Result, error) {
 	libraryID, err := uuidutil.Parse(payload.PartLibraryVersionID)
 	if err != nil {
-		return task.Result{}, partPreviewFailure(payload, false)
+		return task.Result{}, partPreviewFailure(payload, false, "library_invalid")
 	}
 	partNumber, err := normalizePartNumber(payload.LDrawPartNum)
 	if err != nil || partNumber != payload.LDrawPartNum {
-		return task.Result{}, partPreviewFailure(payload, false)
+		return task.Result{}, partPreviewFailure(payload, false, "part_number_invalid")
 	}
 	input, err := h.q.GetPartPreviewTaskInput(ctx, db.GetPartPreviewTaskInputParams{
 		PartLibraryVersionID: libraryID, LdrawPartNum: partNumber, TaskID: claimed.ID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return task.Result{}, partPreviewFailure(payload, false)
+		return task.Result{}, partPreviewFailure(payload, false, "input_missing")
 	}
 	if err != nil {
 		return task.Result{}, err
@@ -79,80 +85,90 @@ func (h *PartPreviewTaskHandler) Handle(ctx context.Context, claimed task.Claime
 	if input.GeometryStatus != "ready" || input.Generation != payload.Generation ||
 		input.GeneratorVersion == nil || *input.GeneratorVersion != payload.GeneratorVersion ||
 		payload.InputHash != hashStrings(input.PartLibrarySourceHash, input.SourceFileHash, payload.GeneratorVersion) {
-		return task.Result{}, partPreviewFailure(payload, false)
+		return task.Result{}, partPreviewFailure(payload, false, "input_stale")
 	}
 	if input.PreviewStatus == "ready" && input.ArtifactID.Valid {
 		return partPreviewResult(payload, input.ArtifactID), nil
 	}
-	rows, err := h.q.MarkPartPreviewRunning(ctx, db.MarkPartPreviewRunningParams{
-		PartLibraryVersionID: libraryID, LdrawPartNum: partNumber, TaskID: claimed.ID,
-	})
-	if err != nil {
-		return task.Result{}, err
+	return h.materializePrepared(ctx, claimed, payload, libraryID, partNumber, input.SourceRelativePath, input.SourceFileHash, true)
+}
+
+// materializePrepared 处理已经由数据库冻结并校验的 Part 输入；prebuild 可跳过逐行准备查询，
+// 单项任务则通过 markRunning 呈现更精确的运行状态。
+func (h *PartPreviewTaskHandler) materializePrepared(
+	ctx context.Context,
+	claimed task.ClaimedTask,
+	payload partPreviewPayload,
+	libraryID pgtype.UUID,
+	partNumber, sourceRelativePath, sourceFileHash string,
+	markRunning bool,
+) (task.Result, error) {
+	if markRunning {
+		rows, err := h.q.MarkPartPreviewRunning(ctx, db.MarkPartPreviewRunningParams{
+			PartLibraryVersionID: libraryID, LdrawPartNum: partNumber, TaskID: claimed.ID,
+		})
+		if err != nil {
+			return task.Result{}, err
+		}
+		if rows != 1 {
+			return task.Result{}, partPreviewFailure(payload, false, "state_stale")
+		}
 	}
-	if rows != 1 {
-		return task.Result{}, partPreviewFailure(payload, false)
-	}
-	sourcePath, ok := h.files[normalizeLDrawPath(input.SourceRelativePath)]
+	sourcePath, ok := h.files[normalizeLDrawPath(sourceRelativePath)]
 	if !ok {
-		return task.Result{}, partPreviewFailure(payload, false)
+		return task.Result{}, partPreviewFailure(payload, false, "source_missing")
 	}
 	source, err := os.ReadFile(sourcePath)
 	if err != nil {
-		return task.Result{}, partPreviewFailure(payload, true)
+		return task.Result{}, partPreviewFailure(payload, true, "source_read")
 	}
 	sourceSum := sha256.Sum256(source)
-	if hex.EncodeToString(sourceSum[:]) != input.SourceFileHash {
-		return task.Result{}, partPreviewFailure(payload, false)
+	if hex.EncodeToString(sourceSum[:]) != sourceFileHash {
+		return task.Result{}, partPreviewFailure(payload, false, "source_hash_mismatch")
 	}
-	triangles, err := collectLDrawTriangles(normalizeLDrawPath(input.SourceRelativePath), h.files)
+	triangles, err := collectLDrawTriangles(normalizeLDrawPath(sourceRelativePath), h.files)
 	if err != nil || len(triangles) == 0 {
-		return task.Result{}, partPreviewFailure(payload, false)
+		return task.Result{}, partPreviewFailure(payload, false, "geometry_expand")
 	}
-	glb, err := buildPartGLB(triangles, payload.GeneratorVersion)
+	rawGLB, err := buildPartGLB(triangles, payload.GeneratorVersion)
 	if err != nil {
-		return task.Result{}, partPreviewFailure(payload, false)
+		return task.Result{}, partPreviewFailure(payload, false, "glb_build")
 	}
-	ownerText := uuidutil.String(claimed.OwnerID)
-	artifactID := deterministicUUID(strings.Join([]string{
-		"part-preview", ownerText, payload.PartLibraryVersionID, partNumber, payload.GeneratorVersion,
-	}, ":"))
-	artifactText := uuidutil.String(artifactID)
-	key := strings.Join(filterNonEmpty([]string{
-		ownerText, h.keyPrefix, "part-previews", payload.PartLibraryVersionID,
-		partNumber, payload.GeneratorVersion, artifactText + ".glb",
-	}), "/")
-	if err := h.store.Put(ctx, key, "model/gltf-binary", bytes.NewReader(glb), int64(len(glb))); err != nil {
-		return task.Result{}, partPreviewFailure(payload, true)
+	if h.optimizer == nil {
+		return task.Result{}, partPreviewFailure(payload, false, "optimizer_missing")
 	}
+	glb, err := h.optimizer.Optimize(ctx, rawGLB)
+	if err != nil {
+		return task.Result{}, partPreviewFailure(payload, true, "optimizer_run")
+	}
+	// Part 模型是全局只读派生资产：最终字节决定对象键和 Artifact ID，跨用户、跨版本复用同一对象。
 	sum := sha256.Sum256(glb)
 	digest := hex.EncodeToString(sum[:])
-	_, err = txValue(ctx, h.pool, func(q *db.Queries) (struct{}, error) {
-		if _, upsertErr := q.UpsertPartPreviewArtifact(ctx, db.UpsertPartPreviewArtifactParams{
-			ID: artifactID, OwnerID: claimed.OwnerID, OriginalFilename: partNumber + ".glb",
-			StorageProvider: h.store.Provider(), StorageBucket: h.store.Bucket(), StorageKey: key,
-			Sha256: digest, FileSize: int64(len(glb)), UploadedBy: claimed.OwnerID,
-			Metadata: mustJSON(map[string]any{
-				"derivedBy": PartPreviewMaterializeType, "generatorVersion": payload.GeneratorVersion,
-				"partLibraryVersionId": payload.PartLibraryVersionID, "ldrawPartNum": partNumber,
-				"sourceFileHash": input.SourceFileHash,
-			}),
-		}); upsertErr != nil {
-			return struct{}{}, upsertErr
-		}
-		updated, readyErr := q.MarkPartPreviewReady(ctx, db.MarkPartPreviewReadyParams{
-			ArtifactID: artifactID, GeneratorVersion: stringPointer(payload.GeneratorVersion),
-			PartLibraryVersionID: libraryID, LdrawPartNum: partNumber,
-			TaskID: claimed.ID, Generation: payload.Generation,
-		})
-		if readyErr != nil {
-			return struct{}{}, readyErr
-		}
-		if updated != 1 {
-			return struct{}{}, errors.New("stale part preview task")
-		}
-		return struct{}{}, nil
+	artifactID := deterministicUUID("part-preview-glb:" + digest)
+	key := strings.Join(filterNonEmpty([]string{
+		h.keyPrefix, "part-library-assets", "glb", payload.GeneratorVersion,
+		digest[:2], digest + ".glb",
+	}), "/")
+	// Supabase 的 object info 对“尚不存在”的返回在不同网关版本并不稳定；内容寻址键配合 upsert
+	// 本身就是幂等写，直接 PUT 还能为首次生成省去一次网络往返。
+	if err := h.store.Put(ctx, key, "model/gltf-binary", bytes.NewReader(glb), int64(len(glb))); err != nil {
+		return task.Result{}, partPreviewFailure(payload, true, "storage_put")
+	}
+	_, err = h.q.FinalizePartPreviewArtifact(ctx, db.FinalizePartPreviewArtifactParams{
+		GeneratorVersion: stringPointer(payload.GeneratorVersion), PartLibraryVersionID: libraryID,
+		LdrawPartNum: partNumber, TaskID: claimed.ID, Generation: payload.Generation,
+		ArtifactID: artifactID, OriginalFilename: digest + ".glb",
+		StorageProvider: h.store.Provider(), StorageBucket: h.store.Bucket(), StorageKey: key,
+		Sha256: digest, FileSize: int64(len(glb)), UploadedBy: claimed.OwnerID,
+		Metadata: mustJSON(map[string]any{
+			"derivedBy": PartPreviewMaterializeType, "generatorVersion": payload.GeneratorVersion,
+			"meshCompression": "EXT_meshopt_compression", "gltfpackVersion": partPreviewGLTFPackVersion,
+			"contentAddressed": true,
+		}),
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return task.Result{}, partPreviewFailure(payload, false, "state_stale")
+	}
 	if err != nil {
 		return task.Result{}, err
 	}
@@ -165,13 +181,15 @@ func partPreviewResult(payload partPreviewPayload, artifactID pgtype.UUID) task.
 			"partLibraryVersionId": payload.PartLibraryVersionID, "ldrawPartNum": payload.LDrawPartNum,
 			"artifactId": uuidutil.String(artifactID), "generatorVersion": payload.GeneratorVersion,
 		}),
-		ArtifactID: artifactID,
+		// 全局 Part Artifact 没有 owner，不能写入要求 owner 一致的通用 tasks.result_artifact_id；
+		// Part 到 Artifact 的权威关系已由同一事务中的 part_previews.artifact_id 固化。
+		ArtifactID: pgtype.UUID{},
 	}
 }
 
-func partPreviewFailure(payload partPreviewPayload, retryable bool) *task.Failure {
+func partPreviewFailure(payload partPreviewPayload, retryable bool, stage string) *task.Failure {
 	return &task.Failure{Code: "component_repo.part_preview_unavailable", Params: map[string]any{
-		"partLibraryVersionId": payload.PartLibraryVersionID, "ldrawPartNum": payload.LDrawPartNum,
+		"partLibraryVersionId": payload.PartLibraryVersionID, "ldrawPartNum": payload.LDrawPartNum, "stage": stage,
 	}, Retryable: retryable}
 }
 
@@ -432,14 +450,50 @@ func resolveLDrawReference(fromPath, reference string, files map[string]string) 
 }
 
 func buildPartGLB(triangles []ldrawTriangle, generator string) ([]byte, error) {
-	positions := make([]float32, 0, len(triangles)*9)
+	if len(triangles) == 0 {
+		return nil, errors.New("part GLB requires at least one triangle")
+	}
+	// LDraw 使用 Y 向下的 LDU；项目 GLB 使用 Y 向上并把 20 LDU 缩放为 1 stud。
+	converted := make([]ldrawTriangle, 0, len(triangles))
+	for _, triangle := range triangles {
+		converted = append(converted, ldrawTriangle{
+			convertPartVertex(triangle[0]), convertPartVertex(triangle[2]), convertPartVertex(triangle[1]),
+		})
+	}
+	faceNormals := make([]ldrawVector, len(converted))
+	positionNormals := map[[3]uint64][]ldrawVector{}
+	for index, triangle := range converted {
+		normal := normalizedCross(triangle[1], triangle[0], triangle[2])
+		faceNormals[index] = normal
+		for _, vertex := range triangle {
+			key := ldrawPositionKey(vertex)
+			positionNormals[key] = append(positionNormals[key], normal)
+		}
+	}
+	type vertexKey struct{ px, py, pz, nx, ny, nz uint32 }
+	vertexLookup := map[vertexKey]uint32{}
+	positions := make([]float32, 0, len(converted)*9)
+	normals := make([]float32, 0, len(converted)*9)
 	indices := make([]uint32, 0, len(triangles)*3)
 	minimum := [3]float64{math.Inf(1), math.Inf(1), math.Inf(1)}
 	maximum := [3]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1)}
-	for _, triangle := range triangles {
+	for faceIndex, triangle := range converted {
 		for _, vertex := range triangle {
-			indices = append(indices, uint32(len(indices)))
-			positions = append(positions, float32(vertex.x), float32(vertex.y), float32(vertex.z))
+			normal := creasedNormal(faceNormals[faceIndex], positionNormals[ldrawPositionKey(vertex)])
+			position := [3]float32{float32(vertex.x), float32(vertex.y), float32(vertex.z)}
+			normal32 := [3]float32{float32(normal.x), float32(normal.y), float32(normal.z)}
+			key := vertexKey{
+				math.Float32bits(position[0]), math.Float32bits(position[1]), math.Float32bits(position[2]),
+				math.Float32bits(normal32[0]), math.Float32bits(normal32[1]), math.Float32bits(normal32[2]),
+			}
+			index, exists := vertexLookup[key]
+			if !exists {
+				index = uint32(len(positions) / 3)
+				vertexLookup[key] = index
+				positions = append(positions, position[:]...)
+				normals = append(normals, normal32[:]...)
+			}
+			indices = append(indices, index)
 			for axis, value := range []float64{vertex.x, vertex.y, vertex.z} {
 				minimum[axis] = math.Min(minimum[axis], value)
 				maximum[axis] = math.Max(maximum[axis], value)
@@ -448,6 +502,12 @@ func buildPartGLB(triangles []ldrawTriangle, generator string) ([]byte, error) {
 	}
 	bin := &bytes.Buffer{}
 	for _, value := range positions {
+		if err := binary.Write(bin, binary.LittleEndian, value); err != nil {
+			return nil, err
+		}
+	}
+	normalOffset := bin.Len()
+	for _, value := range normals {
 		if err := binary.Write(bin, binary.LittleEndian, value); err != nil {
 			return nil, err
 		}
@@ -463,19 +523,21 @@ func buildPartGLB(triangles []ldrawTriangle, generator string) ([]byte, error) {
 		"scene": 0, "scenes": []any{map[string]any{"nodes": []int{0}}},
 		"nodes": []any{map[string]any{"name": "LDraw Part", "mesh": 0}},
 		"meshes": []any{map[string]any{"primitives": []any{map[string]any{
-			"attributes": map[string]any{"POSITION": 0}, "indices": 1, "material": 0,
+			"attributes": map[string]any{"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 0,
 		}}}},
 		"materials": []any{map[string]any{"doubleSided": true, "pbrMetallicRoughness": map[string]any{
 			"baseColorFactor": []float64{0.72, 0.74, 0.78, 1}, "metallicFactor": 0, "roughnessFactor": 0.72,
 		}}},
 		"buffers": []any{map[string]any{"byteLength": bin.Len()}},
 		"bufferViews": []any{
-			map[string]any{"buffer": 0, "byteOffset": 0, "byteLength": indexOffset, "target": 34962},
+			map[string]any{"buffer": 0, "byteOffset": 0, "byteLength": normalOffset, "target": 34962},
+			map[string]any{"buffer": 0, "byteOffset": normalOffset, "byteLength": indexOffset - normalOffset, "target": 34962},
 			map[string]any{"buffer": 0, "byteOffset": indexOffset, "byteLength": len(indices) * 4, "target": 34963},
 		},
 		"accessors": []any{
 			map[string]any{"bufferView": 0, "componentType": 5126, "count": len(positions) / 3, "type": "VEC3", "min": minimum, "max": maximum},
-			map[string]any{"bufferView": 1, "componentType": 5125, "count": len(indices), "type": "SCALAR"},
+			map[string]any{"bufferView": 1, "componentType": 5126, "count": len(normals) / 3, "type": "VEC3"},
+			map[string]any{"bufferView": 2, "componentType": 5125, "count": len(indices), "type": "SCALAR"},
 		},
 	}
 	jsonChunk, err := json.Marshal(gltf)
@@ -504,4 +566,44 @@ func buildPartGLB(triangles []ldrawTriangle, generator string) ([]byte, error) {
 	output.WriteString("BIN\x00")
 	output.Write(bin.Bytes())
 	return output.Bytes(), nil
+}
+
+func convertPartVertex(vertex ldrawVector) ldrawVector {
+	return ldrawVector{x: vertex.x * 0.05, y: -vertex.y * 0.05, z: vertex.z * 0.05}
+}
+
+func ldrawPositionKey(vertex ldrawVector) [3]uint64 {
+	return [3]uint64{math.Float64bits(vertex.x), math.Float64bits(vertex.y), math.Float64bits(vertex.z)}
+}
+
+func normalizedCross(a, origin, b ldrawVector) ldrawVector {
+	left := ldrawVector{x: a.x - origin.x, y: a.y - origin.y, z: a.z - origin.z}
+	right := ldrawVector{x: b.x - origin.x, y: b.y - origin.y, z: b.z - origin.z}
+	normal := ldrawVector{
+		x: left.y*right.z - left.z*right.y,
+		y: left.z*right.x - left.x*right.z,
+		z: left.x*right.y - left.y*right.x,
+	}
+	return normalizeVector(normal)
+}
+
+func normalizeVector(vector ldrawVector) ldrawVector {
+	length := math.Sqrt(vector.x*vector.x + vector.y*vector.y + vector.z*vector.z)
+	if length == 0 {
+		return ldrawVector{y: 1}
+	}
+	return ldrawVector{x: vector.x / length, y: vector.y / length, z: vector.z / length}
+}
+
+func creasedNormal(face ldrawVector, candidates []ldrawVector) ldrawVector {
+	const creaseCosine = 0.5 // 60°：平面保持硬边，圆柱相邻面共享平滑法线。
+	combined := ldrawVector{}
+	for _, candidate := range candidates {
+		if face.x*candidate.x+face.y*candidate.y+face.z*candidate.z >= creaseCosine {
+			combined.x += candidate.x
+			combined.y += candidate.y
+			combined.z += candidate.z
+		}
+	}
+	return normalizeVector(combined)
 }

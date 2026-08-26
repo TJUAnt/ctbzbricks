@@ -21,7 +21,7 @@ const (
 	ComponentValidateType      = "component.validate"
 	PreviewMaterializeType     = "component.preview.materialize"
 	PartPreviewMaterializeType = "component.part_preview.materialize"
-	ComponentPurgeType         = "component.purge"
+	PartPreviewPrebuildType    = "component.part_preview.prebuild"
 )
 
 type EnqueueInput struct {

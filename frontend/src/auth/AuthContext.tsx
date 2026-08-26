@@ -1,5 +1,10 @@
 import React from 'react';
 import { useDynamicTranslation, type TranslationKey } from '../i18n';
+import {
+  ApiError,
+  localizeApiError,
+  subscribeInvalidSession,
+} from '../api/client';
 
 import {
   isSupabaseAuthConfigured,
@@ -7,6 +12,7 @@ import {
   type AuthSession,
   type AuthUser,
 } from './supabaseClient';
+import { verifyAuthSession } from './sessionApi';
 
 type AuthContextValue = {
   accessToken: string | null;
@@ -21,15 +27,35 @@ type AuthContextValue = {
 
 const AuthContext = React.createContext<AuthContextValue | null>(null);
 
+/** 统一管理 Supabase 本地 session、Go 服务端确认状态及页面可见的当前用户。 */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const tr = useDynamicTranslation();
   const [session, setSession] = React.useState<AuthSession | null>(null);
   const [isLoading, setIsLoading] = React.useState(isSupabaseAuthConfigured);
-  const [errorKey, setErrorKey] = React.useState<TranslationKey | null>(null);
-  const error = errorKey ? tr(errorKey) : null;
+  const [authError, setAuthError] = React.useState<TranslationKey | ApiError | null>(null);
+  const verificationGeneration = React.useRef(0);
+  const error = authError instanceof ApiError
+    ? localizeApiError(authError)
+    : authError
+      ? tr(authError)
+      : null;
+
+  const invalidateStoredSession = React.useCallback(() => {
+    verificationGeneration.current += 1;
+    setSession(null);
+    setIsLoading(false);
+    setAuthError('errors:auth.session_invalid');
+    if (supabase) {
+      // 服务端已明确拒绝当前 token；local scope 只清理本浏览器会话，不影响用户的其他设备。
+      void supabase.auth.signOut({ scope: 'local' });
+    }
+  }, []);
 
   React.useEffect(() => {
     let isMounted = true;
+    let activeVerificationToken: string | null = null;
+    let currentAccessToken: string | null = null;
+    let verifiedAccessToken: string | null = null;
     if (!supabase) {
       setIsLoading(false);
       return () => {
@@ -37,40 +63,140 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
-    supabase.auth
-      .getSession()
-      .then(({ data, error: sessionError }) => {
-        if (!isMounted) {
+    const verifyAndExposeSession = async (nextSession: AuthSession | null) => {
+      if (!nextSession) {
+        verificationGeneration.current += 1;
+        activeVerificationToken = null;
+        currentAccessToken = null;
+        verifiedAccessToken = null;
+        if (isMounted) {
+          setSession(null);
+          setIsLoading(false);
+          setAuthError(null);
+        }
+        return;
+      }
+
+      if (activeVerificationToken === nextSession.access_token) {
+        return;
+      }
+      if (verifiedAccessToken === nextSession.access_token) {
+        setIsLoading(false);
+        return;
+      }
+      const generation = verificationGeneration.current + 1;
+      verificationGeneration.current = generation;
+      activeVerificationToken = nextSession.access_token;
+      currentAccessToken = nextSession.access_token;
+
+      // 本地缓存只用于取得 token；Go 二次确认完成前不向 Header 暴露其中的旧用户信息。
+      setSession(null);
+      setIsLoading(true);
+      setAuthError(null);
+      try {
+        const verifiedUser = await verifyAuthSession(nextSession.access_token);
+        if (!isMounted || verificationGeneration.current !== generation) {
+          if (activeVerificationToken === nextSession.access_token) {
+            activeVerificationToken = null;
+          }
           return;
         }
-        if (sessionError) {
-          setErrorKey('errors:auth.session_load_failed');
+        if (verifiedUser.id !== nextSession.user.id) {
+          activeVerificationToken = null;
+          invalidateStoredSession();
+          return;
         }
-        setSession(data.session ?? null);
-      })
-      .finally(() => {
-        if (isMounted) {
-          setIsLoading(false);
+        const verifiedSession = verifiedUser.email
+          ? { ...nextSession, user: { ...nextSession.user, email: verifiedUser.email } }
+          : nextSession;
+        verifiedAccessToken = nextSession.access_token;
+        activeVerificationToken = null;
+        setSession(verifiedSession);
+        setIsLoading(false);
+        setAuthError(null);
+      } catch (verificationError) {
+        if (!isMounted || verificationGeneration.current !== generation) {
+          if (activeVerificationToken === nextSession.access_token) {
+            activeVerificationToken = null;
+          }
+          return;
         }
-      });
+        activeVerificationToken = null;
+        if (
+          verificationError instanceof ApiError
+          && verificationError.status === 401
+          && verificationError.code === 'auth.session_invalid'
+        ) {
+          invalidateStoredSession();
+          return;
+        }
+        // 网络或 provider 暂不可用时不删除 Supabase 本地 session；下次刷新可重新确认。
+        setSession(null);
+        setIsLoading(false);
+        setAuthError(
+          verificationError instanceof ApiError
+            ? verificationError
+            : 'errors:auth.session_load_failed',
+        );
+      }
+    };
 
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      setErrorKey(null);
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'INITIAL_SESSION') {
+        return;
+      }
+      if (event === 'SIGNED_OUT') {
+        verificationGeneration.current += 1;
+        activeVerificationToken = null;
+        currentAccessToken = null;
+        verifiedAccessToken = null;
+        setSession(null);
+        setIsLoading(false);
+        return;
+      }
+      void verifyAndExposeSession(nextSession);
+    });
+
+    const unsubscribeInvalidSession = subscribeInvalidSession((rejectedAccessToken) => {
+      if (rejectedAccessToken && rejectedAccessToken !== currentAccessToken) {
+        return;
+      }
+      invalidateStoredSession();
+    });
+
+    void supabase.auth.getSession().then(({ data: sessionData, error: sessionError }) => {
+      if (!isMounted) {
+        return;
+      }
+      if (sessionError) {
+        setSession(null);
+        setIsLoading(false);
+        setAuthError('errors:auth.session_load_failed');
+        return;
+      }
+      void verifyAndExposeSession(sessionData.session ?? null);
+    }).catch(() => {
+      if (isMounted) {
+        setSession(null);
+        setIsLoading(false);
+        setAuthError('errors:auth.session_load_failed');
+      }
     });
 
     return () => {
       isMounted = false;
+      verificationGeneration.current += 1;
       data.subscription.unsubscribe();
+      unsubscribeInvalidSession();
     };
-  }, []);
+  }, [invalidateStoredSession]);
 
   const signInWithGoogle = React.useCallback(async () => {
     if (!supabase) {
-      setErrorKey('common:supabaseSignInIsNotConfigured');
+      setAuthError('common:supabaseSignInIsNotConfigured');
       return;
     }
-    setErrorKey(null);
+    setAuthError(null);
     const { error: signInError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
@@ -78,18 +204,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
     });
     if (signInError) {
-      setErrorKey('errors:auth.sign_in_failed');
+      setAuthError('errors:auth.sign_in_failed');
     }
-  }, [tr]);
+  }, []);
 
   const signOut = React.useCallback(async () => {
     if (!supabase) {
       return;
     }
-    setErrorKey(null);
+    setAuthError(null);
     const { error: signOutError } = await supabase.auth.signOut();
     if (signOutError) {
-      setErrorKey('errors:auth.sign_out_failed');
+      setAuthError('errors:auth.sign_out_failed');
     }
   }, []);
 

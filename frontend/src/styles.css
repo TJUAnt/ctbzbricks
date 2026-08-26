@@ -3444,12 +3444,6 @@ button {
   background: #ffe9e9;
 }
 
-.component-repo-actions button.component-repo-permanent-danger-button {
-  border-color: rgba(154, 29, 29, 0.34);
-  background: #b62f2f;
-  color: #fff;
-}
-
 .component-repo-secondary-button {
   width: 100%;
 }
@@ -3489,6 +3483,100 @@ button {
   grid-template-columns: 270px minmax(0, 1fr) 340px;
   gap: 16px;
   align-items: start;
+}
+
+.component-import-processing-panel {
+  min-height: 220px;
+  place-items: center;
+  align-content: center;
+  text-align: center;
+}
+
+.component-import-processing-panel > svg {
+  width: 34px;
+  height: 34px;
+  color: #1f7a5a;
+}
+
+.component-import-processing-panel > strong {
+  color: #153d32;
+  font-size: 20px;
+}
+
+.component-import-processing-panel > span:not(.component-repo-status) {
+  color: #65716b;
+  font-size: 13px;
+}
+
+.component-candidate-part-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.component-candidate-parts-title small {
+  margin-left: auto;
+  color: #65716b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.component-candidate-part-card.is-unavailable {
+  border-color: rgba(196, 111, 22, 0.28);
+  background: #fffaf3;
+}
+
+.component-candidate-part-card > small {
+  width: fit-content;
+  border-radius: 999px;
+  background: #fff0dc;
+  color: #a75610;
+  padding: 3px 6px;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.component-candidate-connector-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid rgba(23, 32, 27, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.component-candidate-connector-control > div {
+  display: grid;
+  gap: 4px;
+}
+
+.component-candidate-connector-control strong {
+  color: #153d32;
+  font-size: 14px;
+}
+
+.component-candidate-connector-control > div > span {
+  color: #65716b;
+  font-size: 12px;
+}
+
+.component-candidate-connector-switch {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: #31433a;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.component-candidate-connector-switch input {
+  width: 38px;
+  height: 21px;
+  margin: 0;
+  accent-color: #1f7a5a;
 }
 
 .component-detail-preview {
@@ -4079,6 +4167,137 @@ button {
   white-space: nowrap;
 }
 
+.component-detail-history-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid rgba(23, 32, 27, 0.1);
+  margin: -4px -4px 4px;
+  padding: 0 4px;
+}
+
+.component-detail-history-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #6b776f;
+  cursor: pointer;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.component-detail-history-tabs button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.component-detail-history-tabs .component-detail-history-tab-active {
+  border-bottom-color: #167bec;
+  color: #0b65c6;
+}
+
+.component-import-history {
+  min-width: 0;
+}
+
+.component-import-history-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto 38px;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.component-import-history-table {
+  min-width: 0;
+  overflow-x: auto;
+  opacity: 1;
+  transition: opacity 120ms ease;
+}
+
+.component-import-history-table[aria-busy='true'] {
+  opacity: 0.65;
+}
+
+.component-import-history-row {
+  display: grid;
+  min-width: 860px;
+  grid-template-columns: minmax(260px, 1.5fr) 110px 100px 150px 80px 120px;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid rgba(23, 32, 27, 0.08);
+  padding: 11px 8px;
+  color: #405068;
+  font-size: 12px;
+}
+
+.component-import-history-head {
+  background: #f7f9fc;
+  color: #728095;
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.component-import-history-file {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.component-import-history-file > svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  color: #4c79ad;
+}
+
+.component-import-history-file > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.component-import-history-file strong,
+.component-import-history-file small,
+.component-import-history-file em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-import-history-file strong {
+  color: #20324a;
+  font-size: 13px;
+}
+
+.component-import-history-file small {
+  color: #8190a2;
+}
+
+.component-import-history-file em {
+  color: #a74848;
+  font-style: normal;
+}
+
+.component-import-history-actions a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #0866cd;
+  font-weight: 720;
+  text-decoration: none;
+}
+
+.component-import-history-actions svg {
+  width: 14px;
+  height: 14px;
+}
+
 .component-repo-panel,
 .component-repo-workspace {
   display: grid;
@@ -4483,7 +4702,7 @@ button {
 
 .component-library-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -4551,6 +4770,32 @@ button {
   padding: 20px 22px;
 }
 
+.component-library-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.component-library-panel-actions > button:first-child {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #d7e0eb;
+  border-radius: 9px;
+  background: #fff;
+  color: #34506f;
+  cursor: pointer;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.component-library-panel-actions svg {
+  width: 17px;
+  height: 17px;
+}
+
 .component-library-title-row {
   display: flex;
   align-items: center;
@@ -4611,6 +4856,13 @@ button {
   padding: 13px 22px;
 }
 
+.component-library-search-form {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
 .component-library-search {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -4623,6 +4875,7 @@ button {
   background: #fff;
   color: #8190a2;
   padding: 0 11px;
+  width: min(400px, 100%);
 }
 
 .component-library-search svg {
@@ -4638,6 +4891,54 @@ button {
   color: #1c2d44;
   font: inherit;
   font-size: 13px;
+}
+
+.component-library-search-condition {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 220px;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #b9d0f4;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #285a9f;
+  padding: 0 6px 0 11px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.component-library-search-condition > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-library-search-condition button {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.component-library-search-condition button:hover,
+.component-library-search-condition button:focus-visible {
+  background: #dbeaff;
+  outline: none;
+}
+
+.component-library-search-condition svg {
+  width: 13px;
+  height: 13px;
 }
 
 .component-library-filters {
@@ -5570,38 +5871,6 @@ button {
   margin-top: 1px;
 }
 
-.component-purge-confirm-field {
-  display: grid;
-  gap: 7px;
-}
-
-.component-purge-confirm-field span,
-.component-purge-confirm-mismatch {
-  color: #526176;
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.component-purge-confirm-field input {
-  width: 100%;
-  min-height: 38px;
-  border: 1px solid #d8e0e9;
-  border-radius: 8px;
-  background: #fff;
-  color: #1d2d42;
-  padding: 0 11px;
-  font: inherit;
-}
-
-.component-purge-confirm-field input:focus {
-  border-color: #b62f2f;
-  outline: 2px solid rgba(182, 47, 47, 0.14);
-}
-
-.component-purge-confirm-mismatch {
-  color: #a12b2b;
-}
-
 .component-version-delete-dialog > footer {
   justify-content: flex-end;
   border-top: 1px solid #e8edf3;
@@ -5668,6 +5937,10 @@ button {
   .component-detail-connectors-by-part .component-detail-connector-list,
   .component-detail-part-card-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .component-candidate-part-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -5859,6 +6132,20 @@ button {
     flex-direction: column;
   }
 
+  .component-library-panel-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .component-import-history-toolbar {
+    grid-template-columns: minmax(0, 1fr) 38px;
+  }
+
+  .component-import-history-toolbar .component-library-filters {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
   .component-library-tabs {
     overflow-x: auto;
   }
@@ -5873,6 +6160,10 @@ button {
 
   .component-library-search {
     max-width: none;
+  }
+
+  .component-library-search-form {
+    flex-wrap: wrap;
   }
 
   .component-library-filters {

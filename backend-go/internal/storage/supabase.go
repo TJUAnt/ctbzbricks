@@ -159,6 +159,76 @@ func (s *Supabase) SignDownload(ctx context.Context, key string, ttl time.Durati
 	return s.signDownload(ctx, key, ttl, s.serverAPIKey, s.serverAuthorization)
 }
 
+// SignDownloads 使用 Supabase Storage 的 batch sign 接口一次签名多个全局派生资产，避免列表页产生 N+1 请求。
+// 单个 path 的 provider 错误只会使该 key 缺席；请求、鉴权或响应格式错误才使整个批次失败。
+func (s *Supabase) SignDownloads(ctx context.Context, keys []string, ttl time.Duration) (map[string]string, error) {
+	if len(keys) == 0 {
+		return map[string]string{}, nil
+	}
+	if !s.hasServerCredentials() {
+		return nil, ErrUnavailable
+	}
+	unique := make([]string, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, key)
+	}
+	if len(unique) == 0 {
+		return map[string]string{}, nil
+	}
+	body, err := json.Marshal(struct {
+		ExpiresIn int64    `json:"expiresIn"`
+		Paths     []string `json:"paths"`
+	}{ExpiresIn: int64(ttl / time.Second), Paths: unique})
+	if err != nil {
+		return nil, err
+	}
+	target := strings.Join([]string{s.baseURL, "storage", "v1", "object", "sign", escapeSegment(s.bucket)}, "/")
+	response, err := s.doWithCredentials(ctx, http.MethodPost, target, bytes.NewReader(body), s.serverAPIKey, s.serverAuthorization)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if err := storageStatus(response.StatusCode); err != nil {
+		return nil, err
+	}
+	var payload []struct {
+		Path       *string         `json:"path"`
+		SignedURL  *string         `json:"signedURL"`
+		SignedURL2 *string         `json:"signedUrl"`
+		Error      json.RawMessage `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 2*1024*1024)).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode batch signed URLs: %w", ErrUnavailable)
+	}
+	result := make(map[string]string, len(payload))
+	for _, item := range payload {
+		if item.Path == nil || hasJSONError(item.Error) {
+			continue
+		}
+		signed := ""
+		if item.SignedURL != nil {
+			signed = *item.SignedURL
+		} else if item.SignedURL2 != nil {
+			signed = *item.SignedURL2
+		}
+		absolute, absoluteErr := s.absoluteSignedURL(signed)
+		if absoluteErr != nil {
+			continue
+		}
+		result[*item.Path] = absolute
+	}
+	return result, nil
+}
+
 func (s *Supabase) SignDownloadForUser(ctx context.Context, key string, ttl time.Duration, accessToken string) (string, error) {
 	if strings.TrimSpace(accessToken) == "" {
 		return "", ErrUnavailable
@@ -194,6 +264,13 @@ func (s *Supabase) signDownload(ctx context.Context, key string, ttl time.Durati
 	if signed == "" {
 		return "", fmt.Errorf("signed URL missing: %w", ErrUnavailable)
 	}
+	return s.absoluteSignedURL(signed)
+}
+
+func (s *Supabase) absoluteSignedURL(signed string) (string, error) {
+	if strings.TrimSpace(signed) == "" {
+		return "", fmt.Errorf("signed URL missing: %w", ErrUnavailable)
+	}
 	parsed, err := url.Parse(signed)
 	if err != nil {
 		return "", fmt.Errorf("invalid signed URL: %w", ErrUnavailable)
@@ -205,6 +282,11 @@ func (s *Supabase) signDownload(ctx context.Context, key string, ttl time.Durati
 		return s.baseURL + signed, nil
 	}
 	return s.baseURL + "/storage/v1/" + strings.TrimLeft(signed, "/"), nil
+}
+
+func hasJSONError(value json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(value))
+	return trimmed != "" && trimmed != "null" && trimmed != `""`
 }
 
 func (s *Supabase) do(ctx context.Context, method, target string, body io.Reader) (*http.Response, error) {

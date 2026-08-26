@@ -2,28 +2,30 @@ import React from 'react';
 import { Box, Boxes, Search } from 'lucide-react';
 import { create } from 'zustand';
 import { Link } from 'react-router-dom';
-import { errorMessage, requestJson } from '../api/client';
+import { errorMessage } from '../api/client';
+import { authenticatedRequestJson } from '../api/authenticatedClient';
 import { useAppTranslation } from '../i18n';
 import { formatNumber } from '../i18n/formatters';
-import { getActivePartLibraryVersion } from '../componentRepo/componentRepoApi';
+import appConfig from '../app/appConfig';
+import { loadPartThumbnailBlob, type PartThumbnailModel } from './partThumbnailRenderer';
 
-type RecallCandidate = {
-  candidateType: 'part' | 'component' | 'submodel';
-  candidateId: string;
-  name: string | null;
+type PartSearchItem = {
+  ldrawPartNum: string;
+  name: string;
   imageUrl: string | null;
+  previewModel: PartThumbnailModel | null;
 };
 
 type RecallColumnCount = 2 | 3 | 4 | 5 | 6;
 
-type RecallResponse = {
+type PartSearchResponse = {
+  partLibraryVersionId: string;
   total: number;
   returned: number;
   page: number;
   pageSize: number;
   totalPages: number;
-  includeIrregular: boolean;
-  candidates: RecallCandidate[];
+  items: PartSearchItem[];
 };
 
 type RecallState = {
@@ -31,7 +33,7 @@ type RecallState = {
   page: number;
   loading: boolean;
   error: string | null;
-  response: RecallResponse | null;
+  response: PartSearchResponse | null;
   setQuery: (value: string) => void;
   recall: (page?: number) => Promise<void>;
 };
@@ -51,13 +53,11 @@ const useRecallStore = create<RecallState>((set, get) => ({
     const page = requestedPage ?? state.page;
     set({ loading: true, error: null });
     try {
-      const result = await requestJson<RecallResponse>('/api/fitting/candidates/recall', {
+      const result = await authenticatedRequestJson<PartSearchResponse>(appConfig.componentRepoApi.partSearch, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          candidateTypes: ['part'],
           query: state.query,
-          includeIrregular: false,
           page,
           pageSize: columnsPerRow * rowsPerPage,
         }),
@@ -69,17 +69,13 @@ const useRecallStore = create<RecallState>((set, get) => ({
   },
 }));
 
+/** PartSearchPage 只调用 Go Part Library 搜索与版本化 Part 详情，不再依赖 legacy fitting recall 路由。 */
 export function PartSearchPage() {
   const tr = useAppTranslation();
   const state = useRecallStore();
-  const [partLibraryVersionId, setPartLibraryVersionId] = React.useState<string | null>(null);
-  const [libraryError, setLibraryError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     void state.recall(1);
-    void getActivePartLibraryVersion()
-      .then((library) => setPartLibraryVersionId(library.id))
-      .catch((error: unknown) => setLibraryError(errorMessage(error, 'common.unknown')));
   }, []);
 
   return (
@@ -136,11 +132,6 @@ export function PartSearchPage() {
               {state.error}
             </div>
           ) : null}
-          {libraryError ? (
-            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {libraryError}
-            </div>
-          ) : null}
         </div>
       </section>
 
@@ -154,11 +145,11 @@ export function PartSearchPage() {
           </div>
         ) : null}
         <div className={`grid gap-3 sm:grid-cols-2 ${recallGridColumns[columnsPerRow]}`}>
-          {(state.response?.candidates ?? []).map((candidate) => (
+          {(state.response?.items ?? []).map((candidate) => (
             <CandidateCard
               candidate={candidate}
-              key={`${candidate.candidateType}:${candidate.candidateId}`}
-              partLibraryVersionId={partLibraryVersionId}
+              key={candidate.ldrawPartNum}
+              partLibraryVersionId={state.response?.partLibraryVersionId ?? null}
             />
           ))}
         </div>
@@ -194,49 +185,93 @@ function CandidateCard({
   candidate,
   partLibraryVersionId,
 }: {
-  candidate: RecallCandidate;
+  candidate: PartSearchItem;
   partLibraryVersionId: string | null;
 }) {
-  const isComponent = candidate.candidateType === 'component' || candidate.candidateType === 'submodel';
   const content = (
     <>
-      <div className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-zinc-50">
+      <div className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-zinc-200">
         <CandidateImage
-          alt={candidate.name ?? candidate.candidateId}
-          isComponent={isComponent}
+          alt={candidate.name}
+          model={candidate.previewModel}
           src={candidate.imageUrl}
         />
       </div>
       <h2 className="mt-3 break-words text-sm font-semibold leading-5 text-zinc-900">
-        {candidate.name ?? candidate.candidateId}
+        {candidate.name}
       </h2>
-      <div className="mt-1 break-all text-xs text-zinc-400">{candidate.candidateId}</div>
+      <div className="mt-1 break-all text-xs text-zinc-400">{candidate.ldrawPartNum}</div>
     </>
   );
   const className = "block overflow-hidden rounded-xl border border-zinc-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2";
-  if (isComponent) {
-    return <Link className={className} to={`/component-repo/components/${encodeURIComponent(candidate.candidateId)}`}>{content}</Link>;
-  }
   if (!partLibraryVersionId) {
     return <article aria-disabled="true" className={`${className} opacity-60`}>{content}</article>;
   }
   return (
     <Link
       className={className}
-      to={`/parts/${encodeURIComponent(partLibraryVersionId)}/${encodeURIComponent(candidate.candidateId)}`}
+      to={`/parts/${encodeURIComponent(partLibraryVersionId)}/${encodeURIComponent(candidate.ldrawPartNum)}`}
     >
       {content}
     </Link>
   );
 }
 
-function CandidateImage({ alt, isComponent, src }: { alt: string; isComponent: boolean; src: string | null }) {
+/** CandidateImage 进入视口附近才下载 GLB，并只展示共享渲染器生成的静态图像。 */
+function CandidateImage({ alt, model, src }: { alt: string; model: PartThumbnailModel | null; src: string | null }) {
+  const mountRef = React.useRef<HTMLDivElement | null>(null);
+  const [visible, setVisible] = React.useState(false);
+  const [generatedURL, setGeneratedURL] = React.useState<string | null>(null);
   const [failed, setFailed] = React.useState(false);
-  React.useEffect(() => setFailed(false), [src]);
-  if (!src || failed) {
-    return isComponent
-      ? <Boxes className="h-12 w-12 text-blue-300" />
-      : <Box className="h-12 w-12 text-amber-300" />;
+
+  React.useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount || src || !model) return undefined;
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '400px' },
+    );
+    observer.observe(mount);
+    return () => observer.disconnect();
+  }, [model?.artifactId, src]);
+
+  React.useEffect(() => {
+    setFailed(false);
+    setGeneratedURL(null);
+    if (src || !model || !visible) return undefined;
+    const controller = new AbortController();
+    let objectURL: string | null = null;
+    void loadPartThumbnailBlob(model, controller.signal)
+      .then((blob) => {
+        if (controller.signal.aborted) return;
+        objectURL = URL.createObjectURL(blob);
+        setGeneratedURL(objectURL);
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) setFailed(true);
+      });
+    return () => {
+      controller.abort();
+      if (objectURL) URL.revokeObjectURL(objectURL);
+    };
+  }, [model?.artifactId, model?.sha256, model?.url, src, visible]);
+
+  const imageURL = src ?? generatedURL;
+  if (!imageURL || failed) {
+    return (
+      <div className="flex h-full w-full items-center justify-center" ref={mountRef}>
+        <Box className={`h-12 w-12 text-amber-300 ${visible && model && !failed ? 'animate-pulse' : ''}`} />
+      </div>
+    );
   }
   return (
     <img
@@ -245,7 +280,7 @@ function CandidateImage({ alt, isComponent, src }: { alt: string; isComponent: b
       decoding="async"
       loading="lazy"
       onError={() => setFailed(true)}
-      src={src}
+      src={imageURL}
     />
   );
 }

@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
@@ -47,12 +50,15 @@ func (s *Service) DetectRelations(ctx context.Context, actor pgtype.UUID, candid
 		if err != nil {
 			return AcceptedTask{}, err
 		}
-		if !candidate.PartLibraryVersionID.Valid || candidate.DraftVersionStatus == nil || *candidate.DraftVersionStatus != "draft" {
+		if !candidate.PartLibraryVersionID.Valid || candidate.DraftVersionStatus == nil || *candidate.DraftVersionStatus != "draft" ||
+			candidate.PartLibraryRelationReady == nil || !*candidate.PartLibraryRelationReady ||
+			candidate.ConnectorSourceHash == nil || candidate.ConnectorParserVersion == nil {
 			return AcceptedTask{}, conflict("component_repo.relation_detect_failed", "candidateId", candidateID)
 		}
-		inputHash := hashStrings(candidate.StructureHash, candidate.GeometryHash,
-			candidate.SchemaVersion, candidate.SnapshotParserVersion,
-			valueOrEmpty(candidate.PartLibrarySourceHash), RelationDetectionVersion)
+		inputHash := relationInputHash(candidate.StructureHash, candidate.GeometryHash,
+			candidate.SchemaVersion, candidate.SnapshotParserVersion, uuidutil.String(candidate.PartLibraryVersionID),
+			valueOrEmpty(candidate.PartLibrarySourceHash), *candidate.ConnectorSourceHash,
+			*candidate.ConnectorParserVersion, RelationDetectionVersion)
 		payload := mustJSON(map[string]any{"candidateId": candidateID, "detectionVersion": RelationDetectionVersion, "partLibraryVersionId": uuidutil.String(candidate.PartLibraryVersionID), "inputHash": inputHash})
 		scheduled, err := task.ScheduleWithQueries(ctx, q, task.ScheduleInput{
 			OwnerID: actor, TaskType: RelationDetectionType, Payload: payload,
@@ -95,12 +101,13 @@ func (s *Service) ListRelations(ctx context.Context, actor pgtype.UUID, candidat
 	return items, nil
 }
 
+// GetValidationReport 按 Version 可见性读取报告：Draft 仅 owner，公开发布版本允许可见用户读取质量标识。
 func (s *Service) GetValidationReport(ctx context.Context, actor pgtype.UUID, reportID string) (ValidationReport, error) {
 	id, err := parseID(reportID, "reportId")
 	if err != nil {
 		return ValidationReport{}, err
 	}
-	row, err := s.q.GetOwnedValidationReport(ctx, db.GetOwnedValidationReportParams{ReportID: id, OwnerID: actor})
+	row, err := s.q.GetVisibleValidationReport(ctx, db.GetVisibleValidationReportParams{ReportID: id, ActorID: actor})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ValidationReport{}, notFound("request.not_found", "reportId", reportID)
 	}
@@ -231,6 +238,7 @@ func (s *Service) ListInterfaces(ctx context.Context, actor pgtype.UUID, candida
 	return items, nil
 }
 
+// Validate 为 Candidate 当前唯一版本调度可选异步质量验证；Draft 与 Published 均可验证，发布本身不依赖此任务。
 func (s *Service) Validate(ctx context.Context, actor pgtype.UUID, candidateID string) (AcceptedTask, error) {
 	id, err := parseID(candidateID, "candidateId")
 	if err != nil {
@@ -244,8 +252,9 @@ func (s *Service) Validate(ctx context.Context, actor pgtype.UUID, candidateID s
 		if err != nil {
 			return AcceptedTask{}, err
 		}
-		if !candidate.DraftVersionID.Valid || candidate.DraftVersionStatus == nil || *candidate.DraftVersionStatus != "draft" {
-			return AcceptedTask{}, conflict("component_repo.publish_validation_failed", "candidateId", candidateID)
+		if !candidate.DraftVersionID.Valid || candidate.DraftVersionStatus == nil ||
+			(*candidate.DraftVersionStatus != "draft" && *candidate.DraftVersionStatus != "published") {
+			return AcceptedTask{}, conflict("component_repo.validation_unavailable", "candidateId", candidateID)
 		}
 		versionID := uuidutil.String(candidate.DraftVersionID)
 		inputHash := hashStrings(candidate.InterfaceSignature, candidate.StructureHash,
@@ -264,6 +273,12 @@ func (s *Service) Validate(ctx context.Context, actor pgtype.UUID, candidateID s
 }
 
 func (s *Service) MaterializePreview(ctx context.Context, actor pgtype.UUID, accessToken, versionID string) (AcceptedTask, error) {
+	return s.materializePreview(ctx, actor, accessToken, versionID, false)
+}
+
+// materializePreview 统一处理 API 请求与维护回填的 durable task 调度。
+// force=true 只供受控维护入口使用：它跳过对象缓存探测并递增 generation，确保旧 GLB 能由当前 Worker 重算 Box。
+func (s *Service) materializePreview(ctx context.Context, actor pgtype.UUID, accessToken, versionID string, force bool) (AcceptedTask, error) {
 	id, err := parseID(versionID, "versionId")
 	if err != nil {
 		return AcceptedTask{}, err
@@ -277,7 +292,7 @@ func (s *Service) MaterializePreview(ctx context.Context, actor pgtype.UUID, acc
 	}
 	cacheMissing := false
 	staleGenerator := previewGeneratorStale(state.PreviewStatus, state.PreviewGeneratorVersion)
-	if state.PreviewStatus == "ready" && state.PreviewArtifactID.Valid && !staleGenerator {
+	if !force && state.PreviewStatus == "ready" && state.PreviewArtifactID.Valid && !staleGenerator {
 		preview, previewErr := s.q.GetVisibleVersionPreview(ctx, db.GetVisibleVersionPreviewParams{VersionID: id, ActorID: actor})
 		if previewErr == nil && preview.StorageKey != nil {
 			if _, headErr := s.store.HeadForUser(ctx, *preview.StorageKey, accessToken); headErr == nil {
@@ -295,10 +310,10 @@ func (s *Service) MaterializePreview(ctx context.Context, actor pgtype.UUID, acc
 		}
 		generation := locked.PreviewGeneration
 		lockedStaleGenerator := previewGeneratorStale(locked.PreviewStatus, locked.PreviewGeneratorVersion)
-		if cacheMissing || locked.PreviewStatus == "failed" || lockedStaleGenerator {
+		if force || cacheMissing || locked.PreviewStatus == "failed" || lockedStaleGenerator {
 			generation++
 		}
-		if !lockedStaleGenerator && (locked.PreviewStatus == "pending" || locked.PreviewStatus == "running") && locked.PreviewTaskID.Valid {
+		if !force && !lockedStaleGenerator && (locked.PreviewStatus == "pending" || locked.PreviewStatus == "running") && locked.PreviewTaskID.Valid {
 			existing, taskErr := q.GetOwnedTask(ctx, db.GetOwnedTaskParams{TaskID: locked.PreviewTaskID, ActorID: actor})
 			if taskErr == nil && (existing.Status == "queued" || existing.Status == "running") {
 				return AcceptedTask{TaskID: uuidutil.String(existing.ID), Status: existing.Status}, nil
@@ -316,7 +331,7 @@ func (s *Service) MaterializePreview(ctx context.Context, actor pgtype.UUID, acc
 			OwnerID: actor, TaskType: PreviewMaterializeType, LogicalKey: versionID,
 			InputHash: inputHash, Payload: payload, Locale: locked.ContentLocale,
 			Timezone: locked.Timezone, CreatedBy: actor, MaxAttempts: 3,
-			ForceNew: cacheMissing || locked.PreviewStatus == "failed" || lockedStaleGenerator,
+			ForceNew: force || cacheMissing || locked.PreviewStatus == "failed" || lockedStaleGenerator,
 		})
 		if err != nil {
 			return AcceptedTask{}, err
@@ -326,6 +341,130 @@ func (s *Service) MaterializePreview(ctx context.Context, actor pgtype.UUID, acc
 		}
 		return AcceptedTask{TaskID: uuidutil.String(scheduled.Task.ID), Status: scheduled.Task.Status}, nil
 	})
+}
+
+// PreviewBoundsBackfillResult 描述维护命令发现及实际调度的版本数量。
+type PreviewBoundsBackfillResult struct {
+	Matched   int64 `json:"matched"`
+	Scheduled int64 `json:"scheduled"`
+	DryRun    bool  `json:"dryRun"`
+}
+
+// SchedulePreviewBoundsBackfill 为已有 ready Preview 创建可重试、可审计的异步重算任务。
+// 命令不直接解析文件或写 Box，实际计算仍由 Go Preview Worker 完成。
+func SchedulePreviewBoundsBackfill(ctx context.Context, pool *pgxpool.Pool, batchSize, maxVersions int, dryRun bool) (PreviewBoundsBackfillResult, error) {
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	q := db.New(pool)
+	matched, err := q.CountPreviewBoundsBackfillCandidates(ctx, stringPointer(PreviewGeneratorVersion))
+	if err != nil {
+		return PreviewBoundsBackfillResult{}, err
+	}
+	result := PreviewBoundsBackfillResult{Matched: matched, DryRun: dryRun}
+	if dryRun || matched == 0 {
+		return result, nil
+	}
+	service := NewService(pool, nil, 0)
+	for maxVersions <= 0 || int(result.Scheduled) < maxVersions {
+		limit := batchSize
+		if maxVersions > 0 && limit > maxVersions-int(result.Scheduled) {
+			limit = maxVersions - int(result.Scheduled)
+		}
+		rows, listErr := q.ListPreviewBoundsBackfillCandidates(ctx, db.ListPreviewBoundsBackfillCandidatesParams{
+			GeneratorVersion: stringPointer(PreviewGeneratorVersion),
+			BatchSize:        int32(limit),
+		})
+		if listErr != nil {
+			return result, listErr
+		}
+		if len(rows) == 0 {
+			break
+		}
+		for _, row := range rows {
+			if _, scheduleErr := service.materializePreview(ctx, row.OwnerID, "", uuidutil.String(row.VersionID), true); scheduleErr != nil {
+				return result, scheduleErr
+			}
+			result.Scheduled++
+		}
+	}
+	return result, nil
+}
+
+// EnsureInitialPreviewWithQueries 在组件解析事务内创建首个 GLB 预览任务。
+// 调用方必须传入同一事务绑定的 Queries；预览任务依赖解析任务成功后才可被 Worker 领取，
+// 从而保证组件版本、BOM 与预览任务要么一起提交，要么一起回滚。
+func EnsureInitialPreviewWithQueries(
+	ctx context.Context,
+	q *db.Queries,
+	actor pgtype.UUID,
+	versionID pgtype.UUID,
+	parseTaskID pgtype.UUID,
+) (db.ComponentRepoTask, error) {
+	state, err := q.GetOwnedVersionPreviewState(ctx, db.GetOwnedVersionPreviewStateParams{
+		VersionID: versionID,
+		ActorID:   actor,
+	})
+	if err != nil {
+		return db.ComponentRepoTask{}, err
+	}
+	// 解析任务重领时可能遇到已经物化完成的预览；当前生成器的 ready 结果不可被重置为 pending。
+	if state.PreviewStatus == "ready" && state.PreviewArtifactID.Valid && state.PreviewTaskID.Valid &&
+		state.PreviewGeneratorVersion != nil && *state.PreviewGeneratorVersion == PreviewGeneratorVersion {
+		existing, err := q.GetOwnedTask(ctx, db.GetOwnedTaskParams{
+			TaskID:  state.PreviewTaskID,
+			ActorID: actor,
+		})
+		if err != nil {
+			return db.ComponentRepoTask{}, err
+		}
+		return existing, nil
+	}
+	inputHash := componentPreviewInputHash(
+		uuidutil.String(state.ID),
+		uuidutil.String(state.SceneSnapshotID),
+		state.StructureHash,
+		state.GeometryHash,
+		uuidutil.String(state.PartLibraryVersionID),
+		state.PartLibrarySourceHash,
+		PreviewGeneratorVersion,
+	)
+	payload := mustJSON(map[string]any{
+		"versionId":        uuidutil.String(versionID),
+		"generatorVersion": PreviewGeneratorVersion,
+		"generation":       state.PreviewGeneration,
+		"inputHash":        inputHash,
+	})
+	scheduled, err := task.ScheduleWithQueries(ctx, q, task.ScheduleInput{
+		OwnerID:     actor,
+		TaskType:    PreviewMaterializeType,
+		LogicalKey:  uuidutil.String(versionID),
+		InputHash:   inputHash,
+		Payload:     payload,
+		Locale:      state.ContentLocale,
+		Timezone:    state.Timezone,
+		CreatedBy:   actor,
+		MaxAttempts: 3,
+	})
+	if err != nil {
+		return db.ComponentRepoTask{}, err
+	}
+	if err := q.SetVersionPreviewTask(ctx, db.SetVersionPreviewTaskParams{
+		TaskID:            scheduled.Task.ID,
+		GeneratorVersion:  stringPointer(PreviewGeneratorVersion),
+		PreviewGeneration: state.PreviewGeneration,
+		VersionID:         versionID,
+	}); err != nil {
+		return db.ComponentRepoTask{}, err
+	}
+	if err := q.CreateTaskDependency(ctx, db.CreateTaskDependencyParams{
+		TaskID:             scheduled.Task.ID,
+		PrerequisiteTaskID: parseTaskID,
+		OwnerID:            actor,
+	}); err != nil {
+		return db.ComponentRepoTask{}, err
+	}
+	return scheduled.Task, nil
 }
 
 func (s *Service) GetPreview(ctx context.Context, actor pgtype.UUID, accessToken, versionID string) (Preview, error) {
@@ -369,8 +508,156 @@ func (s *Service) GetActivePartLibraryVersion(ctx context.Context) (PartLibraryV
 	}
 	return PartLibraryVersion{
 		ID: uuidutil.String(row.ID), SourceName: row.SourceName, SourceHash: row.SourceHash,
-		Status: row.Status, CreatedAt: row.CreatedAt.Time,
+		Status: row.Status, PreviewReady: row.PreviewReady, RelationReady: row.RelationReady,
+		ConnectorCount: row.ConnectorCount, ColliderCount: row.ColliderCount, CreatedAt: row.CreatedAt.Time,
 	}, nil
+}
+
+var partSearchDimensionPattern = regexp.MustCompile(`^(\d+(?:\.\d+)?)[xX×](\d+(?:\.\d+)?)(?:[xX×](\d+(?:\.\d+)?))?$`)
+
+// SearchParts 在当前 active Studio Part Library 上执行同步、有界且稳定分页的源内容搜索。
+// API 不读取本地 LDraw 文件；名称、几何状态和尺寸都必须由离线 importer 预先持久化。
+func (s *Service) SearchParts(ctx context.Context, input PartSearchRequest) (PartSearchPage, error) {
+	if len([]rune(input.Query)) > 200 {
+		return PartSearchPage{}, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "query"})
+	}
+	page := input.Page
+	if page == 0 {
+		page = 1
+	}
+	pageSize := input.PageSize
+	if pageSize == 0 {
+		pageSize = 50
+	}
+	if page < 1 || page > 1_000_000 || pageSize < 1 || pageSize > 200 {
+		return PartSearchPage{}, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "page"})
+	}
+	keywords, dimensions, err := parsePartSearchQuery(input.Query)
+	if err != nil {
+		return PartSearchPage{}, err
+	}
+	dimensionsJSON, err := json.Marshal(dimensions)
+	if err != nil {
+		return PartSearchPage{}, err
+	}
+	library, err := s.q.GetPreviewActivePartLibraryVersion(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PartSearchPage{}, apierror.New("component_repo.part_library_not_found", http.StatusNotFound, nil)
+	}
+	if err != nil {
+		return PartSearchPage{}, err
+	}
+	count, err := s.q.CountSearchableParts(ctx, db.CountSearchablePartsParams{
+		PartLibraryVersionID: library.ID, Keywords: keywords, Dimensions: dimensionsJSON,
+	})
+	if err != nil {
+		return PartSearchPage{}, err
+	}
+	offset := int32((page - 1) * pageSize)
+	previewGeneratorVersion := PartPreviewGeneratorVersion
+	rows, err := s.q.SearchParts(ctx, db.SearchPartsParams{
+		PartLibraryVersionID: library.ID, Keywords: keywords, Dimensions: dimensionsJSON,
+		GeneratorVersion: &previewGeneratorVersion, PageSize: int32(pageSize), PageOffset: offset,
+	})
+	if err != nil {
+		return PartSearchPage{}, err
+	}
+	type previewCandidate struct {
+		itemIndex int
+		key       string
+		model     PartSearchPreviewModel
+	}
+	items := make([]PartSearchItem, 0, len(rows))
+	previewCandidates := make([]previewCandidate, 0, len(rows))
+	previewKeys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		item := PartSearchItem{
+			LDrawPartNum: row.LdrawPartNum, Name: row.SourceName, ContentLocale: row.ContentLocale,
+			TranslationStatus: "source", GeometryStatus: "ready",
+			LogicalSizeDerivationStatus: row.LogicalSizeDerivationStatus,
+		}
+		if row.LogicalWidthStud != nil && row.LogicalDepthStud != nil && row.LogicalHeightPlate != nil {
+			item.LogicalSize = &PartSearchLogicalSize{
+				WidthStud: *row.LogicalWidthStud, DepthStud: *row.LogicalDepthStud, HeightPlate: *row.LogicalHeightPlate,
+			}
+		}
+		items = append(items, item)
+		if row.PreviewArtifactID.Valid && row.PreviewStorageKey != nil && row.PreviewSha256 != nil && row.PreviewFileSize != nil {
+			// Search 只投影已经验证且属于当前 generator 的派生资产；签名失败时仍保留文本搜索结果。
+			previewCandidates = append(previewCandidates, previewCandidate{
+				itemIndex: len(items) - 1,
+				key:       *row.PreviewStorageKey,
+				model: PartSearchPreviewModel{
+					ArtifactID: uuidutil.String(row.PreviewArtifactID), Format: "glb", Compression: "meshopt",
+					SHA256: *row.PreviewSha256, ByteLength: *row.PreviewFileSize,
+				},
+			})
+			previewKeys = append(previewKeys, *row.PreviewStorageKey)
+		}
+	}
+	if len(previewKeys) > 0 {
+		// 一页搜索结果只发起一次 Storage 批量签名，避免列表大小线性放大 provider 往返。
+		if signedURLs, signErr := s.store.SignDownloads(ctx, previewKeys, s.signedURLTTL); signErr == nil {
+			for _, candidate := range previewCandidates {
+				if signedURL := signedURLs[candidate.key]; signedURL != "" {
+					model := candidate.model
+					model.URL = signedURL
+					items[candidate.itemIndex].PreviewModel = &model
+				}
+			}
+		}
+	}
+	totalPages := 0
+	if count > 0 {
+		totalPages = int((count + int64(pageSize) - 1) / int64(pageSize))
+	}
+	return PartSearchPage{
+		PartLibraryVersionID: uuidutil.String(library.ID), Items: items, Total: count,
+		Returned: len(items), Page: page, PageSize: pageSize, TotalPages: totalPages,
+	}, nil
+}
+
+// parsePartSearchQuery 保留旧页面的一框语义：逗号/空格分段，尺寸片段精确匹配，名称关键词至少命中一个。
+func parsePartSearchQuery(value string) ([]string, [][]float64, error) {
+	fragments := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == '，' || unicode.IsSpace(r)
+	})
+	keywords := make([]string, 0, len(fragments))
+	dimensions := make([][]float64, 0, len(fragments))
+	seenKeywords := map[string]struct{}{}
+	seenDimensions := map[string]struct{}{}
+	for _, fragment := range fragments {
+		fragment = strings.TrimSpace(fragment)
+		if match := partSearchDimensionPattern.FindStringSubmatch(fragment); match != nil {
+			values := make([]float64, 0, 3)
+			for _, raw := range match[1:] {
+				if raw == "" {
+					continue
+				}
+				parsed, parseErr := strconv.ParseFloat(raw, 64)
+				if parseErr != nil {
+					return nil, nil, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "query"})
+				}
+				values = append(values, parsed)
+			}
+			sort.Float64s(values)
+			key := fmt.Sprint(values)
+			if _, exists := seenDimensions[key]; !exists {
+				seenDimensions[key] = struct{}{}
+				dimensions = append(dimensions, values)
+			}
+			continue
+		}
+		keyword := strings.ToLower(fragment)
+		if keyword == "" {
+			continue
+		}
+		if _, exists := seenKeywords[keyword]; !exists {
+			seenKeywords[keyword] = struct{}{}
+			keywords = append(keywords, keyword)
+		}
+	}
+	return keywords, dimensions, nil
 }
 
 func (s *Service) GetPartPreview(ctx context.Context, partLibraryVersionID, partNumber, locale string) (PartPreview, error) {
@@ -401,6 +688,13 @@ func (s *Service) GetPartPreview(ctx context.Context, partLibraryVersionID, part
 		Status: row.PreviewStatus, GeneratorVersion: row.GeneratorVersion,
 		TaskID: uuidutil.NullableString(row.TaskID),
 	}
+	// 生成器升级后旧 Artifact 仍保留用于审计，但 API 只暴露当前版本；前端会据此触发新的异步物化任务。
+	staleGenerator := row.GeneratorVersion == nil || *row.GeneratorVersion != PartPreviewGeneratorVersion
+	if staleGenerator {
+		result.Status = "pending"
+		result.GeneratorVersion = stringPointer(PartPreviewGeneratorVersion)
+		result.TaskID = nil
+	}
 	if len(row.BboxMin) == 3 && len(row.BboxMax) == 3 && row.LogicalSizeDerivationStatus != nil &&
 		row.VertexCount != nil && row.FaceCount != nil {
 		result.Geometry = &PartGeometry{
@@ -413,10 +707,10 @@ func (s *Service) GetPartPreview(ctx context.Context, partLibraryVersionID, part
 			VertexCount: *row.VertexCount, FaceCount: *row.FaceCount,
 		}
 	}
-	if row.FailureCode != nil {
+	if row.FailureCode != nil && !staleGenerator {
 		result.Failure = &Failure{Code: *row.FailureCode, Params: object(row.FailureParams)}
 	}
-	if row.PreviewStatus == "ready" && row.ArtifactID.Valid && row.StorageKey != nil && row.Sha256 != nil && row.FileSize != nil {
+	if !staleGenerator && row.PreviewStatus == "ready" && row.ArtifactID.Valid && row.StorageKey != nil && row.Sha256 != nil && row.FileSize != nil {
 		url, signErr := s.store.SignDownload(ctx, *row.StorageKey, s.signedURLTTL)
 		if signErr != nil {
 			return PartPreview{}, apierror.New("component_repo.storage_unavailable", http.StatusServiceUnavailable, nil)
@@ -455,7 +749,12 @@ func (s *Service) MaterializePartPreview(ctx context.Context, actor pgtype.UUID,
 		}
 		generation := state.Generation
 		forceNew := state.PreviewStatus == "failed"
-		if state.PreviewStatus == "ready" && state.ArtifactID.Valid {
+		staleGenerator := state.GeneratorVersion == nil || *state.GeneratorVersion != PartPreviewGeneratorVersion
+		if staleGenerator {
+			// 旧任务和旧 Artifact 不能阻止新生成器运行；generation 隔离迟到的 v1 Worker 回填。
+			generation++
+			forceNew = true
+		} else if state.PreviewStatus == "ready" && state.ArtifactID.Valid {
 			preview, previewErr := q.GetPartPreview(ctx, db.GetPartPreviewParams{PartLibraryVersionID: libraryID, LdrawPartNum: partNumber, Locale: locale})
 			if previewErr == nil && preview.StorageKey != nil {
 				if _, headErr := s.store.Head(ctx, *preview.StorageKey); headErr == nil {
@@ -467,7 +766,7 @@ func (s *Service) MaterializePartPreview(ctx context.Context, actor pgtype.UUID,
 			generation++
 			forceNew = true
 		}
-		if (state.PreviewStatus == "pending" || state.PreviewStatus == "running") && state.TaskID.Valid {
+		if !staleGenerator && (state.PreviewStatus == "pending" || state.PreviewStatus == "running") && state.TaskID.Valid {
 			existing, taskErr := q.GetOwnedTask(ctx, db.GetOwnedTaskParams{TaskID: state.TaskID, ActorID: actor})
 			if taskErr == nil && (existing.Status == "queued" || existing.Status == "running") {
 				return AcceptedTask{TaskID: uuidutil.String(existing.ID), Status: existing.Status}, nil
@@ -499,6 +798,7 @@ func (s *Service) MaterializePartPreview(ctx context.Context, actor pgtype.UUID,
 	})
 }
 
+// GetVersionParts 读取版本冻结的 BOM，并只在展示投影阶段选择已审核的官方 Part 译文。
 func (s *Service) GetVersionParts(ctx context.Context, actor pgtype.UUID, versionID, locale string) (VersionParts, error) {
 	id, err := parseID(versionID, "versionId")
 	if err != nil {
@@ -544,8 +844,9 @@ func (s *Service) GetVersionParts(ctx context.Context, actor pgtype.UUID, versio
 				}
 			}
 		}
-		item := PartItem{LDrawPartNum: ref, Quantity: quantity, TranslationStatus: "missing"}
+		item := PartItem{LDrawPartNum: ref, Quantity: quantity, TranslationStatus: "missing", GeometryStatus: "missing"}
 		if part, ok := localized[ref]; ok {
+			item.GeometryStatus = part.GeometryStatus
 			if part.TranslatedName != nil {
 				item.Name, item.ContentLocale, item.TranslationStatus = part.TranslatedName, part.TranslatedLocale, "reviewed"
 			} else if part.SourceName != nil {

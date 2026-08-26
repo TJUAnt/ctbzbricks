@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
@@ -38,6 +39,65 @@ func (s *Service) GetImport(ctx context.Context, actor pgtype.UUID, importID str
 	return importFromDB(row), nil
 }
 
+// ListImports 返回当前用户的持久化导入历史；可选 ComponentID 同时匹配更新目标和导入后生成的组件。
+func (s *Service) ListImports(ctx context.Context, actor pgtype.UUID, request ImportListRequest) (ImportPage, error) {
+	request = normalizeImportListRequest(request)
+	query := strings.TrimSpace(request.Query)
+	if len(query) > 200 {
+		return ImportPage{}, validationError("query")
+	}
+	if request.ProcessingStatus != "" && request.ProcessingStatus != "processing" &&
+		request.ProcessingStatus != "ready" && request.ProcessingStatus != "failed" {
+		return ImportPage{}, validationError("processingStatus")
+	}
+	var componentID pgtype.UUID
+	if request.ComponentID != "" {
+		parsed, err := uuidutil.Parse(request.ComponentID)
+		if err != nil {
+			return ImportPage{}, validationError("componentId")
+		}
+		componentID = parsed
+	}
+	rows, err := s.q.ListOwnedImports(ctx, db.ListOwnedImportsParams{
+		ActorID: actor, ComponentID: componentID, ProcessingStatus: request.ProcessingStatus,
+		SearchQuery: query, PageOffset: int32((request.Page - 1) * request.PageSize),
+		PageSize: int32(request.PageSize),
+	})
+	if err != nil {
+		return ImportPage{}, err
+	}
+	items := make([]ImportRecord, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, importRecordFromDB(row))
+	}
+	counts, err := s.q.CountOwnedImportProcessingStatuses(ctx, db.CountOwnedImportProcessingStatusesParams{
+		ActorID: actor, ComponentID: componentID, SearchQuery: query,
+	})
+	if err != nil {
+		return ImportPage{}, err
+	}
+	statusCounts := map[string]int64{"processing": 0, "ready": 0, "failed": 0}
+	for _, count := range counts {
+		statusCounts[count.ProcessingStatus] = count.ImportCount
+	}
+	var total int64
+	if request.ProcessingStatus == "" {
+		for _, count := range statusCounts {
+			total += count
+		}
+	} else {
+		total = statusCounts[request.ProcessingStatus]
+	}
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(request.PageSize) - 1) / int64(request.PageSize))
+	}
+	return ImportPage{
+		Items: items, Total: total, Page: request.Page, PageSize: request.PageSize,
+		TotalPages: totalPages, StatusCounts: statusCounts,
+	}, nil
+}
+
 func (s *Service) GetCandidate(ctx context.Context, actor pgtype.UUID, candidateID string) (Candidate, error) {
 	id, err := uuidutil.Parse(candidateID)
 	if err != nil {
@@ -57,6 +117,10 @@ func importFromDB(row db.GetOwnedImportRow) Import {
 	var failure *Failure
 	if row.FailureCode != nil {
 		failure = &Failure{Code: *row.FailureCode, Params: objectJSON(row.FailureParams)}
+	} else if row.PreviewFailureCode != nil {
+		failure = &Failure{Code: *row.PreviewFailureCode, Params: objectJSON(row.PreviewFailureParams)}
+	} else if row.PreviewTaskErrorCode != nil {
+		failure = &Failure{Code: *row.PreviewTaskErrorCode, Params: objectJSON(row.PreviewTaskErrorParams)}
 	}
 	return Import{
 		ID: uuidutil.String(row.ID), SourceArtifactID: uuidutil.String(row.SourceArtifactID),
@@ -64,10 +128,57 @@ func importFromDB(row db.GetOwnedImportRow) Import {
 		BaseVersionID: optionalUUID(row.BaseVersionID), Status: row.Status,
 		ParserVersion: stringValue(row.ParserVersion), PartLibraryVersionID: optionalUUID(row.PartLibraryVersionID),
 		TaskID: uuidutil.String(row.ParseTaskID), CandidateID: optionalUUID(row.CandidateID),
-		DraftVersionID: optionalUUID(row.DraftVersionID), Locale: row.Locale, Timezone: row.Timezone,
+		DraftVersionID: optionalUUID(row.DraftVersionID), ProcessingStatus: importProcessingStatus(row),
+		PreviewTaskID: optionalUUID(row.PreviewTaskID), Locale: row.Locale, Timezone: row.Timezone,
 		Failure: failure, Metadata: objectJSON(row.Metadata), CreatedAt: row.CreatedAt.Time,
 		StartedAt: optionalTime(row.StartedAt), CompletedAt: optionalTime(row.CompletedAt),
 	}
+}
+
+func importRecordFromDB(row db.ListOwnedImportsRow) ImportRecord {
+	var failure *Failure
+	if row.FailureCode != nil {
+		failure = &Failure{Code: *row.FailureCode, Params: objectJSON(row.FailureParams)}
+	} else if row.PreviewFailureCode != nil {
+		failure = &Failure{Code: *row.PreviewFailureCode, Params: objectJSON(row.PreviewFailureParams)}
+	} else if row.PreviewTaskErrorCode != nil {
+		failure = &Failure{Code: *row.PreviewTaskErrorCode, Params: objectJSON(row.PreviewTaskErrorParams)}
+	}
+	componentID := optionalUUID(row.ComponentID)
+	if componentID == nil {
+		componentID = optionalUUID(row.TargetComponentID)
+	}
+	importKind := "create"
+	if row.TargetComponentID.Valid {
+		importKind = "update"
+	}
+	return ImportRecord{
+		ID: uuidutil.String(row.ID), SourceArtifactID: uuidutil.String(row.SourceArtifactID),
+		OriginalFilename: row.OriginalFilename, FileSize: row.FileSize, MimeType: row.MimeType,
+		ImportKind: importKind, TargetComponentID: optionalUUID(row.TargetComponentID),
+		ComponentID: componentID, BaseVersionID: optionalUUID(row.BaseVersionID), Status: row.Status,
+		ProcessingStatus: row.ProcessingStatus, ParserVersion: stringValue(row.ParserVersion),
+		PartLibraryVersionID: optionalUUID(row.PartLibraryVersionID), TaskID: uuidutil.String(row.ParseTaskID),
+		CandidateID: optionalUUID(row.CandidateID), DraftVersionID: optionalUUID(row.DraftVersionID),
+		PreviewTaskID: optionalUUID(row.PreviewTaskID), Failure: failure, CreatedAt: row.CreatedAt.Time,
+		StartedAt: optionalTime(row.StartedAt), CompletedAt: optionalTime(row.CompletedAt),
+	}
+}
+
+// importProcessingStatus 汇总解析、BOM 和 GLB 制品状态；只有全部持久化且预览制品已验证时才对前端声明 ready。
+func importProcessingStatus(row db.GetOwnedImportRow) string {
+	if row.Status == "failed" || row.Status == "cancelled" ||
+		row.PreviewStatus == "failed" ||
+		stringValue(row.PreviewTaskStatus) == "failed" || stringValue(row.PreviewTaskStatus) == "cancelled" {
+		return "failed"
+	}
+	if row.Status == "succeeded" && row.CandidateID.Valid && row.DraftVersionID.Valid &&
+		row.SceneSnapshotID.Valid && row.PreviewArtifactID.Valid &&
+		row.PreviewStatus == "ready" &&
+		stringValue(row.PreviewArtifactVerificationStatus) == "verified" {
+		return "ready"
+	}
+	return "processing"
 }
 
 func candidateFromDB(row db.GetOwnedCandidateRow) Candidate {
@@ -126,4 +237,20 @@ func stringValue(value *string) string {
 
 func validationError(field string) *apierror.Error {
 	return apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": field})
+}
+
+func normalizeImportListRequest(request ImportListRequest) ImportListRequest {
+	if request.Page < 1 {
+		request.Page = 1
+	}
+	if request.PageSize < 1 {
+		request.PageSize = 20
+	}
+	if request.PageSize > 100 {
+		request.PageSize = 100
+	}
+	if request.Page > 1_000_000 {
+		request.Page = 1_000_000
+	}
+	return request
 }

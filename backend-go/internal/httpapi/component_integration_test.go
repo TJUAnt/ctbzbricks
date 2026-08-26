@@ -27,6 +27,60 @@ import (
 
 const integrationJWTSecret = "0123456789abcdef0123456789abcdef"
 
+func TestPartSearchHTTPContract(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is required for PostgreSQL integration tests")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect PostgreSQL: %v", err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `
+		TRUNCATE component_repo.part_library_versions CASCADE;
+		INSERT INTO component_repo.part_library_versions
+			(id,source_name,source_hash,connector_count,status,created_by)
+		VALUES ('31000000-0000-0000-0000-000000000001','fixture',repeat('a',64),0,'active',
+			'31000000-0000-0000-0000-000000000002');
+		INSERT INTO component_repo.parts
+			(part_library_version_id,ldraw_part_num,source_name,content_locale)
+		VALUES ('31000000-0000-0000-0000-000000000001','3001.dat','Brick 2 x 4','en-US');
+		INSERT INTO component_repo.part_geometries
+			(part_library_version_id,ldraw_part_num,source_relative_path,source_file_hash,
+			 bbox_min,bbox_max,logical_width_stud,logical_depth_stud,logical_height_plate,
+			 vertex_count,face_count)
+		VALUES ('31000000-0000-0000-0000-000000000001','3001.dat','parts/3001.dat',repeat('b',64),
+			ARRAY[0,0,0]::float8[],ARRAY[40,24,80]::float8[],2,4,3,3,1)`); err != nil {
+		t.Fatalf("seed Part search fixture: %v", err)
+	}
+
+	cfg := testConfig()
+	cfg.Auth = config.AuthConfig{JWTSecret: integrationJWTSecret, JWTIssuer: "g3-test", JWTAudience: "authenticated"}
+	router := NewApplicationRouter(cfg, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	unauthorized := httptest.NewRecorder()
+	router.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"query":"3001"}`)))
+	assertPublicError(t, unauthorized, http.StatusUnauthorized, "auth.authentication_required")
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"query":"3001 4x2","page":1,"pageSize":20}`))
+	request.Header.Set("Authorization", "Bearer "+integrationToken(t, "31000000-0000-0000-0000-000000000003"))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"partLibraryVersionId":"31000000-0000-0000-0000-000000000001"`) ||
+		!strings.Contains(response.Body.String(), `"ldrawPartNum":"3001.dat"`) {
+		t.Fatalf("Part search status/body = %d %s", response.Code, response.Body.String())
+	}
+
+	unknownRequest := httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"query":"3001","candidateTypes":["part"]}`))
+	unknownRequest.Header.Set("Authorization", "Bearer "+integrationToken(t, "31000000-0000-0000-0000-000000000003"))
+	unknownResponse := httptest.NewRecorder()
+	router.ServeHTTP(unknownResponse, unknownRequest)
+	assertPublicError(t, unknownResponse, http.StatusUnprocessableEntity, "request.validation_failed")
+}
+
 func TestG3HTTPAuthenticationAndErrorContract(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -54,8 +108,16 @@ func TestG3HTTPAuthenticationAndErrorContract(t *testing.T) {
 	assertPublicError(t, unauthorized, http.StatusUnauthorized, "auth.authentication_required")
 
 	actorAToken := integrationToken(t, "30000000-0000-0000-0000-000000000001")
+	importHistory := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/component-imports?page=1&pageSize=20", nil)
+	request.Header.Set("Authorization", "Bearer "+actorAToken)
+	router.ServeHTTP(importHistory, request)
+	if importHistory.Code != http.StatusOK || !strings.Contains(importHistory.Body.String(), `"items":[]`) {
+		t.Fatalf("import history status/body = %d %s", importHistory.Code, importHistory.Body.String())
+	}
+
 	clientSuppliedKey := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/component-imports/upload-sessions", strings.NewReader(`{
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/component-imports/upload-sessions", strings.NewReader(`{
 		"sourceFile":{"filename":"model.ldr","contentType":"text/plain","fileSize":10,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","objectPath":"client/chosen/key"},
 		"contentLocale":"en-US","timezone":"UTC"
 	}`))

@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
-	"time"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
-	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -19,10 +20,20 @@ import (
 )
 
 const (
-	defaultPageSize = 20
-	maxPageSize     = 100
-	maxGroupDepth   = 5
+	defaultPageSize     = 20
+	maxPageSize         = 100
+	maxGroupDepth       = 5
+	maxSearchConditions = 8
 )
+
+var componentSizeQueryPattern = regexp.MustCompile(`^\s*(\d+(?:\.\d+)?|\.\d+)\s*[xX×]\s*(\d+(?:\.\d+)?|\.\d+)(?:\s*[xX×]\s*(\d+(?:\.\d+)?|\.\d+))?\s*$`)
+
+type componentSizeFilter struct {
+	DimensionCount int32   `json:"dimension_count"`
+	A              float64 `json:"size_a"`
+	B              float64 `json:"size_b"`
+	C              float64 `json:"size_c"`
+}
 
 type Service struct {
 	pool *pgxpool.Pool
@@ -88,7 +99,7 @@ func (s *Service) ListComponents(ctx context.Context, actor pgtype.UUID, request
 	if len(request.Query) > 200 || len(request.Category) > 128 {
 		return ComponentPage{}, validationError("query")
 	}
-	if request.Status != "" && request.Status != "draft" && request.Status != "active" && request.Status != "archived" {
+	if request.Status != "" && request.Status != "draft" && request.Status != "active" {
 		return ComponentPage{}, validationError("status")
 	}
 	rows, err := s.q.ListVisibleComponents(ctx, db.ListVisibleComponentsParams{
@@ -167,64 +178,6 @@ func (s *Service) DeleteComponent(ctx context.Context, actor pgtype.UUID, compon
 		return struct{}{}, err
 	})
 	return err
-}
-
-func (s *Service) PurgeComponent(ctx context.Context, actor pgtype.UUID, componentID string, input PurgeComponentInput) (ComponentPurgeAccepted, error) {
-	id, err := resourceID(componentID, "componentId")
-	if err != nil {
-		return ComponentPurgeAccepted{}, err
-	}
-	locale, ok := NormalizeLocale(input.Locale)
-	if !ok {
-		return ComponentPurgeAccepted{}, validationError("locale")
-	}
-	if _, err := time.LoadLocation(input.Timezone); err != nil {
-		return ComponentPurgeAccepted{}, validationError("timezone")
-	}
-	component, err := s.q.GetOwnedComponentForPurge(ctx, db.GetOwnedComponentForPurgeParams{
-		ComponentID: id, ActorID: actor,
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ComponentPurgeAccepted{}, notFound("component_repo.component_not_found", "componentId", componentID)
-	}
-	if err != nil {
-		return ComponentPurgeAccepted{}, err
-	}
-	if input.ConfirmComponentName != component.Name {
-		return ComponentPurgeAccepted{}, apierror.New("component_repo.component_purge_confirmation_failed", http.StatusUnprocessableEntity, map[string]any{"componentId": componentID})
-	}
-	objects, err := s.q.ListComponentPurgeStorageObjects(ctx, db.ListComponentPurgeStorageObjectsParams{
-		TargetComponentID: id, ActorID: actor,
-	})
-	if err != nil {
-		return ComponentPurgeAccepted{}, err
-	}
-	storageObjects := make([]componentPurgeStorageObject, 0, len(objects))
-	for _, object := range objects {
-		storageObjects = append(storageObjects, componentPurgeStorageObject{
-			Provider: object.StorageProvider,
-			Bucket:   object.StorageBucket,
-			Key:      object.StorageKey,
-		})
-	}
-	payload, err := json.Marshal(componentPurgePayload{
-		ComponentID:          componentID,
-		DeleteStorageObjects: input.DeleteStorageObjects,
-		StorageObjects:       storageObjects,
-		PurgeVersion:         componentPurgeVersion,
-	})
-	if err != nil {
-		return ComponentPurgeAccepted{}, err
-	}
-	created, _, err := task.NewService(s.pool).Enqueue(ctx, task.EnqueueInput{
-		OwnerID: actor, TaskType: task.ComponentPurgeType, Payload: payload,
-		Locale: locale, Timezone: input.Timezone, CreatedBy: actor,
-		IdempotencyKey: "component-purge:" + componentID, MaxAttempts: 5,
-	})
-	if err != nil {
-		return ComponentPurgeAccepted{}, err
-	}
-	return ComponentPurgeAccepted{TaskID: created.ID, Status: created.Status}, nil
 }
 
 func (s *Service) CreateVersion(ctx context.Context, actor pgtype.UUID, componentID string, input CreateVersionInput) (ComponentVersion, error) {
@@ -311,6 +264,7 @@ func (s *Service) ListVersions(ctx context.Context, actor pgtype.UUID, component
 	return VersionPage{Items: items, Page: page.Page, PageSize: page.PageSize}, nil
 }
 
+// PublishVersion 直接发布 owner 的 Draft；可选 ValidationReport 不参与发布事务门禁。
 func (s *Service) PublishVersion(ctx context.Context, actor pgtype.UUID, versionID string) (ComponentVersion, error) {
 	id, err := resourceID(versionID, "versionId")
 	if err != nil {
@@ -331,10 +285,6 @@ func (s *Service) PublishVersion(ctx context.Context, actor pgtype.UUID, version
 			return ComponentVersion{}, err
 		}
 		if _, err := q.PublishComponentVersion(ctx, id); err != nil {
-			var databaseError *pgconn.PgError
-			if errors.As(err, &databaseError) && strings.Contains(databaseError.Message, "publish validation report") {
-				return ComponentVersion{}, apierror.New("component_repo.publish_validation_failed", http.StatusConflict, map[string]any{"versionId": versionID})
-			}
 			return ComponentVersion{}, err
 		}
 		if err := q.SetComponentCurrentVersion(ctx, db.SetComponentCurrentVersionParams{VersionID: id, ComponentID: locked.ComponentID, ActorID: actor}); err != nil {
@@ -476,6 +426,8 @@ func (s *Service) ListComponentGroupIDs(ctx context.Context, actor pgtype.UUID, 
 	return ids, nil
 }
 
+// SearchGroupComponents 在同一 owner/group 可见性边界内执行复合查询；每个文字或尺寸条件都必须满足。
+// 条件在进入 SQL 前完成裁剪、去重和尺寸解析；尺寸条件编码为内部 JSON 数组，避免动态拼接 SQL。
 func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, groupID string, input ComponentGroupSearchRequest) (ComponentGroupSearchPage, error) {
 	id, err := resourceID(groupID, "groupId")
 	if err != nil {
@@ -486,8 +438,7 @@ func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, 
 	} else if err != nil {
 		return ComponentGroupSearchPage{}, err
 	}
-	query := strings.TrimSpace(input.Query)
-	if len(query) > 200 {
+	if len(input.Queries) > maxSearchConditions {
 		return ComponentGroupSearchPage{}, validationError("query")
 	}
 	if len(input.Statuses) > 16 {
@@ -496,7 +447,8 @@ func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, 
 	statuses := make([]string, 0, len(input.Statuses))
 	seenStatuses := make(map[string]struct{}, len(input.Statuses))
 	for _, status := range input.Statuses {
-		if status == "" || len(status) > 32 {
+		// Component 列表只公开草稿与已发布状态；archived 是软删除实现细节，Import/Task 状态不得混入。
+		if status != "draft" && status != "active" {
 			return ComponentGroupSearchPage{}, validationError("statuses")
 		}
 		if _, exists := seenStatuses[status]; exists {
@@ -507,9 +459,36 @@ func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, 
 	}
 	page := normalizePage(input.PageRequest)
 	locale := displayLocale(input.Locale)
+	textFilters := make([]string, 0, len(input.Queries))
+	sizeFilters := make([]componentSizeFilter, 0, len(input.Queries))
+	seenQueries := make(map[string]struct{}, len(input.Queries))
+	for _, rawQuery := range input.Queries {
+		query := strings.TrimSpace(rawQuery)
+		if query == "" {
+			continue
+		}
+		if len(query) > 200 {
+			return ComponentGroupSearchPage{}, validationError("query")
+		}
+		normalizedQuery := strings.ToLower(query)
+		if _, exists := seenQueries[normalizedQuery]; exists {
+			continue
+		}
+		seenQueries[normalizedQuery] = struct{}{}
+		if sizeFilter, ok := parseComponentSizeQuery(query); ok {
+			sizeFilters = append(sizeFilters, sizeFilter)
+			continue
+		}
+		textFilters = append(textFilters, query)
+	}
+	sizeFiltersJSON, err := json.Marshal(sizeFilters)
+	if err != nil {
+		return ComponentGroupSearchPage{}, err
+	}
 	rows, err := s.q.SearchComponentGroupComponents(ctx, db.SearchComponentGroupComponentsParams{
-		Locale: locale, OwnerID: actor, GroupID: id, StatusFilters: statuses, SearchQuery: query,
-		PageOffset: int32((page.Page - 1) * page.PageSize), PageSize: int32(page.PageSize),
+		Locale: locale, OwnerID: actor, GroupID: id, StatusFilters: statuses, TextFilters: textFilters,
+		SizeFilters: sizeFiltersJSON,
+		PageOffset:  int32((page.Page - 1) * page.PageSize), PageSize: int32(page.PageSize),
 	})
 	if err != nil {
 		return ComponentGroupSearchPage{}, err
@@ -519,7 +498,8 @@ func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, 
 		items = append(items, componentFromGroupSearch(row))
 	}
 	counts, err := s.q.CountComponentGroupStatuses(ctx, db.CountComponentGroupStatusesParams{
-		Locale: locale, GroupID: id, OwnerID: actor, SearchQuery: query,
+		Locale: locale, GroupID: id, OwnerID: actor, TextFilters: textFilters,
+		SizeFilters: sizeFiltersJSON,
 	})
 	if err != nil {
 		return ComponentGroupSearchPage{}, err
@@ -543,6 +523,35 @@ func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, 
 		totalPages = int((total + int64(page.PageSize) - 1) / int64(page.PageSize))
 	}
 	return ComponentGroupSearchPage{Items: items, Total: total, Page: page.Page, PageSize: page.PageSize, TotalPages: totalPages, StatusCounts: statusCounts}, nil
+}
+
+// parseComponentSizeQuery 只把完整的二维或三维表达式识别为尺寸搜索，避免普通名称中的数字被误判。
+// 尺寸先升序归一化：三值逐维匹配；两值由 SQL 枚举 ab/ac/bc，保持与 Box 轴方向无关。
+func parseComponentSizeQuery(query string) (componentSizeFilter, bool) {
+	matches := componentSizeQueryPattern.FindStringSubmatch(query)
+	if matches == nil {
+		return componentSizeFilter{}, false
+	}
+	values := make([]float64, 0, 3)
+	for _, raw := range matches[1:] {
+		if raw == "" {
+			continue
+		}
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return componentSizeFilter{}, false
+		}
+		values = append(values, value)
+	}
+	if len(values) != 2 && len(values) != 3 {
+		return componentSizeFilter{}, false
+	}
+	sort.Float64s(values)
+	filter := componentSizeFilter{DimensionCount: int32(len(values)), A: values[0], B: values[1]}
+	if len(values) == 3 {
+		filter.C = values[2]
+	}
+	return filter, true
 }
 
 func (s *Service) CreateGroup(ctx context.Context, actor pgtype.UUID, input CreateGroupInput) (Group, error) {

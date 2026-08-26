@@ -1,9 +1,10 @@
 # Component Repo Go 迁移路线与实施计划
 
-> 状态：Ready for implementation
-> 更新日期：2026-08-06
+> 状态：G0～G7 completed；G8 in progress / Component Repo Go-only runtime established
+> 更新日期：2026-08-24
 > 原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)
 > 进度：[go_migration_progress.md](./go_migration_progress.md)
+> API 契约：[api.md](./api.md)
 > G2 schema 决策：[go_component_schema_baseline.md](./go_component_schema_baseline.md)
 > G8 前端切换清单：[go_g8_frontend_cutover_inventory.md](./go_g8_frontend_cutover_inventory.md)
 
@@ -17,11 +18,12 @@
 - 前端直接切换到新 `/api/v1` 契约。
 - 开发数据库允许通过单独确认后的 reset/reseed 采用新 schema baseline。
 - 新实现不支持 MySQL。
-- Python 只保留 Worker 算法插件，不再承载迁移完成后的组件公共 API。
+- Component Repo 的目标运行时为 Go-only；Python 不承载迁移完成后的公共 API 或任务执行。
+- `component.relations.detect` 已迁移为 Go Worker；原 Python Worker/adapter/launcher 已删除。
 
 不在首轮范围：
 
-- 将所有科学计算或复杂 3D 算法改写成 Go；
+- 迁移 Component Repo 之外的 Python 业务域；
 - 拆分组件微服务或开发业务网关；
 - 引入独立消息中间件；
 - 生产灰度、双写和历史客户端兼容。
@@ -36,11 +38,8 @@ flowchart TD
     API --> Storage["Object Storage"]
     API --> Jobs["PostgreSQL Task Queue"]
     Jobs --> GoWorker["Go Worker"]
-    Jobs --> PyWorker["Python Algorithm Worker"]
     GoWorker --> DB
     GoWorker --> Storage
-    PyWorker --> DB
-    PyWorker --> Storage
 ```
 
 第一阶段可以单实例运行，但 API 和 Worker 从代码结构上必须独立启动、独立扩容。
@@ -202,7 +201,18 @@ POST   /api/v1/tasks/:taskId/cancel
 }
 ```
 
-API DTO 在实现前可以继续细化；本计划不要求保持旧字段兼容。
+`202` 是上传写交互的终点，不是产物就绪信号。Go API 创建会话时生成并持久化可信
+owner-scoped Storage key；浏览器只能使用当前用户 JWT 和 API 返回的精确目标直传 Storage，不能自行
+指定 key。Storage RLS 只允许仍为 pending、未过期且属于 actor 的 upload session key。complete 确认
+对象 metadata 并原子建立持久处理链；后续 verify、解析/BOM 和整体 GLB 生成全部由 Go Worker 推进。
+普通上传流程不得要求前端再调用 Preview materialize mutation。
+
+前端上传弹窗只等待 upload complete；收到 `202` 后立即关闭并导航到 `importId` 状态页。状态页使用
+`processing | ready | failed` 的聚合投影恢复页面：只有 BOM 已持久化且整体 GLB Artifact 已生成、
+验证并可读取时才进入 `ready`。当前由 Import 与 Version Preview 的已有持久字段投影该状态，但不能
+把 parse task 单独 `succeeded` 解释为可预览，也不得在上传弹窗内等待 Worker 完成。
+
+Import DTO 已提供 `processingStatus` 与 `previewTaskId`；本计划不要求保持旧开发字段兼容。
 
 创建 ComponentVersion 时，客户端只提交 `componentCandidateId` 和版本展示元数据。
 `sourceArtifactId`、`exchangeArtifactId`、`sceneSnapshotId`、`parserVersion`、
@@ -215,15 +225,17 @@ API DTO 在实现前可以继续细化；本计划不要求保持旧字段兼容
 
 首批任务类型：
 
-| taskType | 初始执行者 | 目标 |
-|---|---|---|
-| `component.import.parse` | Python Worker | 复用现有解析能力，后续评估迁入 Go |
-| `component.relations.detect` | Python Worker | 复用现有连接识别，协议先稳定 |
-| `component.validate` | Go Worker | 规则型验证优先进入 Go |
-| `component.preview.materialize` | Go Worker | 生成编排与对象存储写入 |
-| `component.artifact.verify` | Go Worker | 大小、hash 和元数据校验 |
+| taskType | 当前执行者 | 目标执行者 | 状态/目标 |
+|---|---|---|---|
+| `component.import.parse` | Go Worker | Go Worker | 已迁移；解析 Studio/LDraw、写入 Snapshot/Candidate/Draft |
+| `component.relations.detect` | Go Worker | Go Worker | 已迁移；冻结 Part Library connector 数据并原子物化关系/接口 |
+| `component.validate` | Go Worker | Go Worker | 用户显式触发的可选结构化质量验证，不阻塞发布 |
+| `component.preview.materialize` | Go Worker | Go Worker | 生成编排与对象存储写入 |
+| `component.part_preview.materialize` | Go Worker | Go Worker | Part GLB 物化 |
+| `component.part_preview.prebuild` | Go Worker | Go Worker | 受控、可恢复的全库 Part meshopt GLB 预生成 |
+| `component.artifact.verify` | Go Worker | Go Worker | 大小、hash 和元数据校验 |
 
-Python Worker 只消费任务和写入结构化结果，不提供公共组件 HTTP 路由。
+不得为 Component Repo 新增 Python task type。
 
 ## 7. 迁移阶段
 
@@ -316,6 +328,7 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - Storage interface 与 Supabase/S3-compatible adapter；
 - 上传会话；
 - 服务端生成 owner-scoped object key；
+- Storage INSERT RLS 只接受 API 已登记的 pending、未过期 upload session 精确 key；
 - HEAD/metadata 校验；
 - artifact immutable 规则；
 - 下载/签名 URL；
@@ -342,7 +355,8 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - progress/error `code + params`；
 - locale/timezone 冻结；
 - Go Worker 执行框架；
-- Python Worker 语言无关消费协议，详见 [go_task_protocol.md](./go_task_protocol.md)。
+- 语言无关 Worker 消费协议，详见 [go_task_protocol.md](./go_task_protocol.md)；该协议允许迁移期
+  对照验收，不改变 Component Repo Go-only 目标。
 
 验收：
 
@@ -354,15 +368,17 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 
 ### G6：组件导入、解析与候选流程
 
-目标：完成上传到可审核 Candidate 的异步闭环。
+目标：完成上传到 SceneSnapshot、BOM、Candidate 和 Draft Version 的异步闭环，并为上传主链的
+整体 GLB 阶段建立不依赖浏览器的持久 continuation。
 
 交付：
 
 - upload complete 原子创建 import 与 parse task；
-- Python parser Worker adapter；
+- Go parser Worker handler；
 - scene snapshot、BOM 和 parse issues 写入；
 - Candidate 与 Draft ComponentVersion；Worker 在 Candidate 上物化版本创建所需的
   interface/structure/geometry 签名，API 不同步重新解析或计算；
+- parse 成功后由服务端持久、幂等地确保对应 Draft Version 的 Preview Logical Job 已调度；
 - 结构化失败和重试；
 - parser version 与 part library version 冻结。
 
@@ -372,6 +388,7 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - 同一 import 重试不会覆盖历史快照；
 - 用户切换语言不改变任务上下文；
 - parse issue 不保存最终译文或异常正文。
+- 关闭浏览器不影响 parse 后的 Preview Task 创建与执行；parse 重试不重复创建 Logical Job。
 
 ### G7：关系、接口、校验和预览
 
@@ -384,6 +401,8 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 - free connector 与 external interface；
 - validation task/report；
 - version-addressed GLB materialize task；
+- 普通上传由服务端自动串联 Preview Task；显式 materialize API 只用于缓存重建、失败恢复或受控维护，
+  不是前端正常上传路径的一部分；
 - signed preview URL 和 locale-aware Part BOM 分离加载。
 - relation、validation、preview 都使用业务 logical key、权威输入 hash 和算法版本接入 G5 通用调度模型；preview generation 只表达派生缓存物化代次，不再承担任务去重职责。
 
@@ -391,42 +410,59 @@ Python Worker 只消费任务和写入结构化结果，不提供公共组件 HT
 
 - Transform 不被检测逻辑修改；
 - connector capacity 和关系唯一性由数据库/事务保证；
-- 验证失败阻止发布；
+- owner 可直接发布 Draft；验证是 Draft/Published 上可选的异步质量报告，失败不阻止或撤销发布；
+- Component 详情页可显式触发验证，并在当前报告通过时展示已通过状态；
 - GET 不隐式生成 GLB；
 - 缓存丢失可以幂等重建。
+- Preview 失败不回滚已经成功的 source Artifact、SceneSnapshot、BOM、Candidate 或 Draft Version；
+  上传聚合状态为 failed，前端仍不得展示预览。
+- 冻结 Part Library 中 geometry 为 `failed/missing` 的 Part 不构成整件 Preview 失败：BOM 保留并返回
+  `geometryStatus`，Worker 省略对应实例并生成 partial GLB；ready source 的缺失、哈希漂移或递归解析
+  失败仍严格失败。
 - 相同输入的 active/succeeded 计算被复用；终态失败或派生缓存丢失创建同一 Logical Job 的下一次 Execution。
 
-### G8：前端切换与 Python 组件 API 删除
+### G8：前端切换与 Component Repo Python 删除
 
-目标：完成 Component Repo 公共入口的 Go 所有权交接。
+目标：完成 Component Repo 公共入口和异步执行权的 Go 所有权交接，使完整业务链路不依赖 Python 进程。
 
 交付：
 
 - 前端切换 `/api/v1`；
+- Component 列表只使用 `draft/active` 生命周期，并提供 owner-scoped 全局 Import 历史与 Component 详情
+  Import Tab；Import 的 `processing/ready/failed` 不进入 Component 状态筛选；
 - 新任务轮询与错误渲染；
+- 上传弹窗在 complete `202` 后立即退出；独立 Import 状态页只恢复/轮询聚合处理状态，在 BOM 与
+  整体 GLB 同时 ready 前不挂载三维预览器，使用 typed semantic key 展示 processing 文案；
+- Candidate 与详情页的 BOM 标注 geometry 为 `failed/missing` 的 Part；默认整体 GLB 可为有明确
+  omissions 的 partial preview，Connector 数据仍由用户开关按需读取；
 - Nginx 只转发组件 API 到 Gin；
 - 删除 FastAPI Component Repo 路由、schema 和不再使用的服务；
-- 保留的 Python 算法移入明确 Worker 边界；
+- [x] 将 `component.relations.detect` 迁移为 Go Worker handler，以冻结 input hash、结构化结果和
+  PostgreSQL 不变量做验收；
+- [x] 删除 Component Repo Python Worker 入口、adapter 与仅服务这些入口的代码；
 - 更新架构、启动脚本和开发文档。
 
 验收：
 
-- 前端组件完整流程只访问 Gin；
-- Python 进程停止时，除明确 Python Worker 算法外组件目录仍可用；
+- 前端组件完整流程只访问 Gin；普通上传流程在 `complete -> 202` 后不再发起解析或 Preview
+  materialize mutation；
+- Python 进程停止时，上传、解析、关系检测、审核、校验、发布、BOM 和预览完整链路仍可用；
 - 仓库中不存在两套组件公共 API；
+- Component Repo 不存在 Python task consumer 或新增 Python 功能入口；
 - i18n、Go、前端和 PostgreSQL 集成测试通过。
 
-## 8. 推荐实现顺序
+## 8. 当前实施顺序
 
-严格顺序：
+阶段依赖仍为：
 
 ```text
 G0 -> G1 -> G2 -> G3 -> G4 -> G5 -> G6 -> G7 -> G8
 ```
 
-允许在 G2 schema 稳定后并行准备 G3 query 和 G5 task protocol，但不得绕过各阶段验收门槛。
-
-第一批代码提交建议只覆盖 G1，不同时修改 Component Repo 业务表。第二批完成 G2，第三批进入 G3。这样能够把工程基础、schema 决策和业务实现分开审查。
+G0～G7 已完成，当前不再按早期“先实施 G1”的建议执行。G8 的现行顺序是：保持 `/api/v1` 与
+Go Worker Go-only 主链稳定，完成剩余真实浏览器/RLS 验收，删除仍挂载但前端已不依赖的 FastAPI
+Component Repo 公共 router，最后收口部署、指标和告警。GLB 视觉精度与压缩作为版本化生成器后续
+工作，不阻塞当前上传、BOM 和 partial preview 主链。
 
 ## 9. 验证矩阵
 
@@ -444,14 +480,10 @@ G0 -> G1 -> G2 -> G3 -> G4 -> G5 -> G6 -> G7 -> G8
 
 每阶段完成后在 [go_migration_progress.md](./go_migration_progress.md) 记录命令、结果、未完成项和下一步。
 
-## 10. 首个实施切片
+## 10. 当前实施切片
 
-下一步实施 G1，暂不改业务行为：
-
-1. 创建 `backend-go` 模块和三个 `cmd` 入口。
-2. 增加配置、日志、trace、错误 middleware 和优雅关闭。
-3. 建立 pgxpool、sqlc 和 Goose 配置骨架。
-4. 增加 health endpoint 与测试。
-5. 记录本地运行、生成、测试和 migration 命令。
-
-G1 完成并验收后，再对现有组件表做 G2 schema 取舍。
+1. 保持上传 `202 -> Import processing page -> Worker continuation -> ready` 主链稳定；
+2. 保持 BOM 完整、逐 Part geometry 状态和 partial GLB omissions 可诊断；
+3. 完成 G8 剩余真实授权/双语言/维护矩阵；
+4. 删除旧 FastAPI Component Repo 公共 router 和只服务旧接口的代码；
+5. 以独立 generator version 推进 GLB 视觉精度与压缩，不恢复 Python runtime。

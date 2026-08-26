@@ -17,6 +17,7 @@ import (
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/config"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/ingestion"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
@@ -48,7 +49,7 @@ func TestG4UploadLifecycleAndStorageBoundaries(t *testing.T) {
 	actor := mustUUID(t, "41000000-0000-0000-0000-000000000001")
 	otherActor := mustUUID(t, "41000000-0000-0000-0000-000000000002")
 
-	content := []byte("0 FILE model.ldr\n")
+	content := []byte("0 FILE model.ldr\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 3001.dat\n")
 	digest := sha256.Sum256(content)
 	session, err := service.CreateUploadSession(ctx, actor, CreateUploadSessionInput{
 		SourceFile:    FileSpec{Filename: "../用户模型.ldr", ContentType: "text/plain", FileSize: int64(len(content)), SHA256: hex.EncodeToString(digest[:])},
@@ -123,7 +124,7 @@ func TestG4UploadLifecycleAndStorageBoundaries(t *testing.T) {
 	if err := taskService.Complete(ctx, "artifact-worker-retry", reclaimed, result); err != nil {
 		t.Fatalf("complete artifact verification task: %v", err)
 	}
-	parseTask, found, err := taskService.Claim(ctx, "python-parser", []string{task.ImportParseType}, time.Minute)
+	parseTask, found, err := taskService.Claim(ctx, "go-parser", []string{task.ImportParseType}, time.Minute)
 	if err != nil || !found || parseTask.Locale != "zh-CN" || parseTask.Timezone != "Asia/Shanghai" {
 		t.Fatalf("claim unblocked parse task = %+v found=%v error=%v", parseTask, found, err)
 	}
@@ -146,6 +147,60 @@ func TestG4UploadLifecycleAndStorageBoundaries(t *testing.T) {
 	}
 	if _, err := service.CreateDownload(ctx, otherActor, "other-jwt", artifactID); publicCode(err) != "component_repo.artifact_not_found" {
 		t.Fatalf("cross-owner download error = %v", err)
+	}
+	parseHandler := ingestion.NewImportParseTaskHandler(pool, store, config.ImportConfig{
+		ParserVersion: "component-repo-ldraw-parser-v2", SnapshotSchema: "component-repo-v2",
+	})
+	parseResult, err := parseHandler.Handle(ctx, parseTask)
+	if err != nil {
+		t.Fatalf("handle Go import parse task: %v", err)
+	}
+	var previewTaskID, previewPrerequisiteID string
+	var previewTaskStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT preview.id::text, preview.status, dependency.prerequisite_task_id::text
+		FROM component_repo.imports import_job
+		JOIN component_repo.candidates candidate ON candidate.import_id = import_job.id
+		JOIN component_repo.component_versions version ON version.component_candidate_id = candidate.id
+		JOIN component_repo.tasks preview ON preview.id = version.preview_task_id
+		JOIN component_repo.task_dependencies dependency ON dependency.task_id = preview.id
+		WHERE import_job.id = $1`, completed.ImportID).Scan(
+		&previewTaskID, &previewTaskStatus, &previewPrerequisiteID,
+	); err != nil || previewTaskStatus != "queued" || previewPrerequisiteID != uuidutil.String(parseTask.ID) {
+		t.Fatalf("persisted preview continuation id=%q status=%q prerequisite=%q error=%v", previewTaskID, previewTaskStatus, previewPrerequisiteID, err)
+	}
+	if _, found, err := taskService.Claim(ctx, "preview-too-early", []string{task.PreviewMaterializeType}, time.Minute); err != nil || found {
+		t.Fatalf("preview task bypassed parse dependency: found=%v error=%v", found, err)
+	}
+	if _, err := parseHandler.Handle(ctx, parseTask); err != nil {
+		t.Fatalf("idempotent parse retry did not preserve preview continuation: %v", err)
+	}
+	var previewTaskCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM component_repo.tasks WHERE task_type=$1`, task.PreviewMaterializeType).Scan(&previewTaskCount); err != nil || previewTaskCount != 1 {
+		t.Fatalf("idempotent preview continuation count=%d error=%v", previewTaskCount, err)
+	}
+	if err := taskService.Complete(ctx, "go-parser", parseTask, parseResult); err != nil {
+		t.Fatalf("complete Go import parse task: %v", err)
+	}
+	if _, found, err := taskService.Claim(ctx, "preview-worker", []string{task.PreviewMaterializeType}, time.Minute); err != nil || !found {
+		t.Fatalf("claim unblocked preview task: found=%v error=%v", found, err)
+	}
+	var importStatus string
+	var candidateCount, versionCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT import_job.status,
+		       (SELECT count(*) FROM component_repo.candidates WHERE import_id = import_job.id),
+		       (SELECT count(*) FROM component_repo.component_versions version
+		        JOIN component_repo.candidates candidate ON candidate.id = version.component_candidate_id
+		        WHERE candidate.import_id = import_job.id AND version.deleted_at IS NULL)
+		FROM component_repo.imports import_job WHERE import_job.id=$1`, completed.ImportID).Scan(
+		&importStatus, &candidateCount, &versionCount,
+	); err != nil || importStatus != "succeeded" || candidateCount != 1 || versionCount != 1 {
+		t.Fatalf("Go import parse result status=%q candidates=%d versions=%d err=%v", importStatus, candidateCount, versionCount, err)
+	}
+	importView, err := ingestion.NewService(pool).GetImport(ctx, actor, completed.ImportID)
+	if err != nil || importView.ProcessingStatus != "processing" || importView.PreviewTaskID == nil || *importView.PreviewTaskID != previewTaskID {
+		t.Fatalf("aggregate import state = %+v error=%v", importView, err)
 	}
 
 	testPartialFailureCompensation(t, ctx, pool, service, store, actor)
@@ -264,6 +319,16 @@ func (s *fakeStore) SignDownload(_ context.Context, key string, _ time.Duration)
 	defer s.mu.Unlock()
 	s.signCount++
 	return "https://storage.invalid/" + pathTail(key), nil
+}
+func (s *fakeStore) SignDownloads(_ context.Context, keys []string, _ time.Duration) (map[string]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.signCount++
+	result := make(map[string]string, len(keys))
+	for _, key := range keys {
+		result[key] = "https://storage.invalid/" + pathTail(key)
+	}
+	return result, nil
 }
 func (s *fakeStore) SignDownloadForUser(ctx context.Context, key string, ttl time.Duration, _ string) (string, error) {
 	return s.SignDownload(ctx, key, ttl)

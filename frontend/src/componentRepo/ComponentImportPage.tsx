@@ -24,9 +24,9 @@ export function ComponentImportPage() {
     setError(null);
     try {
       const result = await createComponentImportWithUploadSession(sourceFile, exchangeFile);
-      navigate(routeFor('componentRepoCandidate').replace(
-        ':candidateId',
-        encodeURIComponent(result.id),
+      navigate(routeFor('componentRepoImportStatus').replace(
+        ':importId',
+        encodeURIComponent(result.importId),
       ));
     } catch (importError) {
       setError(importError instanceof Error ? importError.message : appConfig.texts.loadFailed);

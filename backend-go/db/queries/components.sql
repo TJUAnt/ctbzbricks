@@ -18,9 +18,13 @@ SELECT c.id, c.owner_id, c.content_kind,
        COALESCE(CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END, '')::text AS selected_description,
        (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
        (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
-       c.category, c.status, c.current_version_id, c.logical_width_stud,
-       c.logical_depth_stud, c.logical_height_plate, c.metadata, c.created_by,
+       c.category, c.status, c.current_version_id,
+       COALESCE(display_version.logical_width_stud, c.logical_width_stud) AS logical_width_stud,
+       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
+       COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
+       c.metadata, c.created_by,
        c.created_at, c.updated_at,
+       COALESCE(c.owner_id = sqlc.arg(actor_id), false)::boolean AS owned_by_actor,
        (c.content_kind = 'official' AND c.content_locale <> sqlc.arg(locale)
         AND translation.id IS NULL)::boolean AS translation_missing,
        EXISTS (
@@ -29,6 +33,20 @@ SELECT c.id, c.owner_id, c.content_kind,
              AND subscription.component_id = c.id
        ) AS subscribed
 FROM component_repo.components c
+LEFT JOIN LATERAL (
+    SELECT version.logical_width_stud, version.logical_depth_stud,
+           version.logical_height_plate
+    FROM component_repo.component_versions version
+    WHERE version.component_id = c.id
+      AND version.deleted_at IS NULL
+      AND (
+          version.id = c.current_version_id
+          OR (c.current_version_id IS NULL AND version.status = 'draft')
+      )
+    ORDER BY (version.id = c.current_version_id) DESC,
+             version.created_at DESC, version.id DESC
+    LIMIT 1
+) display_version ON true
 LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
     FROM component_repo.component_translations t
@@ -48,9 +66,13 @@ SELECT c.id, c.owner_id, c.content_kind,
        COALESCE(CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END, '')::text AS selected_description,
        (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
        (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
-       c.category, c.status, c.current_version_id, c.logical_width_stud,
-       c.logical_depth_stud, c.logical_height_plate, c.metadata, c.created_by,
+       c.category, c.status, c.current_version_id,
+       COALESCE(display_version.logical_width_stud, c.logical_width_stud) AS logical_width_stud,
+       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
+       COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
+       c.metadata, c.created_by,
        c.created_at, c.updated_at,
+       COALESCE(c.owner_id = sqlc.arg(actor_id), false)::boolean AS owned_by_actor,
        (c.content_kind = 'official' AND c.content_locale <> sqlc.arg(locale)
         AND translation.id IS NULL)::boolean AS translation_missing,
        EXISTS (
@@ -59,6 +81,20 @@ SELECT c.id, c.owner_id, c.content_kind,
              AND subscription.component_id = c.id
        ) AS subscribed
 FROM component_repo.components c
+LEFT JOIN LATERAL (
+    SELECT version.logical_width_stud, version.logical_depth_stud,
+           version.logical_height_plate
+    FROM component_repo.component_versions version
+    WHERE version.component_id = c.id
+      AND version.deleted_at IS NULL
+      AND (
+          version.id = c.current_version_id
+          OR (c.current_version_id IS NULL AND version.status = 'draft')
+      )
+    ORDER BY (version.id = c.current_version_id) DESC,
+             version.created_at DESC, version.id DESC
+    LIMIT 1
+) display_version ON true
 LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
     FROM component_repo.component_translations t

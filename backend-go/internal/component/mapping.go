@@ -16,8 +16,8 @@ func componentFromVisible(row db.GetVisibleComponentRow) Component {
 		Name: row.SelectedName, Description: optionalSelected(row.SelectedDescription, row.HasDescription),
 		Tags: nonNilStrings(row.SelectedTags), Category: row.Category, Status: row.Status,
 		CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID), Metadata: validJSON(row.Metadata),
-		LogicalSize: logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
-		Subscribed:  row.Subscribed, TranslationMissing: row.TranslationMissing,
+		LogicalSize:  logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
+		OwnedByActor: row.OwnedByActor, Subscribed: row.Subscribed, TranslationMissing: row.TranslationMissing,
 		CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 }
@@ -29,8 +29,8 @@ func componentFromList(row db.ListVisibleComponentsRow) Component {
 		Name: row.SelectedName, Description: optionalSelected(row.SelectedDescription, row.HasDescription),
 		Tags: nonNilStrings(row.SelectedTags), Category: row.Category, Status: row.Status,
 		CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID), Metadata: validJSON(row.Metadata),
-		LogicalSize: logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
-		Subscribed:  row.Subscribed, TranslationMissing: row.TranslationMissing,
+		LogicalSize:  logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
+		OwnedByActor: row.OwnedByActor, Subscribed: row.Subscribed, TranslationMissing: row.TranslationMissing,
 		CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 }
@@ -81,7 +81,8 @@ func groupMemberFromDB(row db.ListComponentGroupMembersRow) GroupMember {
 			Name: row.SelectedName, Description: optionalSelected(row.SelectedDescription, row.HasDescription),
 			Tags: nonNilStrings(row.SelectedTags), Category: row.Category, Status: row.Status,
 			CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID), Metadata: validJSON(row.Metadata),
-			Subscribed: row.Subscribed, TranslationMissing: row.TranslationMissing,
+			LogicalSize:  logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
+			OwnedByActor: row.OwnedByActor, Subscribed: row.Subscribed, TranslationMissing: row.TranslationMissing,
 			CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 		},
 		AddedAt: row.AddedAt.Time,
@@ -96,7 +97,7 @@ func componentFromGroupSearch(row db.SearchComponentGroupComponentsRow) Componen
 		Tags: nonNilStrings(row.SelectedTags), Category: row.Category, Status: row.Status,
 		CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID),
 		LogicalSize:      logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
-		Metadata:         validJSON(row.Metadata), Subscribed: row.Subscribed,
+		Metadata:         validJSON(row.Metadata), OwnedByActor: row.OwnedByActor, Subscribed: row.Subscribed,
 		TranslationMissing: row.TranslationMissing, CreatedAt: row.CreatedAt.Time,
 		UpdatedAt: row.UpdatedAt.Time,
 	}

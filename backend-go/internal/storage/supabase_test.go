@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -84,6 +85,38 @@ func TestSupabaseSignedURLAndDelete(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Fatalf("requests = %d", requests)
+	}
+}
+
+func TestSupabaseBatchSignUsesOneServerRequestAndKeepsPartialSuccess(t *testing.T) {
+	requests := 0
+	store := testSupabase(roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.Method != http.MethodPost || request.URL.EscapedPath() != "/storage/v1/object/sign/artifacts" {
+			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.String())
+		}
+		if request.Header.Get("apikey") != "key" || request.Header.Get("Authorization") != "Bearer service-key" {
+			t.Fatalf("batch sign must use server credentials")
+		}
+		var body struct {
+			ExpiresIn int64    `json:"expiresIn"`
+			Paths     []string `json:"paths"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.ExpiresIn != 300 || len(body.Paths) != 2 || body.Paths[0] != "a.glb" || body.Paths[1] != "b.glb" {
+			t.Fatalf("unexpected batch body: %+v", body)
+		}
+		return response(http.StatusOK, `[{"path":"a.glb","signedURL":"/object/sign/artifacts/a.glb?token=a"},{"path":"b.glb","error":"not_found"}]`), nil
+	}))
+
+	signed, err := store.SignDownloads(context.Background(), []string{"a.glb", "b.glb", "a.glb", ""}, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || len(signed) != 1 || signed["a.glb"] != "https://project.supabase.co/storage/v1/object/sign/artifacts/a.glb?token=a" {
+		t.Fatalf("unexpected batch result/requests: %#v / %d", signed, requests)
 	}
 }
 

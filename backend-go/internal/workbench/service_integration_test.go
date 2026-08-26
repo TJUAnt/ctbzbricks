@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -107,8 +108,9 @@ func TestG7WorkbenchContract(t *testing.T) {
 		t.Fatalf("free interfaces = %+v error=%v", interfaces, err)
 	}
 	componentService := component.NewService(pool)
-	if _, err := componentService.PublishVersion(ctx, owner, fixtureVersionID); publicCode(err) != "component_repo.publish_validation_failed" {
-		t.Fatalf("publish without validation was not blocked: %v", err)
+	published, err := componentService.PublishVersion(ctx, owner, fixtureVersionID)
+	if err != nil || published.Status != "published" || published.ValidationReportID != nil {
+		t.Fatalf("direct publish without validation = %+v error=%v", published, err)
 	}
 	validationInput, err := db.New(pool).GetValidationTaskInput(ctx, db.GetValidationTaskInputParams{
 		CandidateID: testUUID(t, fixtureCandidateID), OwnerID: owner, VersionID: testUUID(t, fixtureVersionID),
@@ -141,13 +143,18 @@ func TestG7WorkbenchContract(t *testing.T) {
 	if err != nil || reusedValidation.TaskID != validation.TaskID || reusedValidation.Status != task.StatusSucceeded {
 		t.Fatalf("successful validation execution was not reused: %+v error=%v", reusedValidation, err)
 	}
-	published, err := componentService.PublishVersion(ctx, owner, fixtureVersionID)
-	if err != nil || published.Status != "published" {
-		t.Fatalf("publish after validation = %+v error=%v", published, err)
+	validatedVersion, err := componentService.GetVersion(ctx, owner, fixtureVersionID)
+	if err != nil || validatedVersion.Status != "published" || validatedVersion.ValidationReportID == nil {
+		t.Fatalf("optional validation did not attach to published version = %+v error=%v", validatedVersion, err)
+	}
+	visibleReport, err := service.GetValidationReport(ctx, other, *validatedVersion.ValidationReportID)
+	if err != nil || !visibleReport.Passed || visibleReport.ComponentVersionID == nil || *visibleReport.ComponentVersionID != fixtureVersionID {
+		t.Fatalf("published validation report visibility = %+v error=%v", visibleReport, err)
 	}
 
 	parts, err := service.GetVersionParts(ctx, owner, fixtureVersionID, "zh-CN")
-	if err != nil || len(parts.Items) != 3 || parts.Items[0].TranslationStatus != "reviewed" {
+	if err != nil || len(parts.Items) != 3 || parts.Items[0].TranslationStatus != "reviewed" ||
+		parts.Items[0].GeometryStatus != "missing" || parts.Items[2].GeometryStatus != "missing" {
 		t.Fatalf("localized BOM = %+v error=%v", parts, err)
 	}
 
@@ -159,7 +166,6 @@ func TestG7WorkbenchContract(t *testing.T) {
 	partSources := map[string][]byte{
 		"3001.dat": []byte("3 16 0 0 0 20 0 0 0 10 0\n"),
 		"3002.dat": []byte("3 16 0 0 0 30 0 0 0 10 0\n"),
-		"3003.dat": []byte("3 16 0 0 0 20 0 0 0 20 0\n"),
 	}
 	for partNumber, source := range partSources {
 		if err := os.WriteFile(filepath.Join(partsRoot, partNumber), source, 0o644); err != nil {
@@ -176,6 +182,31 @@ func TestG7WorkbenchContract(t *testing.T) {
 			testUUID(t, fixturePartLibraryID), partNumber, "parts/"+partNumber, hex.EncodeToString(partHash[:])); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO component_repo.part_geometries (
+			part_library_version_id, ldraw_part_num, source_relative_path, source_file_hash,
+			bbox_min, bbox_max, logical_width_stud, logical_depth_stud, logical_height_plate,
+			vertex_count, face_count, geometry_status, geometry_error_code, geometry_error_params
+		) VALUES ($1, '3003.dat', 'parts/3003.dat', $2,
+			ARRAY[0,0,0]::float8[], ARRAY[0,0,0]::float8[], 0, 0, 0, 0, 0,
+			'failed', 'component_repo.part_geometry_unavailable', '{}'::jsonb)`,
+		testUUID(t, fixturePartLibraryID), strings.Repeat("f", 64)); err != nil {
+		t.Fatal(err)
+	}
+	parts, err = service.GetVersionParts(ctx, owner, fixtureVersionID, "zh-CN")
+	if err != nil || parts.Items[0].GeometryStatus != "ready" ||
+		parts.Items[1].GeometryStatus != "ready" || parts.Items[2].GeometryStatus != "failed" {
+		t.Fatalf("BOM geometry status = %+v error=%v", parts, err)
+	}
+	partSearch, err := service.SearchParts(ctx, PartSearchRequest{Query: "3001 4x2", Page: 1, PageSize: 20})
+	if err != nil || partSearch.Total != 1 || len(partSearch.Items) != 1 ||
+		partSearch.Items[0].LDrawPartNum != "3001.dat" || partSearch.PartLibraryVersionID != fixturePartLibraryID {
+		t.Fatalf("Part search = %+v error=%v", partSearch, err)
+	}
+	failedGeometrySearch, err := service.SearchParts(ctx, PartSearchRequest{Query: "3003", Page: 1, PageSize: 20})
+	if err != nil || failedGeometrySearch.Total != 0 || len(failedGeometrySearch.Items) != 0 {
+		t.Fatalf("failed geometry leaked into Part search = %+v error=%v", failedGeometrySearch, err)
 	}
 
 	initialPreview, err := service.GetPreview(ctx, owner, "owner-jwt", fixtureVersionID)
@@ -198,6 +229,14 @@ func TestG7WorkbenchContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview handler: %v", err)
 	}
+	var previewPayload struct {
+		Complete        bool     `json:"complete"`
+		OmittedPartRefs []string `json:"omittedPartRefs"`
+	}
+	if err := json.Unmarshal(previewResult.Payload, &previewPayload); err != nil || previewPayload.Complete ||
+		len(previewPayload.OmittedPartRefs) != 1 || previewPayload.OmittedPartRefs[0] != "3003.dat" {
+		t.Fatalf("partial preview payload = %+v error=%v", previewPayload, err)
+	}
 	recoveredResult, err := previewHandler.Handle(ctx, claimedPreview)
 	if err != nil || uuidutil.String(recoveredResult.ArtifactID) != uuidutil.String(previewResult.ArtifactID) || store.putCount != 1 {
 		t.Fatalf("preview crash recovery duplicated output: result=%+v error=%v writes=%d", recoveredResult, err, store.putCount)
@@ -208,6 +247,25 @@ func TestG7WorkbenchContract(t *testing.T) {
 	ready, err := service.GetPreview(ctx, other, "other-jwt", fixtureVersionID)
 	if err != nil || ready.Status != "ready" || ready.URL == nil || ready.ArtifactID == nil {
 		t.Fatalf("public signed preview = %+v error=%v", ready, err)
+	}
+	var bboxMin, bboxMax []float64
+	var widthStud, depthStud, heightPlate float64
+	var boundsComplete bool
+	if err := pool.QueryRow(ctx, `
+		SELECT preview_bbox_min, preview_bbox_max, logical_width_stud,
+		       logical_depth_stud, logical_height_plate, preview_bounds_complete
+		FROM component_repo.component_versions WHERE id=$1`, testUUID(t, fixtureVersionID)).Scan(
+		&bboxMin, &bboxMax, &widthStud, &depthStud, &heightPlate, &boundsComplete,
+	); err != nil {
+		t.Fatalf("read persisted preview bounds: %v", err)
+	}
+	if len(bboxMin) != 3 || len(bboxMax) != 3 || widthStud != 1.5 || depthStud != 0 || heightPlate != 1.25 || boundsComplete {
+		t.Fatalf("persisted preview bounds = min=%v max=%v size=%v/%v/%v complete=%v", bboxMin, bboxMax, widthStud, depthStud, heightPlate, boundsComplete)
+	}
+	componentWithSize, err := componentService.GetComponent(ctx, other, "77000000-0000-0000-0000-000000000001", "zh-CN")
+	if err != nil || componentWithSize.LogicalSize == nil || componentWithSize.LogicalSize.WidthStud != 1.5 ||
+		componentWithSize.LogicalSize.DepthStud != 0 || componentWithSize.LogicalSize.HeightPlate != 1.25 {
+		t.Fatalf("published version size projection = %+v error=%v", componentWithSize.LogicalSize, err)
 	}
 	artifactID := *ready.ArtifactID
 	store.removeOnlyObject()
@@ -238,9 +296,40 @@ func TestG7WorkbenchContract(t *testing.T) {
 	if rebuilt.ArtifactID == nil || *rebuilt.ArtifactID != artifactID || store.putCount != 2 {
 		t.Fatalf("idempotent rebuild = %+v writes=%d", rebuilt, store.putCount)
 	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE component_repo.component_versions
+		SET preview_bbox_min=NULL, preview_bbox_max=NULL,
+		    logical_width_stud=NULL, logical_depth_stud=NULL,
+		    logical_height_plate=NULL, preview_bounds_complete=NULL,
+		    preview_generator_version='component-preview-studio-ldraw-glb-v3'
+		WHERE id=$1`, testUUID(t, fixtureVersionID)); err != nil {
+		t.Fatal(err)
+	}
+	dryBackfill, err := SchedulePreviewBoundsBackfill(ctx, pool, 10, 0, true)
+	if err != nil || dryBackfill.Matched != 1 || dryBackfill.Scheduled != 0 {
+		t.Fatalf("preview bounds dry-run = %+v error=%v", dryBackfill, err)
+	}
+	backfill, err := SchedulePreviewBoundsBackfill(ctx, pool, 10, 1, false)
+	if err != nil || backfill.Matched != 1 || backfill.Scheduled != 1 {
+		t.Fatalf("preview bounds schedule = %+v error=%v", backfill, err)
+	}
+	var backfillStatus string
+	if err := pool.QueryRow(ctx, `SELECT preview_status FROM component_repo.component_versions WHERE id=$1`, testUUID(t, fixtureVersionID)).Scan(&backfillStatus); err != nil || backfillStatus != "pending" {
+		t.Fatalf("preview bounds task did not move version to pending: status=%q error=%v", backfillStatus, err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE component_repo.component_versions
+		SET preview_status='ready', preview_generator_version=$2
+		WHERE id=$1`, testUUID(t, fixtureVersionID), PreviewGeneratorVersion); err != nil {
+		t.Fatal(err)
+	}
+	currentEmpty, err := SchedulePreviewBoundsBackfill(ctx, pool, 10, 0, true)
+	if err != nil || currentEmpty.Matched != 0 {
+		t.Fatalf("current-generator empty scene was selected repeatedly: %+v error=%v", currentEmpty, err)
+	}
 
 	activeLibrary, err := service.GetActivePartLibraryVersion(ctx)
-	if err != nil || activeLibrary.ID != fixturePartLibraryID {
+	if err != nil || activeLibrary.ID != fixturePartLibraryID || !activeLibrary.PreviewReady || !activeLibrary.RelationReady || activeLibrary.ConnectorCount != 3 {
 		t.Fatalf("active Part library = %+v error=%v", activeLibrary, err)
 	}
 	initialPart, err := service.GetPartPreview(ctx, fixturePartLibraryID, "3001.dat", "zh-CN")
@@ -255,7 +344,7 @@ func TestG7WorkbenchContract(t *testing.T) {
 	if err != nil || !ok || uuidutil.String(claimedPart.ID) != partTask.TaskID {
 		t.Fatalf("claim Part preview: %+v found=%v error=%v", claimedPart, ok, err)
 	}
-	partHandler, err := NewPartPreviewTaskHandler(pool, store, "component-repo", ldrawRoot)
+	partHandler, err := NewPartPreviewTaskHandler(pool, store, "component-repo", ldrawRoot, identityPartGLBOptimizer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,6 +358,64 @@ func TestG7WorkbenchContract(t *testing.T) {
 	readyPart, err := service.GetPartPreview(ctx, fixturePartLibraryID, "3001.dat", "zh-CN")
 	if err != nil || readyPart.Status != "ready" || readyPart.Model == nil || readyPart.Model.Format != "glb" {
 		t.Fatalf("ready Part preview = %+v error=%v", readyPart, err)
+	}
+	batchSignsBefore := store.batchSigns()
+	searchWithPreview, err := service.SearchParts(ctx, PartSearchRequest{Query: "3001", Page: 1, PageSize: 20})
+	if err != nil || len(searchWithPreview.Items) != 1 || searchWithPreview.Items[0].PreviewModel == nil ||
+		searchWithPreview.Items[0].PreviewModel.Compression != "meshopt" || store.batchSigns() != batchSignsBefore+1 {
+		t.Fatalf("Part search preview projection = %+v batchSigns=%d error=%v", searchWithPreview, store.batchSigns(), err)
+	}
+}
+
+func TestGoRelationTaskHandlerMaterializesDetection(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is required")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	seedWorkbench(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+		DELETE FROM component_repo.assembly_relations;
+		DELETE FROM component_repo.relation_candidates;
+		DELETE FROM component_repo.connector_analysis_items;
+		DELETE FROM component_repo.interfaces;
+		DELETE FROM component_repo.connector_analyses;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	owner := testUUID(t, "77000000-0000-0000-0000-000000000002")
+	accepted, err := NewService(pool, newWorkbenchStore(), time.Minute).DetectRelations(ctx, owner, fixtureCandidateID)
+	if err != nil {
+		t.Fatalf("DetectRelations: %v", err)
+	}
+	queue := task.NewService(pool)
+	claimed, ok, err := queue.Claim(ctx, "go-relation-test", []string{RelationDetectionType}, time.Minute)
+	if err != nil || !ok || uuidutil.String(claimed.ID) != accepted.TaskID {
+		t.Fatalf("claim = %+v ok=%v error=%v", claimed, ok, err)
+	}
+	result, err := NewRelationTaskHandler(pool).Handle(ctx, claimed)
+	if err != nil {
+		t.Fatalf("relation handler: %v", err)
+	}
+	if err := queue.Complete(ctx, "go-relation-test", claimed, result); err != nil {
+		t.Fatalf("complete relation task: %v", err)
+	}
+	var connectors, relations, interfaces int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*) FROM component_repo.connector_analysis_items WHERE component_candidate_id=$1),
+		  (SELECT count(*) FROM component_repo.relation_candidates WHERE component_candidate_id=$1),
+		  (SELECT count(*) FROM component_repo.interfaces WHERE component_candidate_id=$1)
+	`, testUUID(t, fixtureCandidateID)).Scan(&connectors, &relations, &interfaces); err != nil {
+		t.Fatal(err)
+	}
+	if connectors != 3 || relations != 1 || interfaces != 3 {
+		t.Fatalf("materialized connectors/relations/interfaces = %d/%d/%d", connectors, relations, interfaces)
 	}
 }
 
@@ -289,8 +436,11 @@ func seedWorkbench(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		RESTART IDENTITY CASCADE;
 		INSERT INTO component_repo.components (id,owner_id,content_kind,content_locale,name,created_by)
 		VALUES ('77000000-0000-0000-0000-000000000001','77000000-0000-0000-0000-000000000002','user','zh-CN','结构件','77000000-0000-0000-0000-000000000002');
-		INSERT INTO component_repo.part_library_versions (id,source_name,source_hash,connector_count,status,created_by)
-		VALUES ('77000000-0000-0000-0000-000000000020','fixture',repeat('a',64),3,'active','77000000-0000-0000-0000-000000000002');
+		INSERT INTO component_repo.part_library_versions (
+			id,source_name,source_hash,connector_count,status,created_by,
+			preview_ready,relation_ready,connector_source_hash,connector_parser_version
+		)
+		VALUES ('77000000-0000-0000-0000-000000000020','fixture',repeat('a',64),3,'active','77000000-0000-0000-0000-000000000002',true,true,repeat('b',64),'fixture-connectors-v1');
 		INSERT INTO component_repo.parts (part_library_version_id,ldraw_part_num,source_name,content_locale) VALUES
 		('77000000-0000-0000-0000-000000000020','3001.dat','Brick 2 x 4','en-US'),
 		('77000000-0000-0000-0000-000000000020','3002.dat','Brick 2 x 3','en-US'),
@@ -346,9 +496,10 @@ func seedWorkbench(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 }
 
 type workbenchStore struct {
-	mu       sync.Mutex
-	objects  map[string][]byte
-	putCount int
+	mu             sync.Mutex
+	objects        map[string][]byte
+	putCount       int
+	batchSignCount int
 }
 
 func newWorkbenchStore() *workbenchStore { return &workbenchStore{objects: map[string][]byte{}} }
@@ -400,8 +551,25 @@ func (s *workbenchStore) SignDownload(_ context.Context, key string, _ time.Dura
 	}
 	return "https://storage.test/" + key, nil
 }
+func (s *workbenchStore) SignDownloads(_ context.Context, keys []string, _ time.Duration) (map[string]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.batchSignCount++
+	result := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if _, ok := s.objects[key]; ok {
+			result[key] = "https://storage.test/" + key
+		}
+	}
+	return result, nil
+}
 func (s *workbenchStore) SignDownloadForUser(ctx context.Context, key string, ttl time.Duration, _ string) (string, error) {
 	return s.SignDownload(ctx, key, ttl)
+}
+func (s *workbenchStore) batchSigns() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.batchSignCount
 }
 func (s *workbenchStore) removeOnlyObject() {
 	s.mu.Lock()

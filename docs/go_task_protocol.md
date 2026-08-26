@@ -1,15 +1,19 @@
-# Go/Python Worker 持久化任务协议
+# Component Repo 持久化任务协议
 
-> 状态：G5 implementation contract  
+> 状态：G5 implementation contract；上传 continuation 与 Component partial preview 已实现
+> 更新日期：2026-08-24
 > 数据库 authority：Goose / `component_repo`  
 > 实现：`backend-go/internal/task`、`backend-go/db/queries/tasks.sql`
 
 ## 1. 协议边界
 
-PostgreSQL 的 `task_jobs`、`tasks`、`task_events` 和 `outbox_events` 是任务事实来源。Go 和
-Python Worker 使用相同的状态、JSON、lease、执行复用和错误契约；进程内 channel、
+PostgreSQL 的 `task_jobs`、`tasks`、`task_events` 和 `outbox_events` 是任务事实来源。所有
+Worker 实现使用相同的状态、JSON、lease、执行复用和错误契约；进程内 channel、
 goroutine、HTTP 请求 background callback、`LISTEN/NOTIFY` 或 Worker 内存都不是
 权威队列。
+
+本协议是语言无关的数据契约，不是 Python 长期运行时授权。Component Repo 的任务执行者全部为
+Go Worker。
 
 任务系统使用三个通用层次：
 
@@ -25,18 +29,17 @@ Execution 使用 `task_job_id + execution_number` 唯一编号，并用 `retry_o
 
 任务类型决定执行者：
 
-| task type | 初始执行者 |
-|---|---|
-| `component.artifact.verify` | Go Worker |
-| `component.validate` | Go Worker |
-| `component.preview.materialize` | Go Worker |
-| `component.part_preview.materialize` | Go Worker |
-| `component.purge` | Go Worker |
-| `component.import.parse` | Python Worker |
-| `component.relations.detect` | Python Worker |
+| task type | 当前执行者 | 目标执行者 |
+|---|---|---|
+| `component.artifact.verify` | Go Worker | Go Worker |
+| `component.validate` | Go Worker | Go Worker |
+| `component.preview.materialize` | Go Worker | Go Worker |
+| `component.part_preview.materialize` | Go Worker | Go Worker |
+| `component.part_preview.prebuild` | Go Worker | Go Worker |
+| `component.import.parse` | Go Worker | Go Worker |
+| `component.relations.detect` | Go Worker | Go Worker |
 
-Worker 只能 claim 自己注册的 task type。Python adapter 在 G6 接入解析器，但必须
-直接遵循本协议，不得恢复公共 FastAPI Component Repo 路由。
+Worker 只能 claim 自己注册的 task type。不得新增 Component Repo Python task type。
 
 ## 2. 任务 JSON 契约
 
@@ -60,8 +63,8 @@ JSON key 都是机器字段，不翻译。任务创建时冻结规范化 locale 
   "taskType": "component.import.parse",
   "payload": {
     "importId": "uuid",
-    "parserVersion": "component-repo-ldraw-parser-v1",
-    "snapshotSchema": "component-repo-v1"
+    "parserVersion": "component-repo-ldraw-parser-v2",
+    "snapshotSchema": "component-repo-v2"
   },
   "result": {
     "importId": "uuid",
@@ -73,6 +76,11 @@ JSON key 都是机器字段，不翻译。任务创建时冻结规范化 locale 
 }
 ```
 
+`component-repo-v2` 的 SceneSnapshot document 使用有序 `rootInstances[]` 表达场景入口；每个入口
+包含稳定 `instanceId`、`targetModelId` 和 transform。普通 Studio/MPD 主模型生成一个 identity
+入口；不得把所有未引用 model definition 自动推断为 root。BOM、summary、关系检测、校验和整体
+GLB 都使用同一 Go scene expansion：重复 root/子模型按实例倍增，未被入口引用的定义不计入结果。
+
 `component.relations.detect`：
 
 ```json
@@ -80,7 +88,7 @@ JSON key 都是机器字段，不翻译。任务创建时冻结规范化 locale 
   "taskType": "component.relations.detect",
   "payload": {
     "candidateId": "uuid",
-    "detectionVersion": "component-relation-detector-v1",
+    "detectionVersion": "component-relation-detector-v3",
     "partLibraryVersionId": "uuid",
     "inputHash": "sha256"
   },
@@ -89,7 +97,7 @@ JSON key 都是机器字段，不翻译。任务创建时冻结规范化 locale 
     "relationCandidateCount": 2,
     "connectorCount": 4,
     "interfaceCount": 4,
-    "detectionVersion": "component-relation-detector-v1"
+    "detectionVersion": "component-relation-detector-v3"
   }
 }
 ```
@@ -103,12 +111,15 @@ JSON key 都是机器字段，不翻译。任务创建时冻结规范化 locale 
     "candidateId": "uuid",
     "versionId": "uuid",
     "validationLevel": "publish",
-    "validatorVersion": "component-repo-validator-v1",
+    "validatorVersion": "component-repo-validator-v2",
     "inputHash": "sha256"
   },
   "result": {"validationReportId": "uuid", "passed": true}
 }
 ```
+
+`validationLevel="publish"` 是已持久化的稳定机器值，当前语义为版本级质量验证，不再表示发布门禁。
+该任务只能由用户显式触发，可用于 Draft 或 Published Version；报告通过或失败都不改变版本发布状态。
 
 `component.preview.materialize`：
 
@@ -117,14 +128,16 @@ JSON key 都是机器字段，不翻译。任务创建时冻结规范化 locale 
   "taskType": "component.preview.materialize",
   "payload": {
     "versionId": "uuid",
-    "generatorVersion": "component-preview-studio-ldraw-glb-v1",
+    "generatorVersion": "component-preview-studio-ldraw-glb-v3",
     "generation": 0,
     "inputHash": "sha256"
   },
   "result": {
     "versionId": "uuid",
     "artifactId": "uuid",
-    "generatorVersion": "component-preview-studio-ldraw-glb-v1"
+    "generatorVersion": "component-preview-studio-ldraw-glb-v3",
+    "omittedPartRefs": ["missing.dat"],
+    "complete": false
   }
 }
 ```
@@ -134,7 +147,9 @@ JSON key 都是机器字段，不翻译。任务创建时冻结规范化 locale 
 partLibraryVersionId + partLibrarySourceHash + generatorVersion`。Worker 只能使用
 该 ComponentVersion 固定的 Part Library，不读取“当前 active library”来重解释旧版本。
 生成器从 Studio/LDraw source path 读取真实 part mesh，组合为 ComponentVersion 整体 GLB；
-没有 structural cube fallback。
+没有 structural cube fallback。冻结 Part Library 中没有 ready geometry 的 Part 会保留在 BOM，并从
+GLB 省略；结果以 `omittedPartRefs` 和 `complete` 记录完整度。已声明 ready 的 source 缺失或哈希漂移
+仍作为不可物化错误处理，不能被 partial preview 静默掩盖。
 
 `component.part_preview.materialize`：
 
@@ -144,7 +159,7 @@ partLibraryVersionId + partLibrarySourceHash + generatorVersion`。Worker 只能
   "payload": {
     "partLibraryVersionId": "uuid",
     "ldrawPartNum": "3001.dat",
-    "generatorVersion": "part-preview-ldraw-glb-v1",
+    "generatorVersion": "part-preview-ldraw-meshopt-glb-v2",
     "generation": 0,
     "inputHash": "sha256"
   },
@@ -152,68 +167,59 @@ partLibraryVersionId + partLibrarySourceHash + generatorVersion`。Worker 只能
     "partLibraryVersionId": "uuid",
     "ldrawPartNum": "3001.dat",
     "artifactId": "uuid",
-    "generatorVersion": "part-preview-ldraw-glb-v1"
+    "generatorVersion": "part-preview-ldraw-meshopt-glb-v2"
   }
 }
 ```
 
-`component.purge`：
-
-```json
-{
-  "taskType": "component.purge",
-  "payload": {
-    "componentId": "uuid",
-    "deleteStorageObjects": true,
-    "storageObjects": [
-      {
-        "provider": "supabase",
-        "bucket": "component-artifacts",
-        "key": "owner/component-repo/source/file.io"
-      }
-    ],
-    "purgeVersion": "component-purge-v1"
-  },
-  "result": {
-    "componentId": "uuid",
-    "componentRedacted": true,
-    "versionsRedacted": 1,
-    "artifactsTombstoned": 2,
-    "relatedTasksRedacted": 3,
-    "storageObjectsDeleted": 3
-  }
-}
-```
-
-`component.purge` 是显式危险操作，只能由 owner 对自己的 `content_kind=user`
-Component 通过 API 排队。API 创建任务前必须使用组件名称做二次确认，并冻结当前可删除
-Storage object 清单，便于失败后重试。Worker 先幂等删除同 provider/bucket 的对象存储文件，
-再调用 Goose-owned `component_repo.redact_owned_component(...)` 将 Component Repo
-领域数据写为 tombstone/redacted 状态。在线 purge 不物理删除 `imports`、`scene_snapshots`、
-`candidates`、`validation_reports`、`upload_sessions`、`artifacts` 或 historical task 行；
-后续物理回收必须走独立 maintenance/GC。成功后 Worker 必须 redacts 当前 purge task payload，
-只保留 `componentId + purged=true`，避免长期保存 Storage key。其他 owner 的 import/upload
-如果引用该 Component 或其 Version，保持其独立数据不被删除。
-
-关系 Worker 在一个事务中写入 relation candidates、connector analysis、external
-interfaces、Candidate/Draft 签名以及任务终态。SceneSnapshot 不在其写集合中。关系确认
+关系检测 Go handler 要求冻结 Part Library 的 `relation_ready=true`，并把
+`structureHash + geometryHash + snapshotSchema + snapshotParserVersion + partLibraryVersionId +
+partLibrarySourceHash + connectorSourceHash + connectorParserVersion + detectionVersion` 纳入 input
+hash。handler 在一个事务中写入 relation candidates、connector analysis、external interfaces 与
+Candidate/Draft 签名；共享 task runner 随后提交任务终态。SceneSnapshot 不在其写集合中。关系确认
 由 Go API 的 serializable transaction 与数据库 connector occupancy slot 共同保护。
 
-验证报告通过 task ID、owner、Candidate、Draft Version 与三类签名/hash 绑定；只有对应
-Task 已经 `succeeded` 且报告 `passed=true` 时才能发布。预览 Artifact ID 由 Version 与
+验证报告通过 task ID、owner、Candidate、Version 与三类签名/hash 绑定；它是 Draft/Published 上用户显式触发的
+可选质量报告，不是发布门禁，也不撤销已发布版本。预览 Artifact ID 由 Version 与
 generator version 稳定派生；Storage 缓存丢失后增加 materialization generation 并覆盖写回
 同一 derived Artifact，GET 不负责创建任务或对象。
 
 Part preview 的 Logical Job key 是 `partLibraryVersionId:ldrawPartNum`，input hash 覆盖
 Part Library source hash、根 Part source file hash 和 generator version。Go Worker 只在配置
-只读 `LDRAW_ROOT` 时注册该类型，递归展开冻结 Part Library 中的 LDraw type 1/3/4 几何；
-Go API 不读取本地文件。Part preview GET 只读 `part_previews + Artifact`，物化必须显式 POST。
+只读 `LDRAW_ROOT` 且存在原生 `gltfpack` 时注册该类型，递归展开冻结 Part Library 中的 LDraw type 1/3/4
+几何；坐标、法线和索引先由 Go 固化，再输出 `EXT_meshopt_compression`。最终字节按 SHA-256 写入全局
+`part-library-assets` 内容寻址路径，Artifact 无 owner，Part 绑定仍由 `part_previews` 管理。Go API 不读取本地文件。
+Part preview GET 只读 `part_previews + Artifact`，单项物化必须显式 POST。
+
+`component.part_preview.prebuild` 是维护命令调度的全库 durable task。payload 冻结
+`partLibraryVersionId + sourceHash + generatorVersion`；Handler 复用单项物化入口，逐 Part 独立更新
+`part_previews`，因此进程中断后重试跳过已经 ready 的当前生成器条目。它没有公共 API 路由，也不允许 API
+请求内遍历 Part Library。
 
 Parse Task 通过 `task_dependencies` 显式依赖本次上传的全部
 `component.artifact.verify` Task。依赖未全部成功时不能 claim；任一依赖进入
 `failed/cancelled`，下游 Task 在同一状态传播事务中进入对应终态，且不消耗 Parser
 attempt。Import 的 parser version、snapshot schema、part-library version、locale/timezone
 在创建时冻结，Worker 不从浏览器或运行期活动版本重新选择。
+
+当前上传 continuation 为：
+
+```text
+all artifact verify succeeded
+  -> component.import.parse
+  -> persist SceneSnapshot + BOM + Candidate + Draft Version
+  -> ensure component.preview.materialize Logical Job for Draft Version
+  -> persist verified Component GLB
+```
+
+Preview Job 必须由服务端任务编排产生，浏览器不是 dependency scheduler。parse 的业务结果与
+Preview Job/Execution 的建立必须具有可恢复、幂等的提交边界：关闭浏览器或 Worker 在提交点崩溃后，
+重试仍会确保同一 Version、同一 input hash 只有一个 active Logical Job。Preview 失败不回滚已经成功的
+source Artifact、SceneSnapshot、BOM、Candidate 或 Draft Version。
+
+面向上传页面的聚合状态只能在 BOM 已落库且 Preview Artifact 已生成并验证后进入 `ready`；parse task
+单独 `succeeded` 仍是 `processing`。`processing/ready/failed` 是机器状态，任务进度与失败继续只持久化
+稳定 `code + params`。
 
 payload 禁止保存 Storage service-role key、签名 URL、对象正文、原始异常、SQL、路径
 或堆栈。失败和进度只写稳定 `code + params`，最终译文由客户端资源层生成。
@@ -282,13 +288,21 @@ Worker handler 必须让业务副作用幂等。例如 Artifact 校验成功先�
 不会再次流式下载对象正文。后续派生 Artifact 和 ComponentVersion 使用各自稳定业务
 key/唯一约束，不依靠“任务通常只执行一次”。
 
-Python Parser Worker 使用由 Import ID 派生的稳定 Snapshot/Candidate/Draft/derived
-Artifact ID，并在一个 PostgreSQL transaction 中写入 SceneSnapshot、BOM、parse issues、
-Candidate、Draft ComponentVersion、Task succeeded、task event 与 outbox。事务提交前崩溃
-不会留下半个业务结果；已存在的权威 Snapshot 永不 UPDATE，重领只复用完整结果。
+Go Import Worker 使用由 Import ID 派生的稳定 Snapshot/Candidate/Draft/derived
+Artifact ID，并在一个 PostgreSQL transaction 中写入 Import succeeded、SceneSnapshot、BOM、
+parse issues、Candidate 与 Draft ComponentVersion。handler 返回后，共享 task runner 再以
+attempt fence 提交 Task succeeded、task event 与 outbox；如果进程在两次事务之间崩溃，重领会按
+稳定 ID 读取完整业务结果并幂等返回。业务事务提交前崩溃不会留下半个业务结果；已存在的权威
+Snapshot 永不 UPDATE。
+
+Import handler 在写入 SceneSnapshot、BOM、Candidate 与 Draft Version 的同一事务中，创建 Draft
+Version 对应的 Preview Logical Job/Execution、设置 `preview_task_id`，并建立
+`Preview Task -> Parse Task` dependency；不能依赖首次进入候选页时的 HTTP mutation。事务回滚不会留下
+半个业务结果或孤立 Preview Task；事务提交后 Preview 已持久化，等待 Parse Task succeeded 后才可领取。
+同一 Version 与 input hash 由 Logical Job 唯一约束防止重复 active Execution。
 
 关系检测以 Candidate 为 logical key，并把结构/几何 hash、Snapshot schema/parser、冻结
-Part Library source hash 和 detector version 纳入 input hash。发布校验以 Version 为 logical key，
+Part Library source hash 和 detector version 纳入 input hash。可选版本质量验证以 Version 为 logical key，
 把 interface/structure/geometry、Part Library source hash 和 validator version 纳入 input hash。
 预览以 Version 为 logical key，把 immutable SceneSnapshot ID 和 generator version 纳入 input hash。
 Worker 在提交业务结果前必须重新计算/验证 payload 的 input hash，拒绝过期或拼接输入。

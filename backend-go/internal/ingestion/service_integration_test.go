@@ -113,6 +113,24 @@ func TestG6ImportAndCandidateOwnership(t *testing.T) {
 	if err != nil || importView.Status != "succeeded" || importView.CandidateID == nil || importView.DraftVersionID == nil {
 		t.Fatalf("owned import = %+v error=%v", importView, err)
 	}
+	history, err := service.ListImports(ctx, owner, ImportListRequest{
+		Page: 1, PageSize: 20, ComponentID: "66000000-0000-0000-0000-000000000001",
+	})
+	if err != nil || history.Total != 1 || len(history.Items) != 1 ||
+		history.Items[0].OriginalFilename != "fixture.ldr" ||
+		history.Items[0].ComponentID == nil || history.Items[0].ProcessingStatus != "processing" {
+		t.Fatalf("component import history = %+v error=%v", history, err)
+	}
+	failedOnly, err := service.ListImports(ctx, owner, ImportListRequest{
+		Page: 1, PageSize: 20, ProcessingStatus: "failed",
+	})
+	if err != nil || failedOnly.Total != 0 || len(failedOnly.Items) != 0 || failedOnly.StatusCounts["processing"] != 1 {
+		t.Fatalf("filtered import history = %+v error=%v", failedOnly, err)
+	}
+	otherHistory, err := service.ListImports(ctx, other, ImportListRequest{Page: 1, PageSize: 20})
+	if err != nil || otherHistory.Total != 0 || len(otherHistory.Items) != 0 {
+		t.Fatalf("cross-owner import history = %+v error=%v", otherHistory, err)
+	}
 	candidate, err := service.GetCandidate(ctx, owner, "66000000-0000-0000-0000-000000000009")
 	if err != nil || candidate.SceneSnapshot.ParserVersion != "fixture-parser" || candidate.DraftVersionID == nil {
 		t.Fatalf("owned candidate = %+v error=%v", candidate, err)
@@ -122,6 +140,19 @@ func TestG6ImportAndCandidateOwnership(t *testing.T) {
 	}
 	if _, err := service.GetCandidate(ctx, other, candidate.ID); publicCode(err) != "component_repo.candidate_id_not_found" {
 		t.Fatalf("cross-owner candidate error = %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE component_repo.component_versions
+		SET deleted_at = now(), deleted_by = $1
+		WHERE id = '66000000-0000-0000-0000-000000000010'`, owner); err != nil {
+		t.Fatalf("soft delete imported version: %v", err)
+	}
+	historyAfterVersionDelete, err := service.ListImports(ctx, owner, ImportListRequest{
+		Page: 1, PageSize: 20, ComponentID: "66000000-0000-0000-0000-000000000001",
+	})
+	if err != nil || historyAfterVersionDelete.Total != 1 || len(historyAfterVersionDelete.Items) != 1 ||
+		historyAfterVersionDelete.Items[0].ComponentID == nil {
+		t.Fatalf("import history after version soft delete = %+v error=%v", historyAfterVersionDelete, err)
 	}
 }
 

@@ -10,10 +10,11 @@ const (
 	ValidationType              = "component.validate"
 	PreviewMaterializeType      = "component.preview.materialize"
 	PartPreviewMaterializeType  = "component.part_preview.materialize"
-	RelationDetectionVersion    = "component-relation-detector-v1"
-	ValidatorVersion            = "component-repo-validator-v1"
-	PreviewGeneratorVersion     = "component-preview-studio-ldraw-glb-v1"
-	PartPreviewGeneratorVersion = "part-preview-ldraw-glb-v1"
+	PartPreviewPrebuildType     = "component.part_preview.prebuild"
+	RelationDetectionVersion    = "component-relation-detector-v3"
+	ValidatorVersion            = "component-repo-validator-v2"
+	PreviewGeneratorVersion     = "component-preview-studio-ldraw-glb-v4"
+	PartPreviewGeneratorVersion = "part-preview-ldraw-meshopt-glb-v2"
 )
 
 type AcceptedTask struct {
@@ -22,11 +23,63 @@ type AcceptedTask struct {
 }
 
 type PartLibraryVersion struct {
-	ID         string    `json:"id"`
-	SourceName string    `json:"sourceName"`
-	SourceHash string    `json:"sourceHash"`
-	Status     string    `json:"status"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID             string    `json:"id"`
+	SourceName     string    `json:"sourceName"`
+	SourceHash     string    `json:"sourceHash"`
+	Status         string    `json:"status"`
+	PreviewReady   bool      `json:"previewReady"`
+	RelationReady  bool      `json:"relationReady"`
+	ConnectorCount int32     `json:"connectorCount"`
+	ColliderCount  int32     `json:"colliderCount"`
+	CreatedAt      time.Time `json:"createdAt"`
+}
+
+// PartSearchRequest 是零件搜索的有界输入；query 同时承载名称/编号关键词和二维或三维精确尺寸片段。
+type PartSearchRequest struct {
+	Query    string `json:"query"`
+	Page     int    `json:"page"`
+	PageSize int    `json:"pageSize"`
+}
+
+// PartSearchPage 固定返回本次查询使用的 Part Library Version，避免 active library 切换后链接指向错误快照。
+type PartSearchPage struct {
+	PartLibraryVersionID string           `json:"partLibraryVersionId"`
+	Items                []PartSearchItem `json:"items"`
+	Total                int64            `json:"total"`
+	Returned             int              `json:"returned"`
+	Page                 int              `json:"page"`
+	PageSize             int              `json:"pageSize"`
+	TotalPages           int              `json:"totalPages"`
+}
+
+// PartSearchItem 是 active Studio Part Library 的源内容搜索投影；previewModel 只引用已物化的当前 GLB。
+type PartSearchItem struct {
+	LDrawPartNum                string                  `json:"ldrawPartNum"`
+	Name                        string                  `json:"name"`
+	ContentLocale               string                  `json:"contentLocale"`
+	TranslationStatus           string                  `json:"translationStatus"`
+	GeometryStatus              string                  `json:"geometryStatus"`
+	LogicalSize                 *PartSearchLogicalSize  `json:"logicalSize"`
+	LogicalSizeDerivationStatus string                  `json:"logicalSizeDerivationStatus"`
+	ImageURL                    *string                 `json:"imageUrl"`
+	PreviewModel                *PartSearchPreviewModel `json:"previewModel"`
+}
+
+// PartSearchPreviewModel 为列表缩略图提供短期下载定位；Storage key 和内部 provider 信息不得暴露。
+type PartSearchPreviewModel struct {
+	ArtifactID  string `json:"artifactId"`
+	Format      string `json:"format"`
+	Compression string `json:"compression"`
+	URL         string `json:"url"`
+	SHA256      string `json:"sha256"`
+	ByteLength  int64  `json:"byteLength"`
+}
+
+// PartSearchLogicalSize 使用既有 Part Library 派生单位：平面为 stud，高度为 plate。
+type PartSearchLogicalSize struct {
+	WidthStud   float64 `json:"widthStud"`
+	DepthStud   float64 `json:"depthStud"`
+	HeightPlate float64 `json:"heightPlate"`
 }
 
 type PartPreview struct {
@@ -171,6 +224,7 @@ type ValidationReport struct {
 	CreatedAt            time.Time       `json:"createdAt"`
 }
 
+// VersionParts 是 ComponentVersion BOM 接口的稳定响应结构；编号和数量属于不可翻译的机器数据。
 type VersionParts struct {
 	VersionID            string     `json:"versionId"`
 	PartLibraryVersionID *string    `json:"partLibraryVersionId"`
@@ -178,10 +232,12 @@ type VersionParts struct {
 	Items                []PartItem `json:"items"`
 }
 
+// PartItem 表示一种 Part 的汇总数量、预览几何状态及 locale-aware 官方名称投影。
 type PartItem struct {
 	LDrawPartNum      string  `json:"ldrawPartNum"`
 	Quantity          int     `json:"quantity"`
 	Name              *string `json:"name"`
 	ContentLocale     *string `json:"contentLocale"`
 	TranslationStatus string  `json:"translationStatus"`
+	GeometryStatus    string  `json:"geometryStatus"`
 }

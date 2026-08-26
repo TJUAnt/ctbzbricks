@@ -1,6 +1,7 @@
 frontend/node_modules
 frontend/dist/
 .codex_deps/
+.tools/
 .venv*/
 backend/logs/
 .idea/
@@ -31,7 +32,13 @@ docs/adr/*
 !docs/go_task_protocol.md
 !docs/go_g8_frontend_cutover_inventory.md
 !docs/go_part_library_studio_roadmap.md
+!docs/api.md
 LDCadShadowLibrary/
+backend-go/.env
+backend-go/.env.test
+backend-go/.env.example
+backend-go/.env.development
+backend-go/.env.production
 frontend/.env
 backend/.env
 backend/src/.env

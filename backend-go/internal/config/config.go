@@ -30,6 +30,8 @@ type Config struct {
 
 type PartPreviewConfig struct {
 	LDrawRoot string
+	// GLTFPackPath 固定 Part Preview 的 meshopt 编码器；Worker 启动时验证可执行文件和版本。
+	GLTFPackPath string
 }
 
 type HTTPConfig struct {
@@ -59,7 +61,9 @@ type DatabaseConfig struct {
 }
 
 type WorkerConfig struct {
-	ID                  string
+	ID string
+	// TaskTypes 非空时把进程限制为专用 durable task consumer，并关闭通用上传维护。
+	TaskTypes           []string
 	HealthCheckInterval time.Duration
 	PollInterval        time.Duration
 	LeaseDuration       time.Duration
@@ -68,11 +72,16 @@ type WorkerConfig struct {
 	Concurrency         int
 }
 
+// AuthConfig 同时配置业务请求的本地 JWT 校验，以及页面刷新时的 Supabase 会话二次确认。
+// PublishableKey 只作为 provider 公共 apikey 使用，不能替代 service-role 凭据。
 type AuthConfig struct {
-	JWTSecret   string
-	JWKSURL     string
-	JWTIssuer   string
-	JWTAudience string
+	JWTSecret                  string
+	JWKSURL                    string
+	JWTIssuer                  string
+	JWTAudience                string
+	SessionVerificationURL     string
+	PublishableKey             string
+	SessionVerificationTimeout time.Duration
 }
 
 type StorageConfig struct {
@@ -192,6 +201,10 @@ func load(lookup lookupFunc) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	sessionVerificationTimeout, err := durationValue(lookup, "AUTH_SESSION_VERIFICATION_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
 	workerHealthCheckInterval, err := durationValue(lookup, "WORKER_HEALTH_CHECK_INTERVAL", 30*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -233,6 +246,21 @@ func load(lookup lookupFunc) (Config, error) {
 	}
 	storageURL := strings.TrimRight(strings.TrimSpace(lookup("SUPABASE_URL")), "/")
 	storagePublishableKey := strings.TrimSpace(lookup("SUPABASE_PUBLISHABLE_KEY"))
+	if storageURL != "" {
+		parsedSupabaseURL, parseErr := url.Parse(storageURL)
+		if parseErr != nil || parsedSupabaseURL.Scheme == "" || parsedSupabaseURL.Host == "" {
+			return Config{}, errors.New("SUPABASE_URL must be an absolute URL")
+		}
+		if environment == ProductionEnvironment && parsedSupabaseURL.Scheme != "https" {
+			return Config{}, errors.New("SUPABASE_URL must use https in production")
+		}
+	}
+	sessionVerificationURL := ""
+	if storageURL != "" {
+		sessionVerificationURL = storageURL + "/auth/v1/user"
+	} else if strings.HasSuffix(jwtIssuer, "/auth/v1") {
+		sessionVerificationURL = jwtIssuer + "/user"
+	}
 	storageServiceRoleKey := strings.TrimSpace(lookup("SUPABASE_STORAGE_SERVICE_ROLE_KEY"))
 	if storageServiceRoleKey == "" {
 		storageServiceRoleKey = strings.TrimSpace(lookup("SUPABASE_SECRET_KEY"))
@@ -259,8 +287,8 @@ func load(lookup lookupFunc) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	importParserVersion := strings.TrimSpace(valueOrDefault(lookup, "COMPONENT_IMPORT_PARSER_VERSION", "component-repo-ldraw-parser-v1"))
-	importSnapshotSchema := strings.TrimSpace(valueOrDefault(lookup, "COMPONENT_IMPORT_SNAPSHOT_SCHEMA", "component-repo-v1"))
+	importParserVersion := strings.TrimSpace(valueOrDefault(lookup, "COMPONENT_IMPORT_PARSER_VERSION", "component-repo-ldraw-parser-v2"))
+	importSnapshotSchema := strings.TrimSpace(valueOrDefault(lookup, "COMPONENT_IMPORT_SNAPSHOT_SCHEMA", "component-repo-v2"))
 	if importParserVersion == "" || len(importParserVersion) > 128 {
 		return Config{}, errors.New("COMPONENT_IMPORT_PARSER_VERSION must be between 1 and 128 bytes")
 	}
@@ -295,10 +323,13 @@ func load(lookup lookupFunc) (Config, error) {
 			ConnectTimeout:    connectTimeout,
 		},
 		Auth: AuthConfig{
-			JWTSecret:   jwtSecret,
-			JWKSURL:     jwksURL,
-			JWTIssuer:   jwtIssuer,
-			JWTAudience: strings.TrimSpace(lookup("AUTH_JWT_AUDIENCE")),
+			JWTSecret:                  jwtSecret,
+			JWKSURL:                    jwksURL,
+			JWTIssuer:                  jwtIssuer,
+			JWTAudience:                strings.TrimSpace(lookup("AUTH_JWT_AUDIENCE")),
+			SessionVerificationURL:     sessionVerificationURL,
+			PublishableKey:             storagePublishableKey,
+			SessionVerificationTimeout: sessionVerificationTimeout,
 		},
 		Storage: StorageConfig{
 			Provider:         storageProvider,
@@ -314,6 +345,7 @@ func load(lookup lookupFunc) (Config, error) {
 		},
 		Worker: WorkerConfig{
 			ID:                  strings.TrimSpace(lookup("WORKER_ID")),
+			TaskTypes:           stringListValue(lookup("WORKER_TASK_TYPES")),
 			HealthCheckInterval: workerHealthCheckInterval,
 			PollInterval:        workerPollInterval,
 			LeaseDuration:       workerLeaseDuration,
@@ -326,8 +358,28 @@ func load(lookup lookupFunc) (Config, error) {
 			SnapshotSchema: importSnapshotSchema,
 			MaxAttempts:    importMaxAttempts,
 		},
-		PartPreview: PartPreviewConfig{LDrawRoot: strings.TrimSpace(lookup("LDRAW_ROOT"))},
+		PartPreview: PartPreviewConfig{
+			LDrawRoot:    strings.TrimSpace(lookup("LDRAW_ROOT")),
+			GLTFPackPath: valueOrDefault(lookup, "PART_PREVIEW_GLTFPACK_PATH", "gltfpack"),
+		},
 	}, nil
+}
+
+func stringListValue(raw string) []string {
+	result := []string{}
+	seen := map[string]struct{}{}
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	return result
 }
 
 func valueOrDefault(lookup lookupFunc, key, fallback string) string {

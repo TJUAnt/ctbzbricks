@@ -3,12 +3,14 @@ package partlibrary
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,30 +18,56 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const StudioImporterVersion = "studio-part-library-importer-v1"
+const StudioImporterVersion = "studio-part-library-importer-v3"
+
+const (
+	ColliderStorageMetadataOnly = "metadata-only"
+	ColliderStorageDatabase     = "database"
+)
 
 type ImportOptions struct {
-	DatabaseURL  string
-	ManifestPath string
-	LDrawRoot    string
-	LibraryID    string
-	CreatedBy    string
-	Status       string
-	DryRun       bool
-	Limit        int
+	DatabaseURL     string
+	ManifestPath    string
+	LDrawRoot       string
+	LibraryID       string
+	CreatedBy       string
+	Status          string
+	ColliderStorage string
+	DryRun          bool
+	Limit           int
 }
 
 type ImportResult struct {
-	LibraryID      string
-	Status         string
-	ManifestSHA256 string
-	PartCount      int
-	GeometryReady  int
-	GeometryFailed int
-	PreviewRows    int64
-	DryRun         bool
-	FailuresSample []GeometryFailure
-	Elapsed        time.Duration
+	LibraryID             string
+	Status                string
+	ManifestSHA256        string
+	PartCount             int
+	GeometryReady         int
+	GeometryFailed        int
+	PreviewRows           int64
+	PreviewReady          bool
+	RelationReady         bool
+	ConnectorCount        int
+	ConnectorFiles        int
+	ConnectorHash         string
+	ConnectorFailed       int
+	ColliderCount         int
+	ColliderFiles         int
+	ColliderHash          string
+	ColliderFailed        int
+	ColliderStored        int
+	ColliderStorage       string
+	DryRun                bool
+	FailuresSample        []GeometryFailure
+	SidecarFailuresSample []SidecarFailure
+	Elapsed               time.Duration
+}
+
+type SidecarFailure struct {
+	LDrawPartNum string `json:"ldrawPartNum"`
+	SourcePath   string `json:"sourcePath"`
+	FileKind     string `json:"fileKind"`
+	Error        string `json:"error"`
 }
 
 type GeometryFailure struct {
@@ -56,6 +84,20 @@ type importPartRow struct {
 	SourceName   string
 	Metadata     []byte
 	Geometry     importGeometryRow
+	Connectors   []importConnectorRow
+	Colliders    []importColliderRow
+}
+
+type importConnectorRow struct {
+	SourceID   int64
+	Definition StudioConnectorDefinition
+	RawParams  []byte
+}
+
+type importColliderRow struct {
+	SourceID   int64
+	Definition StudioColliderDefinition
+	RawParams  []byte
 }
 
 type importGeometryRow struct {
@@ -74,6 +116,7 @@ type importGeometryRow struct {
 	DerivationStatus   string
 }
 
+// ImportStudioLibrary 离线构建版本化 Studio Part Library；所有数据库写入在单事务中提交，API/Worker 启动不会调用它。
 func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult, error) {
 	started := time.Now()
 	manifest, err := readManifest(opts.ManifestPath)
@@ -105,6 +148,13 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 	if ldrawRoot == "" {
 		return ImportResult{}, errors.New("ldraw root is required")
 	}
+	colliderStorage := strings.TrimSpace(opts.ColliderStorage)
+	if colliderStorage == "" {
+		colliderStorage = ColliderStorageMetadataOnly
+	}
+	if colliderStorage != ColliderStorageMetadataOnly && colliderStorage != ColliderStorageDatabase {
+		return ImportResult{}, fmt.Errorf("invalid collider storage %q", colliderStorage)
+	}
 
 	parts := manifest.CanonicalTopLevelParts
 	if opts.Limit > 0 && opts.Limit < len(parts) {
@@ -118,6 +168,7 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 	if err != nil {
 		return ImportResult{}, err
 	}
+	sidecars := importStudioSidecars(ldrawRoot, manifest, parts, opts.Limit > 0, colliderStorage == ColliderStorageDatabase)
 	rows := make([]importPartRow, 0, len(parts))
 	failures := []GeometryFailure{}
 	ready := 0
@@ -125,10 +176,13 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 	for _, part := range parts {
 		row := importPartRow{
 			LDrawPartNum: part.LDrawPartNum,
-			SourceName:   part.LDrawPartNum,
+			Connectors:   sidecars.connectors[part.LDrawPartNum],
+			Colliders:    sidecars.colliders[part.LDrawPartNum],
 		}
 		preferredPath := normalizeLDrawGeometryPath(part.PreferredRelativePath)
 		preferredFile, hasPreferred := fileByPath[preferredPath]
+		// Part Search 只读取数据库，导入期必须把 LDraw 文件头的源名称固化，不能让 API 依赖本地 Studio 目录。
+		row.SourceName = index.sourceName(part.PreferredRelativePath, part.LDrawPartNum)
 		row.Metadata = mustMarshalJSON(map[string]any{
 			"sourceSystem":             SourceSystem,
 			"preferredRelativePath":    part.PreferredRelativePath,
@@ -204,15 +258,28 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 	}
 
 	result := ImportResult{
-		LibraryID:      libraryID,
-		Status:         status,
-		ManifestSHA256: manifest.ManifestSHA256,
-		PartCount:      len(rows),
-		GeometryReady:  ready,
-		GeometryFailed: failed,
-		DryRun:         opts.DryRun,
-		FailuresSample: failures,
-		Elapsed:        time.Since(started),
+		LibraryID:             libraryID,
+		Status:                status,
+		ManifestSHA256:        manifest.ManifestSHA256,
+		PartCount:             len(rows),
+		GeometryReady:         ready,
+		GeometryFailed:        failed,
+		PreviewReady:          ready > 0,
+		RelationReady:         sidecars.relationReady,
+		ConnectorCount:        sidecars.connectorCount,
+		ConnectorFiles:        sidecars.connectorFiles,
+		ConnectorHash:         sidecars.connectorHash,
+		ConnectorFailed:       len(sidecars.connectorFailures),
+		ColliderCount:         sidecars.colliderCount,
+		ColliderFiles:         sidecars.colliderFiles,
+		ColliderHash:          sidecars.colliderHash,
+		ColliderFailed:        len(sidecars.colliderFailures),
+		ColliderStored:        sidecars.colliderStored,
+		ColliderStorage:       colliderStorage,
+		DryRun:                opts.DryRun,
+		FailuresSample:        failures,
+		SidecarFailuresSample: sidecars.failureSample(),
+		Elapsed:               time.Since(started),
 	}
 	if opts.DryRun {
 		return result, nil
@@ -233,7 +300,7 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 		return ImportResult{}, err
 	}
 	defer tx.Rollback(ctx)
-	if err := importRows(ctx, tx, manifest, libraryID, createdBy, status, rows); err != nil {
+	if err := importRows(ctx, tx, manifest, libraryID, createdBy, status, rows, result); err != nil {
 		return ImportResult{}, err
 	}
 	var previewRows int64
@@ -251,9 +318,18 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 	return result, nil
 }
 
-func importRows(ctx context.Context, tx pgx.Tx, manifest Manifest, libraryID, createdBy, status string, rows []importPartRow) error {
+func importRows(ctx context.Context, tx pgx.Tx, manifest Manifest, libraryID, createdBy, status string, rows []importPartRow, result ImportResult) error {
 	if _, err := tx.Exec(ctx, `SET LOCAL statement_timeout = '30min'`); err != nil {
 		return err
+	}
+	if status == "active" {
+		if _, err := tx.Exec(ctx, `
+			UPDATE component_repo.part_library_versions
+			SET status = 'retired'
+			WHERE status = 'active' AND id <> $1::uuid
+		`, libraryID); err != nil {
+			return fmt.Errorf("retire previous active Part Library: %w", err)
+		}
 	}
 	metadata := mustMarshalJSON(map[string]any{
 		"sourceSystem":          SourceSystem,
@@ -266,18 +342,39 @@ func importRows(ctx context.Context, tx pgx.Tx, manifest Manifest, libraryID, cr
 		"canonicalPartCount":    len(manifest.CanonicalTopLevelParts),
 		"studioImporterVersion": StudioImporterVersion,
 		"geometryMode":          "ldraw_recursive_bbox_v1",
+		"previewReady":          result.PreviewReady,
+		"relationReady":         result.RelationReady,
+		"connectorFileCount":    result.ConnectorFiles,
+		"connectorFailureCount": result.ConnectorFailed,
+		"colliderFileCount":     result.ColliderFiles,
+		"colliderFailureCount":  result.ColliderFailed,
+		"colliderStoredCount":   result.ColliderStored,
+		"colliderStorage":       result.ColliderStorage,
 	})
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO component_repo.part_library_versions (
-			id, source_name, source_hash, connector_count, status, metadata, created_by
-		) VALUES ($1::uuid, $2, $3, 0, $4, $5::jsonb, $6::uuid)
+			id, source_name, source_hash, connector_count, status, metadata, created_by,
+			preview_ready, relation_ready, connector_source_hash, connector_parser_version,
+			collider_count, collider_source_hash, collider_parser_version
+		) VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb, $7::uuid,
+		          $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (id) DO UPDATE SET
 			source_name = EXCLUDED.source_name,
 			source_hash = EXCLUDED.source_hash,
+			connector_count = EXCLUDED.connector_count,
 			status = EXCLUDED.status,
 			metadata = EXCLUDED.metadata,
-			created_by = EXCLUDED.created_by
-	`, libraryID, SourceSystem, manifest.ManifestSHA256, status, string(metadata), createdBy); err != nil {
+			created_by = EXCLUDED.created_by,
+			preview_ready = EXCLUDED.preview_ready,
+			relation_ready = EXCLUDED.relation_ready,
+			connector_source_hash = EXCLUDED.connector_source_hash,
+			connector_parser_version = EXCLUDED.connector_parser_version,
+			collider_count = EXCLUDED.collider_count,
+			collider_source_hash = EXCLUDED.collider_source_hash,
+			collider_parser_version = EXCLUDED.collider_parser_version
+	`, libraryID, SourceSystem, manifest.ManifestSHA256, result.ConnectorCount, status, string(metadata), createdBy,
+		result.PreviewReady, result.RelationReady, nullableHash(result.ConnectorHash), StudioConnectivityParserVersion,
+		result.ColliderCount, nullableHash(result.ColliderHash), StudioColliderParserVersion); err != nil {
 		return fmt.Errorf("upsert part library version: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -302,11 +399,39 @@ func importRows(ctx context.Context, tx pgx.Tx, manifest Manifest, libraryID, cr
 			geometry_error_params jsonb,
 			logical_size_derivation_status text NOT NULL
 		) ON COMMIT DROP;
+		CREATE TEMP TABLE studio_import_connectors (
+			source_connector_id bigint NOT NULL,
+			ldraw_part_num text NOT NULL,
+			connector_kind text NOT NULL,
+			normalized_connector_type text,
+			connector_group text,
+			connector_gender text,
+			position double precision[] NOT NULL,
+			orientation double precision[] NOT NULL,
+			direction double precision[] NOT NULL,
+			radius double precision,
+			length double precision,
+			caps text,
+			center_flag boolean NOT NULL,
+			slide_flag boolean NOT NULL,
+			raw_params jsonb NOT NULL
+		) ON COMMIT DROP;
+		CREATE TEMP TABLE studio_import_colliders (
+			source_collider_id bigint NOT NULL,
+			ldraw_part_num text NOT NULL,
+			collider_kind text NOT NULL,
+			position double precision[] NOT NULL,
+			orientation double precision[] NOT NULL,
+			half_extents double precision[] NOT NULL,
+			raw_params jsonb NOT NULL
+		) ON COMMIT DROP;
 	`); err != nil {
 		return fmt.Errorf("create temp import tables: %w", err)
 	}
 	partCopyRows := make([][]any, 0, len(rows))
 	geometryCopyRows := make([][]any, 0, len(rows))
+	connectorCopyRows := make([][]any, 0)
+	colliderCopyRows := make([][]any, 0)
 	for _, row := range rows {
 		g := row.Geometry
 		partCopyRows = append(partCopyRows, []any{row.LDrawPartNum, row.SourceName, string(row.Metadata)})
@@ -316,6 +441,23 @@ func importRows(ctx context.Context, tx pgx.Tx, manifest Manifest, libraryID, cr
 			nullableFloat(g.LogicalWidthStud), nullableFloat(g.LogicalDepthStud), nullableFloat(g.LogicalHeightPlate),
 			g.VertexCount, g.FaceCount, g.Status, nullableText(g.ErrorCode), nullableJSON(g.ErrorParams), g.DerivationStatus,
 		})
+		for _, connector := range row.Connectors {
+			definition := connector.Definition
+			connectorCopyRows = append(connectorCopyRows, []any{
+				connector.SourceID, row.LDrawPartNum, definition.ConnectorKind,
+				nullableString(definition.NormalizedConnectorType), nullableString(definition.ConnectorGroup), nullableString(definition.ConnectorGender),
+				floatArray(definition.Position), floatArray9(definition.Orientation), floatArray(definition.Direction),
+				nullableFloat(definition.Radius), nullableFloat(definition.Length), capsText(definition.Caps),
+				definition.CenterFlag, definition.SlideFlag, string(connector.RawParams),
+			})
+		}
+		for _, collider := range row.Colliders {
+			definition := collider.Definition
+			colliderCopyRows = append(colliderCopyRows, []any{
+				collider.SourceID, row.LDrawPartNum, definition.ColliderKind,
+				floatArray(definition.Position), floatArray9(definition.Orientation), floatArray(definition.HalfExtents), string(collider.RawParams),
+			})
+		}
 	}
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"studio_import_parts"}, []string{
 		"ldraw_part_num", "source_name", "metadata",
@@ -329,6 +471,22 @@ func importRows(ctx context.Context, tx pgx.Tx, manifest Manifest, libraryID, cr
 		"geometry_error_params", "logical_size_derivation_status",
 	}, pgx.CopyFromRows(geometryCopyRows)); err != nil {
 		return fmt.Errorf("copy import geometries: %w", err)
+	}
+	if len(connectorCopyRows) > 0 {
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"studio_import_connectors"}, []string{
+			"source_connector_id", "ldraw_part_num", "connector_kind", "normalized_connector_type",
+			"connector_group", "connector_gender", "position", "orientation", "direction",
+			"radius", "length", "caps", "center_flag", "slide_flag", "raw_params",
+		}, pgx.CopyFromRows(connectorCopyRows)); err != nil {
+			return fmt.Errorf("copy import connectors: %w", err)
+		}
+	}
+	if len(colliderCopyRows) > 0 {
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"studio_import_colliders"}, []string{
+			"source_collider_id", "ldraw_part_num", "collider_kind", "position", "orientation", "half_extents", "raw_params",
+		}, pgx.CopyFromRows(colliderCopyRows)); err != nil {
+			return fmt.Errorf("copy import colliders: %w", err)
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO component_repo.parts (
@@ -379,7 +537,185 @@ func importRows(ctx context.Context, tx pgx.Tx, manifest Manifest, libraryID, cr
 	`, libraryID); err != nil {
 		return fmt.Errorf("upsert geometries from staging: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM component_repo.part_connector_definitions WHERE part_library_version_id = $1::uuid`, libraryID); err != nil {
+		return fmt.Errorf("delete previous Studio connector definitions: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO component_repo.part_connector_definitions (
+			part_library_version_id, source_connector_id, ldraw_part_num,
+			connector_kind, normalized_connector_type, connector_group, connector_gender,
+			position, orientation, direction, radius, length, caps,
+			center_flag, slide_flag, confidence, raw_params
+		)
+		SELECT $1::uuid, source_connector_id, ldraw_part_num,
+		       connector_kind, normalized_connector_type, connector_group, connector_gender,
+		       position, orientation, direction, radius, length, caps,
+		       center_flag, slide_flag, 1.0, raw_params
+		FROM studio_import_connectors
+	`, libraryID); err != nil {
+		return fmt.Errorf("insert Studio connector definitions: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM component_repo.part_collider_definitions WHERE part_library_version_id = $1::uuid`, libraryID); err != nil {
+		return fmt.Errorf("delete previous Studio collider definitions: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO component_repo.part_collider_definitions (
+			part_library_version_id, source_collider_id, ldraw_part_num,
+			collider_kind, position, orientation, half_extents, raw_params
+		)
+		SELECT $1::uuid, source_collider_id, ldraw_part_num,
+		       collider_kind, position, orientation, half_extents, raw_params
+		FROM studio_import_colliders
+	`, libraryID); err != nil {
+		return fmt.Errorf("insert Studio collider definitions: %w", err)
+	}
 	return nil
+}
+
+type studioSidecarImport struct {
+	connectors        map[string][]importConnectorRow
+	colliders         map[string][]importColliderRow
+	connectorFiles    int
+	connectorCount    int
+	connectorHash     string
+	connectorFailures []SidecarFailure
+	colliderFiles     int
+	colliderCount     int
+	colliderStored    int
+	colliderHash      string
+	colliderFailures  []SidecarFailure
+	relationReady     bool
+}
+
+func importStudioSidecars(ldrawRoot string, manifest Manifest, parts []TopLevelPart, partial, storeColliderRows bool) studioSidecarImport {
+	result := studioSidecarImport{
+		connectors: map[string][]importConnectorRow{},
+		colliders:  map[string][]importColliderRow{},
+	}
+	files := map[string]FileEntry{}
+	for _, entry := range manifest.Files {
+		files[strings.ToLower(filepath.ToSlash(entry.RelativePath))] = entry
+	}
+	connectorEntries := []FileEntry{}
+	colliderEntries := []FileEntry{}
+	for _, part := range parts {
+		base := strings.TrimSuffix(strings.ToLower(part.LDrawPartNum), ".dat")
+		connectorPath := "connectivity/" + base + ".conn"
+		if entry, ok := files[connectorPath]; ok {
+			result.connectorFiles++
+			connectorEntries = append(connectorEntries, entry)
+			data, err := readVerifiedManifestFile(ldrawRoot, entry)
+			if err == nil {
+				var definitions []StudioConnectorDefinition
+				definitions, err = ParseStudioConnectivity(data)
+				if err == nil {
+					rows := make([]importConnectorRow, 0, len(definitions))
+					for _, definition := range definitions {
+						sourceID := deterministicSourceID("connector", part.LDrawPartNum, definition.SourceRecord, definition.SourceCell)
+						rows = append(rows, importConnectorRow{
+							SourceID: sourceID, Definition: definition,
+							RawParams: mustMarshalJSON(map[string]any{
+								"sourceGroup": definition.SourceGroup, "sourceSubtype": definition.SourceSubtype,
+								"sourceRecord": definition.SourceRecord, "sourceCell": definition.SourceCell,
+								"matrixItemType": definition.MatrixItemType, "matrixGridType": definition.MatrixGridType,
+							}),
+						})
+					}
+					result.connectors[part.LDrawPartNum] = rows
+					result.connectorCount += len(rows)
+				}
+			}
+			if err != nil {
+				result.connectorFailures = append(result.connectorFailures, SidecarFailure{LDrawPartNum: part.LDrawPartNum, SourcePath: entry.RelativePath, FileKind: "connectivity", Error: err.Error()})
+			}
+		}
+
+		colliderPath := "collider/" + base + ".col"
+		if entry, ok := files[colliderPath]; ok {
+			result.colliderFiles++
+			colliderEntries = append(colliderEntries, entry)
+			data, err := readVerifiedManifestFile(ldrawRoot, entry)
+			if err == nil {
+				var definitions []StudioColliderDefinition
+				definitions, err = ParseStudioColliders(data)
+				if err == nil {
+					rows := make([]importColliderRow, 0, len(definitions))
+					if storeColliderRows {
+						for _, definition := range definitions {
+							sourceID := deterministicSourceID("collider", part.LDrawPartNum, definition.SourceLine, definition.SourceID)
+							rows = append(rows, importColliderRow{
+								SourceID: sourceID, Definition: definition,
+								RawParams: mustMarshalJSON(map[string]any{
+									"sourceSystem": SourceSystem, "sourcePath": entry.RelativePath,
+									"sourceFileHash": entry.SHA256, "parserVersion": StudioColliderParserVersion,
+									"sourceLine": definition.SourceLine, "sourceType": definition.SourceType,
+									"sourceId": definition.SourceID, "sourceHalfExtents": definition.SourceHalfExtents,
+								}),
+							})
+						}
+					}
+					result.colliders[part.LDrawPartNum] = rows
+					result.colliderCount += len(definitions)
+					result.colliderStored += len(rows)
+				}
+			}
+			if err != nil {
+				result.colliderFailures = append(result.colliderFailures, SidecarFailure{LDrawPartNum: part.LDrawPartNum, SourcePath: entry.RelativePath, FileKind: "collider", Error: err.Error()})
+			}
+		}
+	}
+	result.connectorHash = sidecarDigest(connectorEntries)
+	result.colliderHash = sidecarDigest(colliderEntries)
+	result.relationReady = !partial && result.connectorFiles > 0 && result.connectorCount > 0 &&
+		result.colliderFiles > 0 && result.colliderCount > 0 &&
+		len(result.connectorFailures) == 0 && len(result.colliderFailures) == 0
+	return result
+}
+
+func (result studioSidecarImport) failureSample() []SidecarFailure {
+	failures := append([]SidecarFailure{}, result.connectorFailures...)
+	failures = append(failures, result.colliderFailures...)
+	if len(failures) > 25 {
+		failures = failures[:25]
+	}
+	return failures
+}
+
+func readVerifiedManifestFile(root string, entry FileEntry) ([]byte, error) {
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(entry.RelativePath)))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != entry.SizeBytes {
+		return nil, fmt.Errorf("size mismatch: got %d want %d", len(data), entry.SizeBytes)
+	}
+	sum := sha256.Sum256(data)
+	if hex.EncodeToString(sum[:]) != entry.SHA256 {
+		return nil, errors.New("sha256 mismatch")
+	}
+	return data, nil
+}
+
+func sidecarDigest(entries []FileEntry) string {
+	sort.Slice(entries, func(i, j int) bool { return entries[i].RelativePath < entries[j].RelativePath })
+	digest := sha256.New()
+	for _, entry := range entries {
+		for _, value := range []string{entry.RelativePath, entry.SHA256, fmt.Sprintf("%d", entry.SizeBytes)} {
+			encoded := []byte(value)
+			fmt.Fprintf(digest, "%d:", len(encoded))
+			digest.Write(encoded)
+		}
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func deterministicSourceID(kind, part string, primary, secondary int) int64 {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d:%d", kind, part, primary, secondary)))
+	value := binary.BigEndian.Uint64(sum[:8]) & uint64(^uint64(0)>>1)
+	if value == 0 {
+		value = 1
+	}
+	return int64(value)
 }
 
 func readManifest(path string) (Manifest, error) {
@@ -448,6 +784,32 @@ func mathRound(value float64, places int) float64 {
 
 func floatArray(values [3]float64) []float64 {
 	return []float64{values[0], values[1], values[2]}
+}
+
+func floatArray9(values [9]float64) []float64 {
+	return []float64{values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8]}
+}
+
+func nullableString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func nullableHash(value string) *string {
+	if value == "" || value == strings.Repeat("0", 64) {
+		return nil
+	}
+	return &value
+}
+
+func capsText(values []bool) *string {
+	if len(values) == 0 {
+		return nil
+	}
+	encoded := string(mustMarshalJSON(values))
+	return &encoded
 }
 
 func nullableJSON(value []byte) *string {

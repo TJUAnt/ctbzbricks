@@ -16,8 +16,17 @@ func TestValidateWorkerConfigRequiresServiceRoleForSupabase(t *testing.T) {
 func TestValidateWorkerConfigAllowsSupabaseWithServiceRole(t *testing.T) {
 	cfg := config.Config{Storage: config.StorageConfig{
 		Provider: "supabase", PublishableKey: "publishable", ServiceRoleKey: "service-role",
-	}}
+	}, PartPreview: config.PartPreviewConfig{LDrawRoot: "/fixtures/ldraw"}}
 	if err := validateWorkerConfig(cfg); err != nil {
 		t.Fatalf("validate worker configuration: %v", err)
+	}
+}
+
+func TestValidateWorkerConfigRequiresLDrawRootForComponentPreview(t *testing.T) {
+	cfg := config.Config{Storage: config.StorageConfig{
+		Provider: "supabase", ServiceRoleKey: "service-role",
+	}}
+	if err := validateWorkerConfig(cfg); err == nil {
+		t.Fatal("expected storage-enabled worker configuration to require LDRAW_ROOT")
 	}
 }

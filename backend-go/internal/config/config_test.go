@@ -46,9 +46,12 @@ func TestLoadUsesDefaults(t *testing.T) {
 		cfg.Worker.HeartbeatInterval != 10*time.Second || cfg.Worker.Concurrency != 4 {
 		t.Fatalf("unexpected worker defaults: %+v", cfg.Worker)
 	}
-	if cfg.Import.ParserVersion != "component-repo-ldraw-parser-v1" ||
-		cfg.Import.SnapshotSchema != "component-repo-v1" || cfg.Import.MaxAttempts != 3 {
+	if cfg.Import.ParserVersion != "component-repo-ldraw-parser-v2" ||
+		cfg.Import.SnapshotSchema != "component-repo-v2" || cfg.Import.MaxAttempts != 3 {
 		t.Fatalf("unexpected import defaults: %+v", cfg.Import)
+	}
+	if cfg.Auth.SessionVerificationTimeout != 5*time.Second {
+		t.Fatalf("unexpected auth session verification timeout: %s", cfg.Auth.SessionVerificationTimeout)
 	}
 }
 
@@ -116,6 +119,46 @@ func TestLoadDerivesJWKSURLFromIssuer(t *testing.T) {
 	if cfg.Auth.JWTIssuer != "https://project.supabase.co/auth/v1" ||
 		cfg.Auth.JWKSURL != "https://project.supabase.co/auth/v1/.well-known/jwks.json" {
 		t.Fatalf("unexpected auth config: %+v", cfg.Auth)
+	}
+}
+
+func TestLoadBuildsSupabaseSessionVerificationConfig(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{
+		"APP_ENV":                           TestEnvironment,
+		"DATABASE_URL":                      "postgresql://localhost/brickbuilder",
+		"AUTH_JWT_ISSUER":                   "https://project.supabase.co/auth/v1",
+		"SUPABASE_PUBLISHABLE_KEY":          "publishable-key",
+		"AUTH_SESSION_VERIFICATION_TIMEOUT": "3s",
+	}))
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Auth.SessionVerificationURL != "https://project.supabase.co/auth/v1/user" ||
+		cfg.Auth.PublishableKey != "publishable-key" || cfg.Auth.SessionVerificationTimeout != 3*time.Second {
+		t.Fatalf("unexpected session verification config: %+v", cfg.Auth)
+	}
+}
+
+func TestLoadAllowsLocalSupabaseOutsideProduction(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{
+		"DATABASE_URL":             "postgresql://localhost/brickbuilder",
+		"SUPABASE_URL":             "http://127.0.0.1:54321",
+		"SUPABASE_PUBLISHABLE_KEY": "publishable-key",
+	}))
+	if err != nil {
+		t.Fatalf("load local Supabase config: %v", err)
+	}
+	if cfg.Auth.SessionVerificationURL != "http://127.0.0.1:54321/auth/v1/user" {
+		t.Fatalf("unexpected local session URL: %q", cfg.Auth.SessionVerificationURL)
+	}
+
+	_, err = load(mapLookup(map[string]string{
+		"APP_ENV":      ProductionEnvironment,
+		"DATABASE_URL": "postgresql://localhost/brickbuilder",
+		"SUPABASE_URL": "http://127.0.0.1:54321",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "SUPABASE_URL") {
+		t.Fatalf("expected production Supabase HTTPS error, got %v", err)
 	}
 }
 

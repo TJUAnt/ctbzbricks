@@ -11,18 +11,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const attachPassingValidationReport = `-- name: AttachPassingValidationReport :exec
+const attachLatestValidationReport = `-- name: AttachLatestValidationReport :exec
 UPDATE component_repo.component_versions
 SET validation_report_id = $1
 WHERE id = $2
   AND component_candidate_id = $3
-  AND status = 'draft'
+  AND status IN ('draft', 'published')
   AND interface_signature = $4
   AND structure_hash = $5
   AND geometry_hash = $6
 `
 
-type AttachPassingValidationReportParams struct {
+type AttachLatestValidationReportParams struct {
 	ReportID           pgtype.UUID
 	VersionID          pgtype.UUID
 	CandidateID        pgtype.UUID
@@ -31,8 +31,9 @@ type AttachPassingValidationReportParams struct {
 	GeometryHash       string
 }
 
-func (q *Queries) AttachPassingValidationReport(ctx context.Context, arg AttachPassingValidationReportParams) error {
-	_, err := q.db.Exec(ctx, attachPassingValidationReport,
+// 验证不再是发布门禁；Draft/Published 都保留最近一次报告，失败报告也必须可在详情页追溯。
+func (q *Queries) AttachLatestValidationReport(ctx context.Context, arg AttachLatestValidationReportParams) error {
+	_, err := q.db.Exec(ctx, attachLatestValidationReport,
 		arg.ReportID,
 		arg.VersionID,
 		arg.CandidateID,
@@ -41,6 +42,25 @@ func (q *Queries) AttachPassingValidationReport(ctx context.Context, arg AttachP
 		arg.GeometryHash,
 	)
 	return err
+}
+
+const countPreviewBoundsBackfillCandidates = `-- name: CountPreviewBoundsBackfillCandidates :one
+SELECT count(*)::bigint
+FROM component_repo.component_versions version
+JOIN component_repo.components component ON component.id = version.component_id
+WHERE version.deleted_at IS NULL
+  AND component.deleted_at IS NULL
+  AND version.preview_status = 'ready'
+  AND version.preview_artifact_id IS NOT NULL
+  AND version.preview_bbox_min IS NULL
+  AND version.preview_generator_version IS DISTINCT FROM $1
+`
+
+func (q *Queries) CountPreviewBoundsBackfillCandidates(ctx context.Context, generatorVersion *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countPreviewBoundsBackfillCandidates, generatorVersion)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const createAssemblyRelation = `-- name: CreateAssemblyRelation :one
@@ -255,6 +275,8 @@ SELECT candidate.id, candidate.owner_id, candidate.status,
        candidate.relation_detection_task_id, candidate.relation_detection_version,
        snapshot.schema_version, snapshot.parser_version AS snapshot_parser_version,
        import_job.part_library_version_id, part_library.source_hash AS part_library_source_hash,
+       part_library.relation_ready AS part_library_relation_ready,
+       part_library.connector_source_hash, part_library.connector_parser_version,
        import_job.locale, import_job.timezone,
        version.id AS draft_version_id, version.status AS draft_version_status
 FROM component_repo.candidates candidate
@@ -289,6 +311,9 @@ type GetOwnedCandidateWorkbenchRow struct {
 	SnapshotParserVersion    string
 	PartLibraryVersionID     pgtype.UUID
 	PartLibrarySourceHash    *string
+	PartLibraryRelationReady *bool
+	ConnectorSourceHash      *string
+	ConnectorParserVersion   *string
 	Locale                   string
 	Timezone                 string
 	DraftVersionID           pgtype.UUID
@@ -311,52 +336,13 @@ func (q *Queries) GetOwnedCandidateWorkbench(ctx context.Context, arg GetOwnedCa
 		&i.SnapshotParserVersion,
 		&i.PartLibraryVersionID,
 		&i.PartLibrarySourceHash,
+		&i.PartLibraryRelationReady,
+		&i.ConnectorSourceHash,
+		&i.ConnectorParserVersion,
 		&i.Locale,
 		&i.Timezone,
 		&i.DraftVersionID,
 		&i.DraftVersionStatus,
-	)
-	return i, err
-}
-
-const getOwnedValidationReport = `-- name: GetOwnedValidationReport :one
-SELECT id, component_candidate_id, component_version_id, validation_level,
-       passed, checks, issues, validator_version, created_at
-FROM component_repo.validation_reports
-WHERE id = $1
-  AND owner_id = $2
-`
-
-type GetOwnedValidationReportParams struct {
-	ReportID pgtype.UUID
-	OwnerID  pgtype.UUID
-}
-
-type GetOwnedValidationReportRow struct {
-	ID                   pgtype.UUID
-	ComponentCandidateID pgtype.UUID
-	ComponentVersionID   pgtype.UUID
-	ValidationLevel      string
-	Passed               bool
-	Checks               []byte
-	Issues               []byte
-	ValidatorVersion     string
-	CreatedAt            pgtype.Timestamptz
-}
-
-func (q *Queries) GetOwnedValidationReport(ctx context.Context, arg GetOwnedValidationReportParams) (GetOwnedValidationReportRow, error) {
-	row := q.db.QueryRow(ctx, getOwnedValidationReport, arg.ReportID, arg.OwnerID)
-	var i GetOwnedValidationReportRow
-	err := row.Scan(
-		&i.ID,
-		&i.ComponentCandidateID,
-		&i.ComponentVersionID,
-		&i.ValidationLevel,
-		&i.Passed,
-		&i.Checks,
-		&i.Issues,
-		&i.ValidatorVersion,
-		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -369,13 +355,13 @@ SELECT version.id, version.component_id, component.owner_id,
        version.preview_failure_params, version.preview_task_id,
        version.preview_generation, component.content_locale,
        version.part_library_version_id, version.structure_hash, version.geometry_hash,
-       part_library.source_hash AS part_library_source_hash,
+       COALESCE(part_library.source_hash, '') AS part_library_source_hash,
        import_job.timezone
 FROM component_repo.component_versions version
 JOIN component_repo.components component ON component.id = version.component_id
 JOIN component_repo.candidates candidate ON candidate.id = version.component_candidate_id
 JOIN component_repo.imports import_job ON import_job.id = candidate.import_id
-JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
+LEFT JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
 WHERE version.id = $1
   AND component.owner_id = $2
   AND version.deleted_at IS NULL
@@ -724,6 +710,59 @@ func (q *Queries) GetValidationTaskInput(ctx context.Context, arg GetValidationT
 	return i, err
 }
 
+const getVisibleValidationReport = `-- name: GetVisibleValidationReport :one
+SELECT report.id, report.component_candidate_id, report.component_version_id,
+       report.validation_level, report.passed, report.checks, report.issues,
+       report.validator_version, report.created_at
+FROM component_repo.validation_reports report
+JOIN component_repo.component_versions version
+  ON version.id = report.component_version_id
+JOIN component_repo.components component ON component.id = version.component_id
+WHERE report.id = $1
+  AND report.component_version_id IS NOT NULL
+  AND version.deleted_at IS NULL
+  AND component.deleted_at IS NULL
+  AND (
+      component.owner_id = $2
+      OR (component.status = 'active' AND version.status <> 'draft')
+  )
+`
+
+type GetVisibleValidationReportParams struct {
+	ReportID pgtype.UUID
+	ActorID  pgtype.UUID
+}
+
+type GetVisibleValidationReportRow struct {
+	ID                   pgtype.UUID
+	ComponentCandidateID pgtype.UUID
+	ComponentVersionID   pgtype.UUID
+	ValidationLevel      string
+	Passed               bool
+	Checks               []byte
+	Issues               []byte
+	ValidatorVersion     string
+	CreatedAt            pgtype.Timestamptz
+}
+
+// Draft 报告只对 owner 可见；发布后的质量标识沿用 ComponentVersion 的公开读取边界。
+func (q *Queries) GetVisibleValidationReport(ctx context.Context, arg GetVisibleValidationReportParams) (GetVisibleValidationReportRow, error) {
+	row := q.db.QueryRow(ctx, getVisibleValidationReport, arg.ReportID, arg.ActorID)
+	var i GetVisibleValidationReportRow
+	err := row.Scan(
+		&i.ID,
+		&i.ComponentCandidateID,
+		&i.ComponentVersionID,
+		&i.ValidationLevel,
+		&i.Passed,
+		&i.Checks,
+		&i.Issues,
+		&i.ValidatorVersion,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getVisibleVersionBOM = `-- name: GetVisibleVersionBOM :one
 SELECT version.id, version.part_library_version_id, snapshot.bom
 FROM component_repo.component_versions version
@@ -817,11 +856,15 @@ SELECT requested.ldraw_part_num::text AS ldraw_part_num,
        translation.name AS translated_name,
        translation.locale AS translated_locale,
        part.source_name,
-       part.content_locale AS source_locale
+       part.content_locale AS source_locale,
+       COALESCE(geometry.geometry_status, 'missing')::text AS geometry_status
 FROM unnest($1::text[]) requested(ldraw_part_num)
 LEFT JOIN component_repo.parts part
   ON part.part_library_version_id = $2
  AND part.ldraw_part_num = requested.ldraw_part_num
+LEFT JOIN component_repo.part_geometries geometry
+  ON geometry.part_library_version_id = $2
+ AND geometry.ldraw_part_num = requested.ldraw_part_num
 LEFT JOIN component_repo.part_translations translation
   ON translation.part_library_version_id = part.part_library_version_id
  AND translation.ldraw_part_num = part.ldraw_part_num
@@ -842,6 +885,7 @@ type ListLocalizedPartsRow struct {
 	TranslatedLocale *string
 	SourceName       *string
 	SourceLocale     *string
+	GeometryStatus   string
 }
 
 func (q *Queries) ListLocalizedParts(ctx context.Context, arg ListLocalizedPartsParams) ([]ListLocalizedPartsRow, error) {
@@ -859,6 +903,7 @@ func (q *Queries) ListLocalizedParts(ctx context.Context, arg ListLocalizedParts
 			&i.TranslatedLocale,
 			&i.SourceName,
 			&i.SourceLocale,
+			&i.GeometryStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -1109,6 +1154,50 @@ func (q *Queries) ListOwnedRelationCandidates(ctx context.Context, arg ListOwned
 	return items, nil
 }
 
+const listPreviewBoundsBackfillCandidates = `-- name: ListPreviewBoundsBackfillCandidates :many
+SELECT version.id AS version_id, component.owner_id
+FROM component_repo.component_versions version
+JOIN component_repo.components component ON component.id = version.component_id
+WHERE version.deleted_at IS NULL
+  AND component.deleted_at IS NULL
+  AND version.preview_status = 'ready'
+  AND version.preview_artifact_id IS NOT NULL
+  AND version.preview_bbox_min IS NULL
+  AND version.preview_generator_version IS DISTINCT FROM $1
+ORDER BY version.created_at, version.id
+LIMIT $2
+`
+
+type ListPreviewBoundsBackfillCandidatesParams struct {
+	GeneratorVersion *string
+	BatchSize        int32
+}
+
+type ListPreviewBoundsBackfillCandidatesRow struct {
+	VersionID pgtype.UUID
+	OwnerID   pgtype.UUID
+}
+
+func (q *Queries) ListPreviewBoundsBackfillCandidates(ctx context.Context, arg ListPreviewBoundsBackfillCandidatesParams) ([]ListPreviewBoundsBackfillCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listPreviewBoundsBackfillCandidates, arg.GeneratorVersion, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPreviewBoundsBackfillCandidatesRow{}
+	for rows.Next() {
+		var i ListPreviewBoundsBackfillCandidatesRow
+		if err := rows.Scan(&i.VersionID, &i.OwnerID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listReadyPartGeometryForPreview = `-- name: ListReadyPartGeometryForPreview :many
 SELECT geometry.ldraw_part_num,
        geometry.source_relative_path,
@@ -1217,13 +1306,13 @@ SELECT version.id, version.component_id, component.owner_id,
        version.preview_failure_params, version.preview_task_id,
        version.preview_generation, component.content_locale,
        version.part_library_version_id, version.structure_hash, version.geometry_hash,
-       part_library.source_hash AS part_library_source_hash,
+       COALESCE(part_library.source_hash, '') AS part_library_source_hash,
        import_job.timezone
 FROM component_repo.component_versions version
 JOIN component_repo.components component ON component.id = version.component_id
 JOIN component_repo.candidates candidate ON candidate.id = version.component_candidate_id
 JOIN component_repo.imports import_job ON import_job.id = candidate.import_id
-JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
+LEFT JOIN component_repo.part_library_versions part_library ON part_library.id = version.part_library_version_id
 WHERE version.id = $1
   AND component.owner_id = $2
   AND version.deleted_at IS NULL
@@ -1334,24 +1423,42 @@ const markVersionPreviewReady = `-- name: MarkVersionPreviewReady :exec
 UPDATE component_repo.component_versions
 SET preview_artifact_id = $1, preview_status = 'ready',
     preview_generator_version = $2,
-    preview_failure_code = NULL, preview_failure_params = NULL
-WHERE id = $3
-  AND preview_task_id = $4
-  AND preview_generation = $5
+    preview_failure_code = NULL, preview_failure_params = NULL,
+    preview_bbox_min = $3,
+    preview_bbox_max = $4,
+    logical_width_stud = $5,
+    logical_depth_stud = $6,
+    logical_height_plate = $7,
+    preview_bounds_complete = $8
+WHERE id = $9
+  AND preview_task_id = $10
+  AND preview_generation = $11
 `
 
 type MarkVersionPreviewReadyParams struct {
-	ArtifactID        pgtype.UUID
-	GeneratorVersion  *string
-	VersionID         pgtype.UUID
-	TaskID            pgtype.UUID
-	PreviewGeneration int32
+	ArtifactID            pgtype.UUID
+	GeneratorVersion      *string
+	PreviewBboxMin        []float64
+	PreviewBboxMax        []float64
+	LogicalWidthStud      pgtype.Numeric
+	LogicalDepthStud      pgtype.Numeric
+	LogicalHeightPlate    pgtype.Numeric
+	PreviewBoundsComplete *bool
+	VersionID             pgtype.UUID
+	TaskID                pgtype.UUID
+	PreviewGeneration     int32
 }
 
 func (q *Queries) MarkVersionPreviewReady(ctx context.Context, arg MarkVersionPreviewReadyParams) error {
 	_, err := q.db.Exec(ctx, markVersionPreviewReady,
 		arg.ArtifactID,
 		arg.GeneratorVersion,
+		arg.PreviewBboxMin,
+		arg.PreviewBboxMax,
+		arg.LogicalWidthStud,
+		arg.LogicalDepthStud,
+		arg.LogicalHeightPlate,
+		arg.PreviewBoundsComplete,
 		arg.VersionID,
 		arg.TaskID,
 		arg.PreviewGeneration,

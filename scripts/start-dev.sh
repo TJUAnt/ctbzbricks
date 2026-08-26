@@ -67,8 +67,6 @@ fi
 
 if [[ "${START_COMPONENT_WORKERS}" == "1" ]]; then
   start_child "Go Worker" "${SCRIPT_DIR}/start-go-worker.sh"
-  start_child "Python Import Worker" "${SCRIPT_DIR}/start-component-import-worker.sh"
-  start_child "Python Relation Worker" "${SCRIPT_DIR}/start-component-relation-worker.sh"
 fi
 
 wait_for_health "Go API" "${GO_API_HEALTH_URL}"
@@ -86,9 +84,7 @@ if [[ "${START_LEGACY_API}" == "1" ]]; then
   echo "  Legacy API             http://${BACKEND_HOST}:${LEGACY_API_PORT}"
 fi
 if [[ "${START_COMPONENT_WORKERS}" == "1" ]]; then
-  echo "  Go Worker              component.artifact.verify / component.validate / component.preview.materialize"
-  echo "  Python Import Worker   component.import.parse"
-  echo "  Python Relation Worker component.relations.detect"
+  echo "  Go Worker              component.artifact.verify / component.import.parse / component.relations.detect / component.validate / component.preview.materialize"
 fi
 echo "  Frontend               http://${FRONTEND_HOST:-127.0.0.1}:${FRONTEND_PORT:-5173}"
 echo

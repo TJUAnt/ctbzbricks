@@ -1,7 +1,8 @@
 import appConfig from '../app/appConfig';
-import { ApiError, apiFetch, requestJson as apiRequestJson } from '../api/client';
+import { ApiError, apiFetch } from '../api/client';
 import type { StructuredMessage } from '../api/client';
-import { currentAccessToken, supabase } from '../auth/supabaseClient';
+import { authenticatedApiFetch, authenticatedRequestJson } from '../api/authenticatedClient';
+import { supabase } from '../auth/supabaseClient';
 import { currentTaskContext } from '../api/taskContext';
 import { translate as tr } from '../i18n';
 
@@ -22,6 +23,7 @@ export type ComponentResponse = {
     depthStud: number;
     heightPlate: number;
   } | null;
+  ownedByActor?: boolean;
   description: string | null;
   tags: string[];
   metadata: Record<string, unknown>;
@@ -93,7 +95,7 @@ export type ComponentPreviewPartCatalog = {
   partRef: string;
   name: string;
   contentLocale: 'zh-CN' | 'en-US' | null;
-  translationStatus: 'source' | 'draft' | 'reviewed' | 'rejected' | 'fallback' | null;
+  translationStatus: 'source' | 'draft' | 'reviewed' | 'rejected' | 'fallback' | 'missing' | null;
   imageUrl: string | null;
   availability: ComponentPreviewPartAvailability;
 };
@@ -140,6 +142,7 @@ export type ComponentVersionPartSummary = {
   name: string | null;
   contentLocale: 'zh-CN' | 'en-US' | null;
   translationStatus: 'source' | 'draft' | 'reviewed' | 'rejected' | 'fallback' | null;
+  geometryStatus: 'ready' | 'failed' | 'missing';
   quantity: number;
 };
 
@@ -230,6 +233,8 @@ export type ComponentImportResponse = {
   taskId: string;
   candidateId: string | null;
   draftVersionId: string | null;
+  processingStatus: 'processing' | 'ready' | 'failed';
+  previewTaskId: string | null;
   locale: string;
   timezone: string;
   createdAt: string;
@@ -237,6 +242,39 @@ export type ComponentImportResponse = {
   completedAt: string | null;
   failure: StructuredMessage | null;
   metadata: Record<string, unknown>;
+};
+
+export type ComponentImportRecordResponse = {
+  id: string;
+  sourceArtifactId: string;
+  originalFilename: string;
+  fileSize: number;
+  mimeType: string;
+  importKind: 'create' | 'update';
+  targetComponentId: string | null;
+  componentId: string | null;
+  baseVersionId: string | null;
+  status: string;
+  processingStatus: 'processing' | 'ready' | 'failed';
+  parserVersion: string;
+  partLibraryVersionId: string | null;
+  taskId: string;
+  candidateId: string | null;
+  draftVersionId: string | null;
+  previewTaskId: string | null;
+  failure: StructuredMessage | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+
+export type ComponentImportHistoryResponse = {
+  items: ComponentImportRecordResponse[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  statusCounts: Record<ComponentImportRecordResponse['processingStatus'], number>;
 };
 
 export type ComponentUploadProgress = {
@@ -439,6 +477,7 @@ type GoComponentVersionParts = {
     name: string | null;
     contentLocale: 'zh-CN' | 'en-US' | null;
     translationStatus: ComponentVersionPartSummary['translationStatus'];
+    geometryStatus: ComponentVersionPartSummary['geometryStatus'];
   }>;
 };
 
@@ -535,17 +574,15 @@ export async function listComponentGroupComponents(
 export async function searchComponentGroupComponents(
   groupId: string,
   payload: {
-    query: string;
+    queries: string[];
     statuses: string[] | null;
-    allowPlanarRotation?: boolean;
-    sizeTolerance?: number;
     page: number;
     pageSize: number;
   },
 ): Promise<ComponentGroupSearchResponse> {
   const url = new URL(pathFor('componentGroupComponentSearch', { groupId }), window.location.origin);
   url.searchParams.set('locale', currentTaskContext().locale);
-  url.searchParams.set('query', payload.query);
+  payload.queries.forEach((query) => url.searchParams.append('query', query));
   url.searchParams.set('page', String(payload.page));
   url.searchParams.set('pageSize', String(payload.pageSize));
   payload.statuses?.forEach((status) => url.searchParams.append('status', status));
@@ -653,24 +690,6 @@ export async function deleteComponent(componentId: string): Promise<void> {
   await requestVoid(pathFor('componentDetail', { componentId }), { method: 'DELETE' });
 }
 
-export async function purgeComponent(
-  componentId: string,
-  confirmComponentName: string,
-): Promise<ComponentTaskResponse> {
-  const context = currentTaskContext();
-  const accepted = await requestJson<AcceptedTask>(pathFor('componentPurge', { componentId }), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      confirmComponentName,
-      deleteStorageObjects: true,
-      locale: context.locale,
-      timezone: context.timezone,
-    }),
-  });
-  return waitForTask(accepted.taskId);
-}
-
 export async function getComponentVersion(versionId: string): Promise<ComponentVersionResponse> {
   const version = await requestJson<GoComponentVersionResponse>(pathFor('componentVersion', { versionId }));
   return componentVersionFromGo(version);
@@ -694,17 +713,9 @@ export async function deleteComponentVersion(
   await requestVoid(pathFor('componentVersionDelete', { versionId: version.id }), { method: 'DELETE' });
 }
 
-/** Load one explicit ComponentVersion using the same real Part mesh contract as the viewer. */
+/** 只读取 Worker 已生成并验证的 ComponentVersion GLB；首次生成不由前端触发。 */
 export async function loadComponentVersionPreview(versionId: string): Promise<ComponentVersionPreviewModelResponse> {
-  let preview = await requestJson<GoComponentPreview>(pathFor('componentVersionPreview', { versionId }));
-  if (preview.status === 'pending' || preview.status === 'stale') {
-    const accepted = await requestJson<AcceptedTask>(
-      pathFor('componentVersionPreviewMaterialize', { versionId }),
-      { method: 'POST' },
-    );
-    await waitForTask(accepted.taskId);
-    preview = await requestJson<GoComponentPreview>(pathFor('componentVersionPreview', { versionId }));
-  }
+  const preview = await requestJson<GoComponentPreview>(pathFor('componentVersionPreview', { versionId }));
   if (preview.status === 'failed') {
     throw new ApiError(
       preview.failure?.code ?? 'common.internal_error',
@@ -712,6 +723,9 @@ export async function loadComponentVersionPreview(versionId: string): Promise<Co
       null,
       400,
     );
+  }
+  if (preview.status !== 'ready' || !preview.artifactId || !preview.url) {
+    throw new ApiError('component_repo.preview_unavailable', { versionId }, null, 409);
   }
   return componentPreviewFromGo(preview);
 }
@@ -730,6 +744,7 @@ export async function loadComponentVersionParts(versionId: string): Promise<Comp
       name: item.name,
       contentLocale: item.contentLocale,
       translationStatus: item.translationStatus,
+      geometryStatus: item.geometryStatus,
     })),
   };
 }
@@ -746,7 +761,7 @@ export async function createComponentImportWithUploadSession(
   sourceFile: File,
   exchangeFile: File | null,
   target: ComponentImportTarget = {},
-): Promise<ComponentCandidateResponse> {
+): Promise<ComponentImportUploadCompleteResponse> {
   return createComponentImportWithProgress(sourceFile, exchangeFile, undefined, target);
 }
 
@@ -755,7 +770,7 @@ export async function createComponentImportWithProgress(
   exchangeFile: File | null,
   onProgress?: (progress: ComponentUploadProgress) => void,
   target: ComponentImportTarget = {},
-): Promise<ComponentCandidateResponse> {
+): Promise<ComponentImportUploadCompleteResponse> {
   if (!supabase) {
     throw new ApiError('component_repo.missing_supabase_config');
   }
@@ -763,15 +778,11 @@ export async function createComponentImportWithProgress(
   const uploadSession = await createComponentUploadSession(sourceFile, exchangeFile, target);
   onProgress?.({ percent: 12, message: tr('componentRepo:uploadChannelReadyUploadingFiles') });
   await uploadComponentSessionFiles(uploadSession, sourceFile, exchangeFile, onProgress);
-  onProgress?.({ percent: 92, message: tr('componentRepo:filesUploadedProcessingComponent') });
+  onProgress?.({ percent: 92, message: tr('componentRepo:filesUploadedVerifyingIntegrity') });
   const completion = await completeComponentUploadSession(uploadSession.id);
-  const candidate = await waitForComponentImportCandidate(
-    completion.importId,
-    completion.taskId,
-    uploadSession.id,
-  );
-  onProgress?.({ percent: 100, message: tr('componentRepo:componentReadyForReview') });
-  return candidate;
+  // complete 返回 202 后上传交互立即结束；解析、BOM 和 GLB 由持久 Worker 异步推进。
+  onProgress?.({ percent: 100, message: tr('componentRepo:uploadComplete') });
+  return completion;
 }
 
 export async function createComponentUploadSession(
@@ -845,24 +856,25 @@ export async function getComponentImport(importId: string): Promise<ComponentImp
   );
 }
 
-const componentImportPollIntervalMs = 1_000;
-const componentImportPollTimeoutMs = 10 * 60 * 1_000;
-
-async function waitForComponentImportCandidate(
-  importId: string,
-  taskId: string,
-  uploadSessionId: string,
-): Promise<ComponentCandidateResponse> {
-  await waitForTask(taskId);
-  const importJob = await getComponentImport(importId);
-  if (importJob.failure) {
-    throw new ApiError(importJob.failure.code, importJob.failure.params, null, 400);
-  }
-  if (!importJob.candidateId) {
-    throw new ApiError('component_repo.component_processing_failed', { uploadSessionId }, null, 400);
-  }
-  return getCandidate(importJob.candidateId);
+/** 读取持久化导入历史；该请求只观察 API/Worker 已提交的状态，不触发后台处理。 */
+export async function listComponentImports(options: {
+  page: number;
+  pageSize: number;
+  processingStatus?: ComponentImportRecordResponse['processingStatus'] | null;
+  query?: string;
+  componentId?: string | null;
+}): Promise<ComponentImportHistoryResponse> {
+  const url = new URL(appConfig.componentRepoApi.componentImports, window.location.origin);
+  url.searchParams.set('page', String(options.page));
+  url.searchParams.set('pageSize', String(options.pageSize));
+  if (options.processingStatus) url.searchParams.set('processingStatus', options.processingStatus);
+  if (options.query) url.searchParams.set('query', options.query);
+  if (options.componentId) url.searchParams.set('componentId', options.componentId);
+  return requestJson<ComponentImportHistoryResponse>(url.toString());
 }
+
+const taskPollIntervalMs = 1_000;
+const taskPollTimeoutMs = 10 * 60 * 1_000;
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -927,6 +939,11 @@ export async function validateCandidate(candidateId: string): Promise<ComponentV
   const task = await waitForTask(accepted.taskId);
   const reportId = String(task.result.validationReportId ?? '');
   if (!reportId) throw new ApiError('common.invalid_response');
+  return getValidationReport(reportId);
+}
+
+// 读取持久化验证报告；可见性由 Go Backend 按 Draft/Published Version 边界判定。
+export async function getValidationReport(reportId: string): Promise<ComponentValidationReportResponse> {
   return requestJson<ComponentValidationReportResponse>(pathFor('validationReport', { reportId }));
 }
 
@@ -1017,7 +1034,7 @@ export async function getTask(taskId: string): Promise<ComponentTaskResponse> {
 }
 
 export async function waitForTask(taskId: string): Promise<ComponentTaskResponse> {
-  const deadline = Date.now() + componentImportPollTimeoutMs;
+  const deadline = Date.now() + taskPollTimeoutMs;
   while (Date.now() < deadline) {
     const task = await getTask(taskId);
     if (task.status === 'succeeded') return task;
@@ -1027,7 +1044,7 @@ export async function waitForTask(taskId: string): Promise<ComponentTaskResponse
     if (task.status === 'cancelled') {
       throw new ApiError('request.failed', {}, null, 409);
     }
-    await delay(componentImportPollIntervalMs);
+    await delay(taskPollIntervalMs);
   }
   throw new ApiError('request.failed', { taskId }, null, 408);
 }
@@ -1069,22 +1086,9 @@ function responseFilename(response: Response): string | null {
 }
 
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
-  return apiRequestJson<T>(input, await withAuth(init));
+  return authenticatedRequestJson<T>(input, init);
 }
 
 async function requestVoid(input: RequestInfo | URL, init?: RequestInit): Promise<void> {
-  await apiFetch(input, await withAuth(init));
-}
-
-async function withAuth(init?: RequestInit): Promise<RequestInit | undefined> {
-  const accessToken = await currentAccessToken();
-  if (!accessToken) {
-    return init;
-  }
-  const headers = new Headers(init?.headers);
-  headers.set('Authorization', `Bearer ${accessToken}`);
-  return {
-    ...init,
-    headers,
-  };
+  await authenticatedApiFetch(input, init);
 }

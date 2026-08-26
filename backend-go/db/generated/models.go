@@ -165,6 +165,12 @@ type ComponentRepoComponentVersion struct {
 	DeletedBy               pgtype.UUID
 	PreviewTaskID           pgtype.UUID
 	PreviewGeneration       int32
+	PreviewBboxMin          []float64
+	PreviewBboxMax          []float64
+	LogicalWidthStud        pgtype.Numeric
+	LogicalDepthStud        pgtype.Numeric
+	LogicalHeightPlate      pgtype.Numeric
+	PreviewBoundsComplete   *bool
 }
 
 type ComponentRepoConnectorAnalysis struct {
@@ -289,6 +295,19 @@ type ComponentRepoPart struct {
 	CreatedAt            pgtype.Timestamptz
 }
 
+type ComponentRepoPartColliderDefinition struct {
+	ID                   int64
+	PartLibraryVersionID pgtype.UUID
+	SourceColliderID     int64
+	LdrawPartNum         string
+	ColliderKind         string
+	Position             []float64
+	Orientation          []float64
+	HalfExtents          []float64
+	RawParams            []byte
+	CreatedAt            pgtype.Timestamptz
+}
+
 type ComponentRepoPartConnectorDefinition struct {
 	ID                      int64
 	PartLibraryVersionID    pgtype.UUID
@@ -347,14 +366,21 @@ type ComponentRepoPartGeometry struct {
 }
 
 type ComponentRepoPartLibraryVersion struct {
-	ID             pgtype.UUID
-	SourceName     string
-	SourceHash     string
-	ConnectorCount int32
-	Status         string
-	Metadata       []byte
-	CreatedBy      pgtype.UUID
-	CreatedAt      pgtype.Timestamptz
+	ID                     pgtype.UUID
+	SourceName             string
+	SourceHash             string
+	ConnectorCount         int32
+	Status                 string
+	Metadata               []byte
+	CreatedBy              pgtype.UUID
+	CreatedAt              pgtype.Timestamptz
+	PreviewReady           bool
+	RelationReady          bool
+	ConnectorSourceHash    *string
+	ConnectorParserVersion *string
+	ColliderCount          int32
+	ColliderSourceHash     *string
+	ColliderParserVersion  *string
 }
 
 type ComponentRepoPartPreview struct {

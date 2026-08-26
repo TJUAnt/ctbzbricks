@@ -37,6 +37,7 @@ type Component struct {
 	CurrentVersionID   *string         `json:"currentVersionId"`
 	LogicalSize        *LogicalSize    `json:"logicalSize"`
 	Metadata           json.RawMessage `json:"metadata"`
+	OwnedByActor       bool            `json:"ownedByActor"`
 	Subscribed         bool            `json:"subscribed"`
 	TranslationMissing bool            `json:"translationMissing"`
 	CreatedAt          time.Time       `json:"createdAt"`
@@ -63,18 +64,6 @@ type UpdateComponentInput struct {
 	Tags          *[]string      `json:"tags"`
 	Category      OptionalString `json:"category"`
 	ContentLocale *string        `json:"contentLocale"`
-}
-
-type PurgeComponentInput struct {
-	ConfirmComponentName string `json:"confirmComponentName"`
-	DeleteStorageObjects bool   `json:"deleteStorageObjects"`
-	Locale               string `json:"locale"`
-	Timezone             string `json:"timezone"`
-}
-
-type ComponentPurgeAccepted struct {
-	TaskID string `json:"taskId"`
-	Status string `json:"status"`
 }
 
 type OptionalString struct {
@@ -163,7 +152,7 @@ type Group struct {
 type ComponentGroupSearchRequest struct {
 	PageRequest
 	Locale   string
-	Query    string
+	Queries  []string
 	Statuses []string
 }
 

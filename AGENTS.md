@@ -8,13 +8,20 @@ BrickBuilder is migrating from a Python/FastAPI backend to a Go system backend, 
 
 1. `docs/go_backend_migration_principles.md` — approved target architecture and non-negotiable migration rules.
 2. `docs/go_component_migration_plan.md` — phase boundaries, dependencies, API direction, and acceptance gates.
-3. `docs/go_migration_progress.md` — completed facts, current phase, and next work.
+3. `docs/api.md` — current Component Repo Go endpoints, ownership boundaries, and execution logic.
+4. `docs/go_migration_progress.md` — completed facts, current phase, and next work.
 
-At the beginning of implementation, identify the migration phase being changed. At completion, update `docs/go_migration_progress.md` with evidence and validation results. Do not mark a phase complete because scaffolding or planning exists.
+At the beginning of implementation, identify the migration phase being changed. At completion, update
+`docs/go_migration_progress.md` with evidence and validation results, and update `docs/api.md` whenever a
+Component Repo route, request/response contract, authorization boundary, or execution flow changes. Do not mark
+a phase complete because scaffolding or planning exists.
 
 ### Non-negotiable Go migration rules
 
-- Go is the system backend; Python remains only for explicit algorithm-worker responsibilities after a domain migrates.
+- Go is the system backend. Component Repo's target runtime is Go-only: its public API and persistent task
+  consumers must run in Go. `component.relations.detect` is a temporary migration exception, not a permanent
+  Python boundary; do not add new Component Repo Python task types or expand that exception. Other domains may
+  retain explicit Python algorithm workers only when their own approved roadmap says so.
 - Build a modular monolith first: Gin API plus independently runnable Workers. Do not introduce a business gateway or Component Repo microservice without a new approved decision.
 - New Go persistence is PostgreSQL-only and uses `sqlc` with `pgx/v5`/`pgxpool`. Do not add MySQL compatibility or an ORM alongside sqlc.
 - `sqlc` generates data-access code but does not own migrations. Migration authority is assigned by PostgreSQL schema/domain: Goose exclusively owns `component_repo`; Alembic temporarily owns unmigrated legacy objects in `public` and the already-established Supabase policies in the provider-owned `storage` schema. Goose must not manage `storage`, Alembic must not manage `component_repo`, and no object may have two authorities.
@@ -50,6 +57,23 @@ At the beginning of the task, tell the user which i18n surfaces are affected. If
 - Adding a production language is catalog/resource work, not a business-code branch. Never add `if (locale === ...)` behavior to feature code.
 - Missing resources fail CI. Do not add `defaultValue`, source-text fallbacks, compatibility shims, or silent missing-key behavior.
 - Resource changes require catalog version, content hash, and `I18N_RELEASE_NOTES.md` updates.
+
+## Mandatory Chinese code comments
+
+- 新增或实质修改的代码接口、公开入口和主要执行入口必须添加清晰的中文注释，包括但不限于：
+  导出函数与类型、HTTP Handler、应用服务方法、Worker/Task Handler、存储边界、数据迁移或维护命令，
+  以及不易直接理解的 SQL 查询和迁移逻辑。
+- 接口注释应按实际需要说明职责、重要输入与输出、授权或所有权边界、事务或异步边界，以及关键副作用；
+  不得只重复函数名、类型名或代码字面含义。
+- 主要业务逻辑必须在关键决策点添加中文注释，重点解释“为什么这样处理”以及必须维持的不变量，尤其是
+  幂等、重试、任务依赖、事务一致性、不可变版本、源文件与派生资产边界、对象存储补偿，以及
+  Scene/BOM/几何算法等逻辑。避免逐行翻译代码或为显而易见的语句添加噪声注释。
+- 修改既有接口或主要逻辑时，必须同步检查并更新附近的中文注释；与代码行为不一致的过期注释视为缺陷。
+- 中文代码注释只用于开发者文档，不得作为用户可见文案、API 最终错误消息或持久化翻译内容；稳定机器值、
+  标识符、JSON 字段、API/Task/Error Code 和 SQL 标识符仍遵守现有 i18n 与接口规则。
+- 生成文件（包括 sqlc 生成代码）以及 vendored/第三方代码不适用本规则，且不得为了补充注释而手工修改；
+  相关说明应写在手写源码、SQL 查询文件或迁移文件中。
+- 代码注释是对 `docs/api.md`、迁移文档和测试的补充，不能替代这些文档及验证要求。
 
 ## Required completion checks
 

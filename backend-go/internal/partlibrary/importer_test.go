@@ -1,6 +1,7 @@
 package partlibrary
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +9,47 @@ import (
 	"testing"
 	"time"
 )
+
+func TestImportStudioLibraryDryRunIncludesConnectorAndColliderCapabilities(t *testing.T) {
+	root := t.TempDir()
+	ldraw := filepath.Join(root, "ldraw")
+	mustMkdir(t, filepath.Join(ldraw, "parts"))
+	mustMkdir(t, filepath.Join(ldraw, "connectivity"))
+	mustMkdir(t, filepath.Join(ldraw, "collider"))
+	mustWrite(t, filepath.Join(ldraw, "parts", "3001.dat"), "0 Brick\n4 16 0 0 0 20 0 0 20 8 0 0 8 0\n")
+	var connectivity bytes.Buffer
+	writeStudioMatrixFixture(t, &connectivity, 3, 23, [3]float32{-10, 0, 10}, 2, 2, []studioMatrixCell{
+		{3, 1}, {0, 4}, {3, 1}, {0, 4}, {10, 4}, {0, 4}, {3, 1}, {0, 4}, {3, 1},
+	})
+	if err := os.WriteFile(filepath.Join(ldraw, "connectivity", "3001.conn"), connectivity.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(ldraw, "collider", "3001.col"), "9 0 1 0 0 0 1 0 0 0 1 0 2 0 10 3 10 null\n")
+	out := filepath.Join(root, "manifest")
+	manifest, err := GenerateStudioManifest(Options{StudioRoot: root, OutDir: out, GeneratedAt: time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("GenerateStudioManifest: %v", err)
+	}
+	result, err := ImportStudioLibrary(t.Context(), ImportOptions{ManifestPath: manifest.ManifestPath, DryRun: true})
+	if err != nil {
+		t.Fatalf("ImportStudioLibrary: %v", err)
+	}
+	if !result.PreviewReady || !result.RelationReady || result.ConnectorCount != 1 || result.ColliderCount != 1 {
+		t.Fatalf("capabilities = %+v", result)
+	}
+	if result.ColliderStorage != ColliderStorageMetadataOnly || result.ColliderStored != 0 {
+		t.Fatalf("default collider storage = %+v", result)
+	}
+	if len(result.ConnectorHash) != 64 || len(result.ColliderHash) != 64 || len(result.SidecarFailuresSample) != 0 {
+		t.Fatalf("sidecar evidence = %+v", result)
+	}
+	databaseRows, err := ImportStudioLibrary(t.Context(), ImportOptions{
+		ManifestPath: manifest.ManifestPath, DryRun: true, ColliderStorage: ColliderStorageDatabase,
+	})
+	if err != nil || databaseRows.ColliderStored != 1 {
+		t.Fatalf("database collider storage = %+v error=%v", databaseRows, err)
+	}
+}
 
 func TestImportStudioLibraryDryRun(t *testing.T) {
 	root := t.TempDir()
@@ -72,6 +114,24 @@ func TestComputeGeometryStatsUnofficialManifestPath(t *testing.T) {
 	}
 	if stats.FaceCount != 1 || stats.VertexCount != 3 {
 		t.Fatalf("face/vertex count = %d/%d, want 1/3", stats.FaceCount, stats.VertexCount)
+	}
+}
+
+func TestLDrawSourceNameUsesDescriptionAndFallsBackToPartNumber(t *testing.T) {
+	root := t.TempDir()
+	ldraw := filepath.Join(root, "ldraw")
+	mustMkdir(t, filepath.Join(ldraw, "parts"))
+	mustWrite(t, filepath.Join(ldraw, "parts", "3001.dat"), "0 Brick 2 x 4\n0 Name: 3001.dat\n")
+	mustWrite(t, filepath.Join(ldraw, "parts", "meta.dat"), "0 !LDRAW_ORG Part UPDATE 2026-01\n0 BFC CERTIFY CCW\n")
+	index, err := newLDrawIndex(ldraw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := index.sourceName("parts/3001.dat", "3001.dat"); got != "Brick 2 x 4" {
+		t.Fatalf("source name = %q", got)
+	}
+	if got := index.sourceName("parts/meta.dat", "meta.dat"); got != "meta.dat" {
+		t.Fatalf("fallback source name = %q", got)
 	}
 }
 

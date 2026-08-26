@@ -1,9 +1,11 @@
 import React from 'react';
+import { localizeStructuredMessage } from '../api/client';
 import {
   AlertTriangle,
   Boxes,
   Braces,
   Crosshair,
+  FileClock,
   FolderTree,
   GitBranch,
   Layers3,
@@ -11,6 +13,7 @@ import {
   Plug,
   RefreshCw,
   Rocket,
+  ShieldCheck,
   Trash2,
   X,
 } from 'lucide-react';
@@ -23,24 +26,27 @@ import {
   deleteComponent,
   getComponent,
   getConnectorAnalysis,
+  getValidationReport,
   listComponentGroupIds,
   listComponentGroups,
   listComponentVersions,
   listRelations,
   loadComponentVersionParts,
   loadComponentVersionPreview,
-  purgeComponent,
   publishVersion,
+  validateCandidate,
   type ComponentConnectorAnalysisResponse,
   type ComponentConnectorResponse,
   type ComponentGroupTreeResponse,
   type ComponentRelationCandidateResponse,
+  type ComponentValidationReportResponse,
   type ComponentResponse,
   type ComponentVersionPartsResponse,
   type ComponentVersionPreviewModelResponse,
   type ComponentVersionResponse,
 } from './componentRepoApi';
 import { ComponentVersionActions } from './ComponentVersionActions';
+import { ComponentImportHistoryList } from './ComponentImportHistoryPage';
 import { routeFor, StatusPill } from './ComponentRepoPage';
 
 type ComponentDetailState = {
@@ -51,12 +57,16 @@ type ComponentDetailState = {
   partDetails: ComponentVersionPartsResponse | null;
   connectorAnalysis: ComponentConnectorAnalysisResponse | null;
   relations: ComponentRelationCandidateResponse[];
+  validationReport: ComponentValidationReportResponse | null;
   groupTree: ComponentGroupTreeResponse | null;
   groupIds: string[];
   loading: boolean;
+  previewLoading: boolean;
   connectorLoading: boolean;
   partsLoading: boolean;
+  validationLoading: boolean;
   error: string | null;
+  previewError: string | null;
   connectorError: string | null;
 };
 
@@ -66,6 +76,7 @@ type PartSummary = {
   name: string;
   quantity: number;
   partLibraryVersionId: string | null;
+  geometryStatus: 'ready' | 'failed' | 'missing';
 };
 
 type ConnectorPartGroup = {
@@ -104,13 +115,12 @@ export function ComponentDetailPage() {
   const [actionNotice, setActionNotice] = React.useState<string | null>(null);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [publishing, setPublishing] = React.useState(false);
+  const [validating, setValidating] = React.useState(false);
   const [confirmingDeleteComponent, setConfirmingDeleteComponent] = React.useState(false);
   const [deletingComponent, setDeletingComponent] = React.useState(false);
-  const [confirmingPurgeComponent, setConfirmingPurgeComponent] = React.useState(false);
-  const [purgingComponent, setPurgingComponent] = React.useState(false);
-  const [purgeConfirmName, setPurgeConfirmName] = React.useState('');
   const [activeConnectorPartId, setActiveConnectorPartId] = React.useState<string | null>(null);
   const [selectedConnectorId, setSelectedConnectorId] = React.useState<string | null>(null);
+  const [historyTab, setHistoryTab] = React.useState<'versions' | 'imports'>('versions');
   const trRef = React.useRef(tr);
   trRef.current = tr;
   const [state, setState] = React.useState<ComponentDetailState>({
@@ -121,12 +131,16 @@ export function ComponentDetailPage() {
     partDetails: null,
     connectorAnalysis: null,
     relations: [],
+    validationReport: null,
     groupTree: null,
     groupIds: [],
     loading: true,
+    previewLoading: true,
     connectorLoading: true,
     partsLoading: true,
+    validationLoading: true,
     error: null,
+    previewError: null,
     connectorError: null,
   });
 
@@ -136,9 +150,12 @@ export function ComponentDetailPage() {
       setState((current) => ({
         ...current,
         loading: true,
+        previewLoading: true,
         connectorLoading: true,
         partsLoading: true,
+        validationLoading: true,
         error: null,
+        previewError: null,
         connectorError: null,
       }));
       try {
@@ -166,6 +183,11 @@ export function ComponentDetailPage() {
         const partDetailsPromise = loadComponentVersionParts(version.id)
           .then((partDetails) => ({ partDetails, failed: false }))
           .catch(() => ({ partDetails: null, failed: true }));
+        const validationReportPromise = version.validationReportId
+          ? getValidationReport(version.validationReportId)
+            .then((validationReport) => ({ validationReport }))
+            .catch(() => ({ validationReport: null }))
+          : Promise.resolve({ validationReport: null });
         if (!active) return;
         setState((current) => ({
           ...current,
@@ -176,8 +198,17 @@ export function ComponentDetailPage() {
           groupIds,
           loading: false,
         }));
-        const [preview, relations] = await Promise.all([
-          loadComponentVersionPreview(version.id),
+        // Preview 是可重建派生数据。历史 generator stale 或几何暂不可用时只降级预览区域，
+        // 不能清空已加载的 Component，也不能阻断 owner 的发布、验证和删除操作。
+        const [previewResult, relations] = await Promise.all([
+          loadComponentVersionPreview(version.id)
+            .then((preview) => ({ preview, previewError: null as string | null }))
+            .catch((previewError: unknown) => ({
+              preview: null,
+              previewError: previewError instanceof Error
+                ? previewError.message
+                : trRef.current('errors:common.unknown'),
+            })),
           version.componentCandidateId
             ? listRelations(version.componentCandidateId)
             : Promise.resolve([]),
@@ -187,16 +218,20 @@ export function ComponentDetailPage() {
           component,
           version,
           versions,
-          preview,
+          preview: previewResult.preview,
           partDetails: null,
           connectorAnalysis: null,
           relations,
+          validationReport: null,
           groupTree,
           groupIds,
           loading: false,
+          previewLoading: false,
           connectorLoading: true,
           partsLoading: true,
+          validationLoading: true,
           error: null,
+          previewError: previewResult.previewError,
           connectorError: null,
         });
 
@@ -216,13 +251,23 @@ export function ComponentDetailPage() {
           partDetails,
           partsLoading: false,
         }));
+
+        const { validationReport } = await validationReportPromise;
+        if (!active) return;
+        setState((current) => ({
+          ...current,
+          validationReport,
+          validationLoading: false,
+        }));
       } catch (error) {
         if (!active) return;
         setState((current) => ({
           ...current,
           loading: false,
+          previewLoading: false,
           connectorLoading: false,
           partsLoading: false,
+          validationLoading: false,
           error: error instanceof Error ? error.message : appConfig.texts.loadFailed,
         }));
       }
@@ -273,24 +318,39 @@ export function ComponentDetailPage() {
   const registerPreviewReset = React.useCallback((reset: (() => void) | null) => {
     resetViewRef.current = reset;
   }, []);
+  // 所有权由已鉴权的 Go API 投影，避免浏览器 auth 对象尚未同步或格式漂移时误隐藏管理操作。
+  // ownedByActor 缺失时仅为兼容尚未重启的旧开发 API，回退到原 ownerId 判断。
+  const componentOwnedByActor = Boolean(
+    state.component
+      && (
+        state.component.ownedByActor
+        ?? (!isAuthConfigured || state.component.ownerId === user?.id)
+      ),
+  );
+  const componentOwnershipResolved = Boolean(
+    state.component
+      && (typeof state.component.ownedByActor === 'boolean' || !isAuthLoading),
+  );
   const canPublish = Boolean(
     state.component
       && state.version?.status === 'draft'
       && state.component.contentKind === 'user'
-      && !isAuthLoading
-      && (
-        !isAuthConfigured
-        || state.component.ownerId === user?.id
-      ),
+      && componentOwnershipResolved
+      && componentOwnedByActor,
+  );
+  const canValidate = Boolean(
+    state.component
+      && state.version?.componentCandidateId
+      && (state.version.status === 'draft' || state.version.status === 'published')
+      && state.component.contentKind === 'user'
+      && componentOwnershipResolved
+      && componentOwnedByActor,
   );
   const canDeleteComponent = Boolean(
     state.component
       && state.component.contentKind === 'user'
-      && !isAuthLoading
-      && (
-        !isAuthConfigured
-        || state.component.ownerId === user?.id
-      ),
+      && componentOwnershipResolved
+      && componentOwnedByActor,
   );
   const publish = async () => {
     if (!state.version || !canPublish) return;
@@ -309,6 +369,26 @@ export function ComponentDetailPage() {
       );
     } finally {
       setPublishing(false);
+    }
+  };
+  // 详情页只触发持久化异步验证；发布按钮与验证任务保持两个独立动作。
+  const validate = async () => {
+    if (!state.version?.componentCandidateId || !canValidate) return;
+    setValidating(true);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const validationReport = await validateCandidate(state.version.componentCandidateId);
+      setState((current) => ({ ...current, validationReport, validationLoading: false }));
+      setActionNotice(tr('componentRepo:validationComplete'));
+    } catch (validationError) {
+      setActionError(
+        validationError instanceof Error
+          ? validationError.message
+          : tr('errors:common.unknown'),
+      );
+    } finally {
+      setValidating(false);
     }
   };
   const confirmDeleteComponent = async () => {
@@ -330,29 +410,6 @@ export function ComponentDetailPage() {
       setDeletingComponent(false);
     }
   };
-  const confirmPurgeComponent = async () => {
-    if (!state.component || !canDeleteComponent) return;
-    if (purgeConfirmName !== state.component.name) {
-      setActionError(tr('componentRepo:purgeComponentNameMismatch'));
-      return;
-    }
-    setPurgingComponent(true);
-    setActionError(null);
-    setActionNotice(null);
-    try {
-      await purgeComponent(state.component.id, purgeConfirmName);
-      navigate(routeFor('componentRepo'));
-    } catch (purgeError) {
-      setActionError(
-        purgeError instanceof Error
-          ? purgeError.message
-          : tr('errors:common.unknown'),
-      );
-    } finally {
-      setPurgingComponent(false);
-    }
-  };
-
   return (
     <section className="component-repo-page component-detail-page">
       <header className="component-repo-header">
@@ -367,7 +424,7 @@ export function ComponentDetailPage() {
           {canDeleteComponent ? (
             <button
               className="component-repo-danger-button"
-              disabled={deletingComponent || purgingComponent}
+              disabled={deletingComponent}
               onClick={() => {
                 setActionError(null);
                 setActionNotice(null);
@@ -379,20 +436,16 @@ export function ComponentDetailPage() {
               {tr('componentRepo:deleteComponent')}
             </button>
           ) : null}
-          {canDeleteComponent ? (
+          {canValidate ? (
             <button
-              className="component-repo-danger-button component-repo-permanent-danger-button"
-              disabled={deletingComponent || purgingComponent}
-              onClick={() => {
-                setActionError(null);
-                setActionNotice(null);
-                setPurgeConfirmName('');
-                setConfirmingPurgeComponent(true);
-              }}
+              disabled={validating}
+              onClick={() => void validate()}
               type="button"
             >
-              <Trash2 aria-hidden="true" />
-              {tr('componentRepo:purgeComponent')}
+              {validating
+                ? <LoaderCircle aria-hidden="true" className="component-library-spin" />
+                : <ShieldCheck aria-hidden="true" />}
+              {tr('componentRepo:validate')}
             </button>
           ) : null}
           {canPublish ? (
@@ -484,96 +537,6 @@ export function ComponentDetailPage() {
         </div>
       ) : null}
 
-      {confirmingPurgeComponent && state.component ? (
-        <div className="component-version-delete-backdrop">
-          <section
-            aria-labelledby={`purge-component-title-${state.component.id}`}
-            aria-modal="true"
-            className="component-version-delete-dialog"
-            role="dialog"
-          >
-            <header>
-              <div>
-                <span><Trash2 aria-hidden="true" /></span>
-                <h2 id={`purge-component-title-${state.component.id}`}>
-                  {tr('componentRepo:purgeComponentTitle')}
-                </h2>
-              </div>
-              <button
-                aria-label={tr('componentRepo:close')}
-                disabled={purgingComponent}
-                onClick={() => {
-                  setConfirmingPurgeComponent(false);
-                  setActionError(null);
-                  setPurgeConfirmName('');
-                }}
-                type="button"
-              >
-                <X aria-hidden="true" />
-              </button>
-            </header>
-            <div className="component-version-delete-body">
-              <p>
-                {tr('componentRepo:purgeComponentDescription', {
-                  componentName: state.component.name,
-                })}
-              </p>
-              <div>
-                <AlertTriangle aria-hidden="true" />
-                {tr('componentRepo:purgeComponentStorageWarning')}
-              </div>
-              <label className="component-purge-confirm-field">
-                <span>{tr('componentRepo:purgeComponentConfirmLabel')}</span>
-                <input
-                  disabled={purgingComponent}
-                  onChange={(event) => setPurgeConfirmName(event.target.value)}
-                  placeholder={tr('componentRepo:purgeComponentConfirmPlaceholder')}
-                  type="text"
-                  value={purgeConfirmName}
-                />
-              </label>
-              {purgeConfirmName && purgeConfirmName !== state.component.name ? (
-                <small className="component-purge-confirm-mismatch">
-                  {tr('componentRepo:purgeComponentNameMismatch')}
-                </small>
-              ) : null}
-              {actionError ? (
-                <div className="component-version-delete-error">
-                  <AlertTriangle aria-hidden="true" />
-                  {actionError}
-                </div>
-              ) : null}
-            </div>
-            <footer>
-              <button
-                disabled={purgingComponent}
-                onClick={() => {
-                  setConfirmingPurgeComponent(false);
-                  setActionError(null);
-                  setPurgeConfirmName('');
-                }}
-                type="button"
-              >
-                {tr('componentRepo:cancel')}
-              </button>
-              <button
-                className="component-version-delete-confirm"
-                disabled={purgingComponent || purgeConfirmName !== state.component.name}
-                onClick={() => void confirmPurgeComponent()}
-                type="button"
-              >
-                {purgingComponent ? <LoaderCircle aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
-                {tr(
-                  purgingComponent
-                    ? 'componentRepo:purgingComponent'
-                    : 'componentRepo:purgeComponent',
-                )}
-              </button>
-            </footer>
-          </section>
-        </div>
-      ) : null}
-
       {state.error ? <div className="asset-error">{state.error}</div> : null}
       {actionError ? <div className="asset-error">{actionError}</div> : null}
       {actionNotice ? <div className="component-library-notice">{actionNotice}</div> : null}
@@ -588,7 +551,10 @@ export function ComponentDetailPage() {
               selectedConnector={selectedSceneConnector}
             />
           ) : null}
-          {!state.preview?.model && !state.error ? (
+          {state.previewError ? (
+            <div className="asset-error">{state.previewError}</div>
+          ) : null}
+          {!state.preview?.model && state.previewLoading && !state.previewError ? (
             <div className="asset-loading">{tr('componentRepo:loadingPreview')}</div>
           ) : null}
           {state.preview?.model ? (
@@ -621,6 +587,7 @@ export function ComponentDetailPage() {
           <strong>{state.component?.name ?? tr('componentRepo:component')}</strong>
           <span>{state.version ? `v${state.version.version} · ${state.version.id}` : '—'}</span>
           {state.version ? <StatusPill status={state.version.status} /> : null}
+          {state.validationReport?.passed ? <StatusPill status="passed" /> : null}
           <div className="component-detail-groups">
             <span><FolderTree aria-hidden="true" />{tr('componentRepo:groups')}</span>
             <div>
@@ -631,6 +598,26 @@ export function ComponentDetailPage() {
           </div>
         </div>
       </section>
+
+      {state.validationLoading && state.version?.validationReportId ? (
+        <section className="component-repo-panel">
+          <div className="asset-loading">{appConfig.texts.loading}</div>
+        </section>
+      ) : null}
+      {state.validationReport ? (
+        <section className="component-repo-panel component-repo-validation">
+          <div>
+            <strong>{tr('componentRepo:validation')}</strong>
+            <StatusPill status={state.validationReport.passed ? 'passed' : 'blocked'} />
+          </div>
+          {state.validationReport.checks.map((check) => (
+            <div className="component-repo-check" key={check.code}>
+              <span>{localizeStructuredMessage(check)}</span>
+              <StatusPill status={check.status} />
+            </div>
+          ))}
+        </section>
+      ) : null}
 
       <section className="component-detail-metrics" aria-label={tr('componentRepo:componentOverview')}>
         <DetailMetric icon={<Boxes />} label={tr('componentRepo:partCount')} value={state.partDetails?.partCount ?? 0} />
@@ -719,39 +706,67 @@ export function ComponentDetailPage() {
           ) : partSummaries.length > 0 ? (
             <div className="component-detail-part-card-grid">
               {partSummaries.map((part) => (
-                <PartSummaryCard key={part.key} part={part} />
+                <PartSummaryCard
+                  key={part.key}
+                  missingGeometryLabel={tr('componentRepo:previewGeometryMissing')}
+                  part={part}
+                />
               ))}
             </div>
           ) : <div className="asset-empty">{tr('componentRepo:noParts')}</div>}
         </article>
 
         <article className="component-repo-panel component-detail-wide-panel">
-          <div className="component-repo-panel-title">
-            <GitBranch aria-hidden="true" />
-            <span>{tr('componentRepo:versionHistory')}</span>
+          <div aria-label={tr('componentRepo:importHistoryForComponent')} className="component-detail-history-tabs" role="tablist">
+            <button
+              aria-selected={historyTab === 'versions'}
+              className={historyTab === 'versions' ? 'component-detail-history-tab-active' : undefined}
+              onClick={() => setHistoryTab('versions')}
+              role="tab"
+              type="button"
+            >
+              <GitBranch aria-hidden="true" />
+              {tr('componentRepo:versionHistory')}
+            </button>
+            <button
+              aria-selected={historyTab === 'imports'}
+              className={historyTab === 'imports' ? 'component-detail-history-tab-active' : undefined}
+              onClick={() => setHistoryTab('imports')}
+              role="tab"
+              type="button"
+            >
+              <FileClock aria-hidden="true" />
+              {tr('componentRepo:importHistory')}
+            </button>
           </div>
-          <div className="component-detail-version-list">
-            {state.versions.map((version) => (
-              <div key={version.id}>
-                <strong>v{version.version}</strong>
-                <span>{version.id}</span>
-                <StatusPill status={version.status} />
-                {state.component ? (
-                  <ComponentVersionActions
-                    componentName={state.component.name}
-                    isOnlyVersion={state.versions.length === 1}
-                    onDeleted={(deletedVersion) => {
-                      setActionNotice(tr('componentRepo:versionDeleted', {
-                        version: deletedVersion.version,
-                      }));
-                      setRefreshToken((current) => current + 1);
-                    }}
-                    version={version}
-                  />
-                ) : null}
-              </div>
-            ))}
-          </div>
+          {historyTab === 'versions' ? (
+            <div className="component-detail-version-list" role="tabpanel">
+              {state.versions.map((version) => (
+                <div key={version.id}>
+                  <strong>v{version.version}</strong>
+                  <span>{version.id}</span>
+                  <StatusPill status={version.status} />
+                  {state.component ? (
+                    <ComponentVersionActions
+                      componentName={state.component.name}
+                      isOnlyVersion={state.versions.length === 1}
+                      onDeleted={(deletedVersion) => {
+                        setActionNotice(tr('componentRepo:versionDeleted', {
+                          version: deletedVersion.version,
+                        }));
+                        setRefreshToken((current) => current + 1);
+                      }}
+                      version={version}
+                    />
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div role="tabpanel">
+              <ComponentImportHistoryList componentId={componentId} />
+            </div>
+          )}
         </article>
       </section>
     </section>
@@ -787,23 +802,37 @@ function DetailMetric({
   );
 }
 
-function PartSummaryCard({ part }: { part: PartSummary }) {
+function PartSummaryCard({
+  part,
+  missingGeometryLabel,
+}: {
+  part: PartSummary;
+  missingGeometryLabel: string;
+}) {
+  const geometryAvailable = part.geometryStatus === 'ready';
   const content = (
     <>
       <PartCardImage src={null} />
       <span className="component-detail-part-card-copy">
         <strong>{part.name}</strong>
         <small>{part.partRef}</small>
+        {!geometryAvailable ? (
+          <span className="component-detail-part-card-availability">{missingGeometryLabel}</span>
+        ) : null}
         <em>×{part.quantity}</em>
       </span>
     </>
   );
   if (!part.partLibraryVersionId) {
-    return <article className="component-detail-part-card">{content}</article>;
+    return (
+      <article className={`component-detail-part-card${geometryAvailable ? '' : ' is-unavailable'}`}>
+        {content}
+      </article>
+    );
   }
   return (
     <Link
-      className="component-detail-part-card"
+      className={`component-detail-part-card${geometryAvailable ? '' : ' is-unavailable'}`}
       to={`/parts/${encodeURIComponent(part.partLibraryVersionId)}/${encodeURIComponent(part.partRef)}`}
     >
       {content}

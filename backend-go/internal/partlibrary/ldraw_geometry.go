@@ -78,6 +78,47 @@ func ComputeGeometryStatsWithIndex(index *ldrawIndex, manifestRelativePath strin
 	return index.computeStats(manifestRelativePath)
 }
 
+// sourceName 从顶层 LDraw 文件头读取源语言描述；缺少描述不阻断 snapshot 导入，而是退回稳定 Part 编号。
+func (idx *ldrawIndex) sourceName(manifestRelativePath, fallback string) string {
+	sourcePath := LDrawWorkerRelativePath(manifestRelativePath)
+	absolute, ok := idx.files[sourcePath]
+	if !ok {
+		return fallback
+	}
+	file, err := os.Open(absolute)
+	if err != nil {
+		return fallback
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	for lineNumber := 0; lineNumber < 64; lineNumber++ {
+		line, readErr := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if description := ldrawDescription(line); description != "" {
+			return description
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	return fallback
+}
+
+func ldrawDescription(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || fields[0] != "0" {
+		return ""
+	}
+	value := strings.TrimSpace(strings.TrimPrefix(line, "0"))
+	upper := strings.ToUpper(value)
+	for _, prefix := range []string{"FILE ", "NOFILE", "NAME:", "AUTHOR:", "!", "BFC ", "//", "PE_TEX_"} {
+		if strings.HasPrefix(upper, prefix) {
+			return ""
+		}
+	}
+	return value
+}
+
 func (idx *ldrawIndex) computeStats(manifestRelativePath string) (GeometryStats, error) {
 	sourcePath := LDrawWorkerRelativePath(manifestRelativePath)
 	absolute, ok := idx.files[sourcePath]

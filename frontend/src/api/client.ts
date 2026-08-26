@@ -1,6 +1,16 @@
 import i18n from '../i18n';
 import { recordI18nEvent } from '../i18n/telemetry';
 
+type InvalidSessionListener = (rejectedAccessToken: string | null) => void;
+
+const invalidSessionListeners = new Set<InvalidSessionListener>();
+
+/** 订阅 Go 后端的明确会话失效判定；回调只在内存中接收对应请求 token，不进入日志或 DOM。 */
+export function subscribeInvalidSession(listener: InvalidSessionListener): () => void {
+  invalidSessionListeners.add(listener);
+  return () => invalidSessionListeners.delete(listener);
+}
+
 export type ApiErrorParams = Record<string, unknown>;
 export type StructuredMessage = { code: string; params: ApiErrorParams };
 
@@ -53,7 +63,14 @@ export async function apiFetch(
   } catch (cause) {
     throw new ApiError('common.network_error', {}, null, 0, cause);
   }
-  return ensureApiResponse(response, fallbackCode);
+  try {
+    return await ensureApiResponse(response, fallbackCode);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401 && error.code === 'auth.session_invalid') {
+      notifyInvalidSession(accessTokenFromRequest(init));
+    }
+    throw error;
+  }
 }
 
 export async function requestJson<T>(
@@ -159,4 +176,16 @@ function isApiErrorPayload(payload: unknown): payload is ApiErrorPayload {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function notifyInvalidSession(rejectedAccessToken: string | null): void {
+  for (const listener of invalidSessionListeners) {
+    listener(rejectedAccessToken);
+  }
+}
+
+function accessTokenFromRequest(init?: RequestInit): string | null {
+  const authorization = new Headers(init?.headers).get('Authorization')?.trim() ?? '';
+  const match = authorization.match(/^Bearer\s+([^\s]+)$/i);
+  return match?.[1] ?? null;
 }

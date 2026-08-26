@@ -50,7 +50,6 @@ go run ./cmd/migrate up
 go run ./cmd/migrate up
 go run ./cmd/migrate version
 go test -p=1 -tags=integration ./internal/database ./internal/component ./internal/artifact ./internal/task ./internal/worker ./internal/ingestion ./internal/workbench ./internal/httpapi ./internal/partlibrary
-(cd ../backend && ../.venv-app/bin/python -m pytest tests/test_go_component_import_worker.py -q)
 
 before_schema="$test_root/schema-before.sql"
 after_schema="$test_root/schema-after.sql"

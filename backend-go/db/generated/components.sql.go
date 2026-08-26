@@ -100,33 +100,51 @@ SELECT c.id, c.owner_id, c.content_kind,
        COALESCE(CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END, '')::text AS selected_description,
        (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
        (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
-       c.category, c.status, c.current_version_id, c.logical_width_stud,
-       c.logical_depth_stud, c.logical_height_plate, c.metadata, c.created_by,
+       c.category, c.status, c.current_version_id,
+       COALESCE(display_version.logical_width_stud, c.logical_width_stud) AS logical_width_stud,
+       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
+       COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
+       c.metadata, c.created_by,
        c.created_at, c.updated_at,
-       (c.content_kind = 'official' AND c.content_locale <> $1
+       COALESCE(c.owner_id = $1, false)::boolean AS owned_by_actor,
+       (c.content_kind = 'official' AND c.content_locale <> $2
         AND translation.id IS NULL)::boolean AS translation_missing,
        EXISTS (
            SELECT 1 FROM component_repo.component_subscriptions subscription
-           WHERE subscription.owner_id = $2
+           WHERE subscription.owner_id = $1
              AND subscription.component_id = c.id
        ) AS subscribed
 FROM component_repo.components c
 LEFT JOIN LATERAL (
+    SELECT version.logical_width_stud, version.logical_depth_stud,
+           version.logical_height_plate
+    FROM component_repo.component_versions version
+    WHERE version.component_id = c.id
+      AND version.deleted_at IS NULL
+      AND (
+          version.id = c.current_version_id
+          OR (c.current_version_id IS NULL AND version.status = 'draft')
+      )
+    ORDER BY (version.id = c.current_version_id) DESC,
+             version.created_at DESC, version.id DESC
+    LIMIT 1
+) display_version ON true
+LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
     FROM component_repo.component_translations t
     WHERE t.component_id = c.id
-      AND t.locale = $1
+      AND t.locale = $2
       AND t.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON c.content_kind = 'official'
 WHERE c.id = $3
   AND c.deleted_at IS NULL
-  AND (c.owner_id = $2 OR c.status = 'active')
+  AND (c.owner_id = $1 OR c.status = 'active')
 `
 
 type GetVisibleComponentParams struct {
-	Locale      string
 	ActorID     pgtype.UUID
+	Locale      string
 	ComponentID pgtype.UUID
 }
 
@@ -149,12 +167,13 @@ type GetVisibleComponentRow struct {
 	CreatedBy             pgtype.UUID
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
+	OwnedByActor          bool
 	TranslationMissing    bool
 	Subscribed            bool
 }
 
 func (q *Queries) GetVisibleComponent(ctx context.Context, arg GetVisibleComponentParams) (GetVisibleComponentRow, error) {
-	row := q.db.QueryRow(ctx, getVisibleComponent, arg.Locale, arg.ActorID, arg.ComponentID)
+	row := q.db.QueryRow(ctx, getVisibleComponent, arg.ActorID, arg.Locale, arg.ComponentID)
 	var i GetVisibleComponentRow
 	err := row.Scan(
 		&i.ID,
@@ -175,6 +194,7 @@ func (q *Queries) GetVisibleComponent(ctx context.Context, arg GetVisibleCompone
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnedByActor,
 		&i.TranslationMissing,
 		&i.Subscribed,
 	)
@@ -188,34 +208,52 @@ SELECT c.id, c.owner_id, c.content_kind,
        COALESCE(CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END, '')::text AS selected_description,
        (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
        (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
-       c.category, c.status, c.current_version_id, c.logical_width_stud,
-       c.logical_depth_stud, c.logical_height_plate, c.metadata, c.created_by,
+       c.category, c.status, c.current_version_id,
+       COALESCE(display_version.logical_width_stud, c.logical_width_stud) AS logical_width_stud,
+       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
+       COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
+       c.metadata, c.created_by,
        c.created_at, c.updated_at,
-       (c.content_kind = 'official' AND c.content_locale <> $1
+       COALESCE(c.owner_id = $1, false)::boolean AS owned_by_actor,
+       (c.content_kind = 'official' AND c.content_locale <> $2
         AND translation.id IS NULL)::boolean AS translation_missing,
        EXISTS (
            SELECT 1 FROM component_repo.component_subscriptions subscription
-           WHERE subscription.owner_id = $2
+           WHERE subscription.owner_id = $1
              AND subscription.component_id = c.id
        ) AS subscribed
 FROM component_repo.components c
 LEFT JOIN LATERAL (
+    SELECT version.logical_width_stud, version.logical_depth_stud,
+           version.logical_height_plate
+    FROM component_repo.component_versions version
+    WHERE version.component_id = c.id
+      AND version.deleted_at IS NULL
+      AND (
+          version.id = c.current_version_id
+          OR (c.current_version_id IS NULL AND version.status = 'draft')
+      )
+    ORDER BY (version.id = c.current_version_id) DESC,
+             version.created_at DESC, version.id DESC
+    LIMIT 1
+) display_version ON true
+LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
     FROM component_repo.component_translations t
     WHERE t.component_id = c.id
-      AND t.locale = $1
+      AND t.locale = $2
       AND t.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON c.content_kind = 'official'
 WHERE c.deleted_at IS NULL
-  AND (c.owner_id = $2 OR c.status = 'active')
+  AND (c.owner_id = $1 OR c.status = 'active')
   AND EXISTS (
       SELECT 1
       FROM component_repo.component_versions version
       WHERE version.component_id = c.id
         AND version.deleted_at IS NULL
         AND (
-            c.owner_id = $2
+            c.owner_id = $1
             OR (c.status = 'active' AND version.status <> 'draft')
         )
   )
@@ -231,8 +269,8 @@ LIMIT $7 OFFSET $6
 `
 
 type ListVisibleComponentsParams struct {
-	Locale         string
 	ActorID        pgtype.UUID
+	Locale         string
 	StatusFilter   string
 	CategoryFilter string
 	SearchQuery    string
@@ -259,14 +297,15 @@ type ListVisibleComponentsRow struct {
 	CreatedBy             pgtype.UUID
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
+	OwnedByActor          bool
 	TranslationMissing    bool
 	Subscribed            bool
 }
 
 func (q *Queries) ListVisibleComponents(ctx context.Context, arg ListVisibleComponentsParams) ([]ListVisibleComponentsRow, error) {
 	rows, err := q.db.Query(ctx, listVisibleComponents,
-		arg.Locale,
 		arg.ActorID,
+		arg.Locale,
 		arg.StatusFilter,
 		arg.CategoryFilter,
 		arg.SearchQuery,
@@ -299,6 +338,7 @@ func (q *Queries) ListVisibleComponents(ctx context.Context, arg ListVisibleComp
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnedByActor,
 			&i.TranslationMissing,
 			&i.Subscribed,
 		); err != nil {

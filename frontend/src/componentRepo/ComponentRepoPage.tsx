@@ -5,8 +5,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Clock3,
-  FileArchive,
+  FileClock,
   FileUp,
   Folder,
   FolderOpen,
@@ -30,7 +29,7 @@ import {
   addComponentToGroup,
   createComponentGroup,
   createComponentImportWithProgress,
-  type ComponentCandidateResponse,
+  type ComponentImportUploadCompleteResponse,
   deleteComponentGroup,
   listComponentGroupComponents,
   listComponentGroupIds,
@@ -58,7 +57,7 @@ type ComponentRepoListState = {
 };
 
 type UploadState = 'idle' | 'uploading' | 'error';
-type LibraryFilter = 'all' | 'processing' | 'review' | 'published' | 'failed';
+type LibraryFilter = 'all' | 'draft' | 'published';
 
 const componentSearchPageSize = 20;
 const componentSearchDebounceMs = 300;
@@ -85,7 +84,8 @@ export function ComponentRepoPage() {
     totalPages: 0,
     statusCounts: {},
   });
-  const [query, setQuery] = React.useState('');
+  const [queries, setQueries] = React.useState<string[]>([]);
+  const [queryDraft, setQueryDraft] = React.useState('');
   const [filter, setFilter] = React.useState<LibraryFilter>('all');
   const [page, setPage] = React.useState(1);
   const [refreshRevision, setRefreshRevision] = React.useState(0);
@@ -159,7 +159,7 @@ export function ComponentRepoPage() {
     const timeoutId = window.setTimeout(() => {
       setState((current) => ({ ...current, status: 'loading', error: null }));
       void searchComponentGroupComponents(selectedGroupId, {
-        query,
+        queries,
         statuses: statusesForFilter(filter),
         page,
         pageSize: componentSearchPageSize,
@@ -189,7 +189,7 @@ export function ComponentRepoPage() {
       window.clearTimeout(timeoutId);
       searchRequestIdRef.current += 1;
     };
-  }, [contentLocale, filter, page, query, refreshRevision, selectedGroupId]);
+  }, [contentLocale, filter, page, queries, refreshRevision, selectedGroupId]);
 
   const items = React.useMemo(
     () => buildLibraryItems(state.components),
@@ -197,9 +197,8 @@ export function ComponentRepoPage() {
   );
   const stats = React.useMemo(() => ({
     total: sumStatusCounts(state.statusCounts),
-    processing: sumStatuses(state.statusCounts, ['uploaded', 'parsing']),
-    review: sumStatuses(state.statusCounts, ['parsed', 'pending_review', 'draft']),
-    published: sumStatuses(state.statusCounts, ['active', 'published']),
+    draft: sumStatuses(state.statusCounts, ['draft']),
+    published: sumStatuses(state.statusCounts, ['active']),
   }), [state.statusCounts]);
   const selectedGroup = groupTree
     ? [groupTree.root, ...groupTree.groups].find((group) => group.id === selectedGroupId)
@@ -271,8 +270,7 @@ export function ComponentRepoPage() {
 
       <section className="component-library-summary" aria-label={tr('componentRepo:componentStatusOverview')}>
         <SummaryCard icon={<Boxes />} label={tr('componentRepo:allComponents')} tone="blue" value={stats.total} />
-        <SummaryCard icon={<Clock3 />} label={tr('componentRepo:processing')} tone="amber" value={stats.processing} />
-        <SummaryCard icon={<FileArchive />} label={tr('componentRepo:pendingReview')} tone="purple" value={stats.review} />
+        <SummaryCard icon={<Layers3 />} label={tr('componentRepo:draft')} tone="purple" value={stats.draft} />
         <SummaryCard icon={<PackageCheck />} label={tr('componentRepo:published')} tone="green" value={stats.published} />
       </section>
 
@@ -285,10 +283,16 @@ export function ComponentRepoPage() {
             </div>
             <p>{tr(selectedGroup?.groupType === 'custom' ? 'componentRepo:customGroupDescription' : 'componentRepo:rootGroupDescription')}</p>
           </div>
-          <button className="component-library-upload-button" onClick={() => setIsUploadOpen(true)} type="button">
-            <Upload aria-hidden="true" />
-            {tr('componentRepo:uploadComponent')}
-          </button>
+          <div className="component-library-panel-actions">
+            <button onClick={() => navigate(routeFor('componentRepoImportHistory'))} type="button">
+              <FileClock aria-hidden="true" />
+              {tr('componentRepo:importHistory')}
+            </button>
+            <button className="component-library-upload-button" onClick={() => setIsUploadOpen(true)} type="button">
+              <Upload aria-hidden="true" />
+              {tr('componentRepo:uploadComponent')}
+            </button>
+          </div>
         </header>
 
         <div className="component-library-workspace">
@@ -304,25 +308,55 @@ export function ComponentRepoPage() {
           />
           <div className="component-library-main">
         <div className="component-library-toolbar">
-          <label className="component-library-search">
-            <Search aria-hidden="true" />
-            <input
-              aria-label={tr('componentRepo:searchComponents')}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setPage(1);
-              }}
-              placeholder={tr('componentRepo:searchComponentNameOrId')}
-              value={query}
-            />
-          </label>
+          <form
+            className="component-library-search-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const nextQuery = queryDraft.trim();
+              if (!nextQuery) return;
+              // 搜索条件只有在用户确认后才追加到 API 查询；复合条件按 AND 执行，重复条件不重复添加。
+              setQueries((current) => current.some(
+                (condition) => condition.toLocaleLowerCase() === nextQuery.toLocaleLowerCase(),
+              ) ? current : [...current, nextQuery]);
+              setQueryDraft('');
+              setPage(1);
+            }}
+          >
+            <label className="component-library-search">
+              <Search aria-hidden="true" />
+              <input
+                aria-label={tr('componentRepo:searchComponents')}
+                onChange={(event) => setQueryDraft(event.target.value)}
+                placeholder={tr('componentRepo:searchComponentNameOrId')}
+                value={queryDraft}
+              />
+            </label>
+            {queries.map((query) => (
+              <span
+                aria-label={tr('componentRepo:activeSearchCondition')}
+                className="component-library-search-condition"
+                key={query}
+              >
+                <span title={query}>{query}</span>
+                <button
+                  aria-label={tr('componentRepo:clearSearchCondition', { query })}
+                  onClick={() => {
+                    // 单个标签只撤销自身条件，其他已固化条件必须继续参与搜索。
+                    setQueries((current) => current.filter((condition) => condition !== query));
+                    setPage(1);
+                  }}
+                  type="button"
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </span>
+            ))}
+          </form>
           <div className="component-library-filters" role="group" aria-label={tr('componentRepo:filterByStatus')}>
             {([
               ['all', 'componentRepo:all'],
-              ['processing', 'componentRepo:processing'],
-              ['review', 'componentRepo:pendingReview'],
+              ['draft', 'componentRepo:draft'],
               ['published', 'componentRepo:published'],
-              ['failed', 'componentRepo:failed'],
             ] as Array<[LibraryFilter, TranslationKey]>).map(([value, label]) => (
               <button
                 className={filter === value ? 'component-library-filter-active' : undefined}
@@ -429,11 +463,11 @@ export function ComponentRepoPage() {
       {isUploadOpen ? (
         <ComponentUploadDialog
           onClose={() => setIsUploadOpen(false)}
-          onUploaded={(result) => {
+          onUploadCompleted={(result) => {
             setIsUploadOpen(false);
-            navigate(routeFor('componentRepoCandidate').replace(
-              ':candidateId',
-              encodeURIComponent(result.id),
+            navigate(routeFor('componentRepoImportStatus').replace(
+              ':importId',
+              encodeURIComponent(result.importId),
             ));
           }}
         />
@@ -1006,12 +1040,12 @@ function groupDescendantIds(groups: ComponentGroupResponse[], groupId: string): 
 export function ComponentUploadDialog({
   baseVersionId,
   onClose,
-  onUploaded,
+  onUploadCompleted,
   targetComponentId,
 }: {
   baseVersionId?: string | null;
   onClose: () => void;
-  onUploaded: (result: ComponentCandidateResponse) => void;
+  onUploadCompleted: (result: ComponentImportUploadCompleteResponse) => void;
   targetComponentId?: string | null;
 }) {
   const tr = useAppTranslation();
@@ -1039,7 +1073,7 @@ export function ComponentUploadDialog({
     setProgress(0);
     setError(null);
     try {
-      const uploaded = await createComponentImportWithProgress(
+      const completion = await createComponentImportWithProgress(
         sourceFile,
         exchangeFile,
         ({ percent, message }) => {
@@ -1048,7 +1082,7 @@ export function ComponentUploadDialog({
         },
         { targetComponentId, baseVersionId },
       );
-      onUploaded(uploaded);
+      onUploadCompleted(completion);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : tr('componentRepo:componentUploadFailed'));
       setState('error');
@@ -1134,7 +1168,7 @@ export function ComponentUploadDialog({
 
         <footer className="component-upload-footer">
           {state === 'idle' ? <><button onClick={onClose} type="button">{tr('componentRepo:cancel')}</button><button disabled={!sourceFile} onClick={() => void submit()} type="button"><Upload />{tr('componentRepo:startUpload')}</button></> : null}
-          {state === 'uploading' ? <span>{tr('componentRepo:processingPleaseWait')}</span> : null}
+          {state === 'uploading' ? <span>{tr('componentRepo:uploadingComponentFiles')}</span> : null}
           {state === 'error' ? <><button onClick={onClose} type="button">{tr('componentRepo:close')}</button><button onClick={reset} type="button"><RefreshCw />{tr('componentRepo:retryUpload')}</button></> : null}
         </footer>
       </section>
@@ -1208,10 +1242,9 @@ function buildLibraryItems(components: ComponentResponse[]): LibraryItem[] {
 
 function statusesForFilter(filter: LibraryFilter): string[] | null {
   if (filter === 'all') return null;
-  if (filter === 'processing') return ['uploaded', 'parsing'];
-  if (filter === 'review') return ['draft'];
+  if (filter === 'draft') return ['draft'];
   if (filter === 'published') return ['active'];
-  return ['archived'];
+  return null;
 }
 
 function sumStatuses(counts: Record<string, number>, statuses: string[]): number {
@@ -1231,7 +1264,7 @@ function formatDate(value: string): string { return formatDateTime(value, { mont
 const statusLabels: Partial<Record<string, TranslationKey>> = {
   uploaded: 'componentRepo:uploaded', parsing: 'componentRepo:parsing', parsed: 'componentRepo:pendingReview', pending_review: 'componentRepo:pendingReview', in_review: 'componentRepo:inReview',
   draft: 'componentRepo:draft', active: 'componentRepo:published', published: 'componentRepo:published', failed: 'componentRepo:failed', blocked: 'componentRepo:blocked', rejected: 'componentRepo:rejected', archived: 'componentRepo:archived',
-  confirmed: 'componentRepo:confirmed', passed: 'componentRepo:passed', pass: 'componentRepo:passed', pending: 'componentRepo:pending',
+  confirmed: 'componentRepo:confirmed', passed: 'componentRepo:passed', pass: 'componentRepo:passed', pending: 'componentRepo:pending', ready: 'componentRepo:ready', processing: 'componentRepo:processing',
 };
 
 export function StatusPill({ status }: { status: string }) {

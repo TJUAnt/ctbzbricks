@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path"
@@ -35,6 +36,7 @@ type Service struct {
 	store   storage.Store
 	config  config.StorageConfig
 	imports config.ImportConfig
+	logger  *slog.Logger
 	now     func() time.Time
 }
 
@@ -42,14 +44,22 @@ func NewService(pool *pgxpool.Pool, store storage.Store, cfg config.StorageConfi
 	return &Service{
 		pool: pool, q: db.New(pool), store: store, config: cfg,
 		imports: config.ImportConfig{
-			ParserVersion: "component-repo-ldraw-parser-v1", SnapshotSchema: "component-repo-v1", MaxAttempts: 3,
+			ParserVersion: "component-repo-ldraw-parser-v2", SnapshotSchema: "component-repo-v2", MaxAttempts: 3,
 		},
-		now: time.Now,
+		logger: slog.Default(),
+		now:    time.Now,
 	}
 }
 
 func (s *Service) WithImportConfig(cfg config.ImportConfig) *Service {
 	s.imports = cfg
+	return s
+}
+
+func (s *Service) WithLogger(logger *slog.Logger) *Service {
+	if logger != nil {
+		s.logger = logger
+	}
 	return s
 }
 
@@ -165,20 +175,36 @@ func (s *Service) CompleteUploadSession(ctx context.Context, actor pgtype.UUID, 
 		return UploadCompletion{}, err
 	}
 	if len(files) == 0 {
+		s.logUploadCompleteFailure(ctx, sessionID, nil, "no_files")
 		return UploadCompletion{}, s.failAndCompensate(ctx, actor, id, files)
 	}
 	for _, file := range files {
 		if file.StorageProvider != s.store.Provider() || file.StorageBucket != s.store.Bucket() {
+			s.logUploadCompleteFailure(ctx, sessionID, &file, "storage_provider_bucket_mismatch",
+				"expectedProvider", s.store.Provider(),
+				"actualProvider", file.StorageProvider,
+				"expectedBucket", s.store.Bucket(),
+				"actualBucket", file.StorageBucket,
+			)
 			return UploadCompletion{}, storageError()
 		}
 		metadata, headErr := s.store.HeadForUser(ctx, file.StorageKey, accessToken)
 		if headErr != nil {
 			if errors.Is(headErr, storage.ErrNotFound) {
+				s.logUploadCompleteFailure(ctx, sessionID, &file, "storage_object_not_found")
 				return UploadCompletion{}, s.failAndCompensate(ctx, actor, id, files)
 			}
+			s.logUploadCompleteFailure(ctx, sessionID, &file, "storage_head_unavailable", "error", headErr)
 			return UploadCompletion{}, storageError()
 		}
-		if metadata.Size != file.ExpectedSize || !contentTypeMatches(metadata.ContentType, mimeTypeFor(file.ArtifactType)) {
+		expectedContentTypes := acceptableMimeTypesFor(file.ArtifactType)
+		if metadata.Size != file.ExpectedSize || !contentTypeMatches(metadata.ContentType, expectedContentTypes...) {
+			s.logUploadCompleteFailure(ctx, sessionID, &file, "storage_metadata_mismatch",
+				"expectedSize", file.ExpectedSize,
+				"actualSize", metadata.Size,
+				"expectedContentTypes", expectedContentTypes,
+				"actualContentType", metadata.ContentType,
+			)
 			return UploadCompletion{}, s.failAndCompensate(ctx, actor, id, files)
 		}
 	}
@@ -505,6 +531,25 @@ func (s *Service) completedResult(ctx context.Context, actor, sessionID pgtype.U
 	return completionFromQueries(ctx, s.q, actor, sessionID)
 }
 
+func (s *Service) logUploadCompleteFailure(ctx context.Context, sessionID string, file *db.ComponentRepoUploadSessionFile, reason string, attrs ...any) {
+	if s.logger == nil {
+		return
+	}
+	fields := []any{
+		"reason", reason,
+		"uploadSessionId", sessionID,
+	}
+	if file != nil {
+		fields = append(fields,
+			"ordinal", file.Ordinal,
+			"artifactId", uuidutil.String(file.ID),
+			"artifactType", file.ArtifactType,
+		)
+	}
+	fields = append(fields, attrs...)
+	s.logger.WarnContext(ctx, "Component upload completion failed preflight", fields...)
+}
+
 func completionFromQueries(ctx context.Context, q *db.Queries, actor, sessionID pgtype.UUID) (UploadCompletion, error) {
 	importJob, err := q.GetOwnedImportByUploadSession(ctx, db.GetOwnedImportByUploadSessionParams{
 		UploadSessionID: sessionID, ActorID: actor,
@@ -580,15 +625,34 @@ func mimeTypeFor(artifactType string) string {
 	if artifactType == "ldraw_ldr" || artifactType == "ldraw_mpd" {
 		return "text/plain"
 	}
+	if artifactType == "studio_io" {
+		return "application/x-studioformat"
+	}
 	return "application/octet-stream"
 }
 
-func contentTypeMatches(actual, expected string) bool {
+func acceptableMimeTypesFor(artifactType string) []string {
+	primary := mimeTypeFor(artifactType)
+	if artifactType == "studio_io" {
+		return []string{primary, "application/octet-stream"}
+	}
+	return []string{primary}
+}
+
+func contentTypeMatches(actual string, expected ...string) bool {
 	if strings.TrimSpace(actual) == "" {
 		return true
 	}
 	mediaType, _, err := mime.ParseMediaType(actual)
-	return err == nil && strings.EqualFold(mediaType, expected)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range expected {
+		if strings.EqualFold(mediaType, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanFilename(value string) string {

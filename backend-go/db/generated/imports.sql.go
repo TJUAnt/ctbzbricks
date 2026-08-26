@@ -11,6 +11,95 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countOwnedImportProcessingStatuses = `-- name: CountOwnedImportProcessingStatuses :many
+WITH import_views AS (
+    SELECT import_job.id, import_job.target_component_id,
+           source_artifact.original_filename,
+           version.component_id,
+           CASE
+               WHEN import_job.status IN ('failed', 'cancelled')
+                 OR version.preview_status = 'failed'
+                 OR preview_task.status IN ('failed', 'cancelled') THEN 'failed'
+               WHEN import_job.status = 'succeeded'
+                 AND candidate.id IS NOT NULL
+                 AND version.id IS NOT NULL
+                 AND candidate.scene_snapshot_id IS NOT NULL
+                 AND version.preview_artifact_id IS NOT NULL
+                 AND version.preview_status = 'ready'
+                 AND preview_artifact.verification_status = 'verified' THEN 'ready'
+               ELSE 'processing'
+           END::text AS processing_status
+    FROM component_repo.imports import_job
+    JOIN component_repo.artifacts source_artifact
+      ON source_artifact.id = import_job.source_artifact_id
+     AND source_artifact.owner_id = import_job.owner_id
+    LEFT JOIN component_repo.candidates candidate
+      ON candidate.import_id = import_job.id
+     AND candidate.owner_id = import_job.owner_id
+    LEFT JOIN LATERAL (
+        SELECT version_record.id, version_record.component_id,
+               version_record.preview_task_id, version_record.preview_artifact_id,
+               version_record.preview_status
+        FROM component_repo.component_versions version_record
+        WHERE version_record.component_candidate_id = candidate.id
+        ORDER BY (version_record.deleted_at IS NULL) DESC,
+                 version_record.created_at DESC, version_record.id DESC
+        LIMIT 1
+    ) version ON true
+    LEFT JOIN component_repo.tasks preview_task
+      ON preview_task.id = version.preview_task_id
+     AND preview_task.owner_id = import_job.owner_id
+    LEFT JOIN component_repo.artifacts preview_artifact
+      ON preview_artifact.id = version.preview_artifact_id
+     AND preview_artifact.owner_id = import_job.owner_id
+     AND preview_artifact.deleted_at IS NULL
+    WHERE import_job.owner_id = $3
+)
+SELECT processing_status, count(*)::bigint AS import_count
+FROM import_views
+WHERE ($1::uuid IS NULL
+       OR COALESCE(target_component_id, component_id) = $1::uuid)
+  AND (
+      $2::text = ''
+      OR original_filename ILIKE '%' || $2::text || '%'
+      OR id::text ILIKE '%' || $2::text || '%'
+  )
+GROUP BY processing_status
+ORDER BY processing_status
+`
+
+type CountOwnedImportProcessingStatusesParams struct {
+	ComponentID pgtype.UUID
+	SearchQuery string
+	ActorID     pgtype.UUID
+}
+
+type CountOwnedImportProcessingStatusesRow struct {
+	ProcessingStatus string
+	ImportCount      int64
+}
+
+// 统计口径必须与列表的聚合状态一致，但不应用当前状态筛选，供前端切换筛选时保持完整计数。
+func (q *Queries) CountOwnedImportProcessingStatuses(ctx context.Context, arg CountOwnedImportProcessingStatusesParams) ([]CountOwnedImportProcessingStatusesRow, error) {
+	rows, err := q.db.Query(ctx, countOwnedImportProcessingStatuses, arg.ComponentID, arg.SearchQuery, arg.ActorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountOwnedImportProcessingStatusesRow{}
+	for rows.Next() {
+		var i CountOwnedImportProcessingStatusesRow
+		if err := rows.Scan(&i.ProcessingStatus, &i.ImportCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createComponentImport = `-- name: CreateComponentImport :one
 INSERT INTO component_repo.imports (
     id, owner_id, source_artifact_id, exchange_artifact_id,
@@ -195,13 +284,40 @@ SELECT import_job.id, import_job.owner_id, import_job.source_artifact_id,
        import_job.created_by, import_job.created_at, import_job.started_at,
        import_job.completed_at, import_job.upload_session_id,
        import_job.parse_task_id, candidate.id AS candidate_id,
-       version.id AS draft_version_id
+       version.id AS draft_version_id,
+       candidate.scene_snapshot_id,
+       version.preview_task_id,
+       version.preview_artifact_id,
+       COALESCE(version.preview_status, '')::text AS preview_status,
+       version.preview_failure_code,
+       version.preview_failure_params,
+       preview_task.status AS preview_task_status,
+       preview_task.error_code AS preview_task_error_code,
+       preview_task.error_params AS preview_task_error_params,
+       preview_artifact.verification_status AS preview_artifact_verification_status
 FROM component_repo.imports import_job
 LEFT JOIN component_repo.candidates candidate
   ON candidate.import_id = import_job.id
-LEFT JOIN component_repo.component_versions version
-  ON version.component_candidate_id = candidate.id
- AND version.deleted_at IS NULL
+LEFT JOIN LATERAL (
+    SELECT version_record.id, version_record.component_id,
+           version_record.preview_task_id, version_record.preview_artifact_id,
+           version_record.preview_status,
+           version_record.preview_failure_code,
+           version_record.preview_failure_params
+    FROM component_repo.component_versions version_record
+    WHERE version_record.component_candidate_id = candidate.id
+    -- Import 是审计历史：优先当前 Version，但 Version 软删除后仍保留最近的 Component 关联。
+    ORDER BY (version_record.deleted_at IS NULL) DESC,
+             version_record.created_at DESC, version_record.id DESC
+    LIMIT 1
+) version ON true
+LEFT JOIN component_repo.tasks preview_task
+  ON preview_task.id = version.preview_task_id
+ AND preview_task.owner_id = import_job.owner_id
+LEFT JOIN component_repo.artifacts preview_artifact
+  ON preview_artifact.id = version.preview_artifact_id
+ AND preview_artifact.owner_id = import_job.owner_id
+ AND preview_artifact.deleted_at IS NULL
 WHERE import_job.id = $1
   AND import_job.owner_id = $2
 `
@@ -212,28 +328,38 @@ type GetOwnedImportParams struct {
 }
 
 type GetOwnedImportRow struct {
-	ID                   pgtype.UUID
-	OwnerID              pgtype.UUID
-	SourceArtifactID     pgtype.UUID
-	ExchangeArtifactID   pgtype.UUID
-	TargetComponentID    pgtype.UUID
-	BaseVersionID        pgtype.UUID
-	Status               string
-	ParserVersion        *string
-	PartLibraryVersionID pgtype.UUID
-	Locale               string
-	Timezone             string
-	FailureCode          *string
-	FailureParams        []byte
-	Metadata             []byte
-	CreatedBy            pgtype.UUID
-	CreatedAt            pgtype.Timestamptz
-	StartedAt            pgtype.Timestamptz
-	CompletedAt          pgtype.Timestamptz
-	UploadSessionID      pgtype.UUID
-	ParseTaskID          pgtype.UUID
-	CandidateID          pgtype.UUID
-	DraftVersionID       pgtype.UUID
+	ID                                pgtype.UUID
+	OwnerID                           pgtype.UUID
+	SourceArtifactID                  pgtype.UUID
+	ExchangeArtifactID                pgtype.UUID
+	TargetComponentID                 pgtype.UUID
+	BaseVersionID                     pgtype.UUID
+	Status                            string
+	ParserVersion                     *string
+	PartLibraryVersionID              pgtype.UUID
+	Locale                            string
+	Timezone                          string
+	FailureCode                       *string
+	FailureParams                     []byte
+	Metadata                          []byte
+	CreatedBy                         pgtype.UUID
+	CreatedAt                         pgtype.Timestamptz
+	StartedAt                         pgtype.Timestamptz
+	CompletedAt                       pgtype.Timestamptz
+	UploadSessionID                   pgtype.UUID
+	ParseTaskID                       pgtype.UUID
+	CandidateID                       pgtype.UUID
+	DraftVersionID                    pgtype.UUID
+	SceneSnapshotID                   pgtype.UUID
+	PreviewTaskID                     pgtype.UUID
+	PreviewArtifactID                 pgtype.UUID
+	PreviewStatus                     string
+	PreviewFailureCode                *string
+	PreviewFailureParams              []byte
+	PreviewTaskStatus                 *string
+	PreviewTaskErrorCode              *string
+	PreviewTaskErrorParams            []byte
+	PreviewArtifactVerificationStatus *string
 }
 
 func (q *Queries) GetOwnedImport(ctx context.Context, arg GetOwnedImportParams) (GetOwnedImportRow, error) {
@@ -262,6 +388,16 @@ func (q *Queries) GetOwnedImport(ctx context.Context, arg GetOwnedImportParams) 
 		&i.ParseTaskID,
 		&i.CandidateID,
 		&i.DraftVersionID,
+		&i.SceneSnapshotID,
+		&i.PreviewTaskID,
+		&i.PreviewArtifactID,
+		&i.PreviewStatus,
+		&i.PreviewFailureCode,
+		&i.PreviewFailureParams,
+		&i.PreviewTaskStatus,
+		&i.PreviewTaskErrorCode,
+		&i.PreviewTaskErrorParams,
+		&i.PreviewArtifactVerificationStatus,
 	)
 	return i, err
 }
@@ -311,4 +447,196 @@ func (q *Queries) GetOwnedImportByUploadSession(ctx context.Context, arg GetOwne
 		&i.ParseTaskID,
 	)
 	return i, err
+}
+
+const listOwnedImports = `-- name: ListOwnedImports :many
+WITH import_views AS (
+    SELECT import_job.id, import_job.owner_id, import_job.source_artifact_id,
+           import_job.exchange_artifact_id, import_job.target_component_id,
+           import_job.base_version_id, import_job.status, import_job.parser_version,
+           import_job.part_library_version_id, import_job.locale, import_job.timezone,
+           import_job.failure_code, import_job.failure_params, import_job.metadata,
+           import_job.created_by, import_job.created_at, import_job.started_at,
+           import_job.completed_at, import_job.upload_session_id,
+           import_job.parse_task_id, source_artifact.original_filename,
+           source_artifact.file_size, source_artifact.mime_type,
+           candidate.id AS candidate_id, candidate.scene_snapshot_id,
+           version.id AS draft_version_id, version.component_id,
+           version.preview_task_id, version.preview_artifact_id,
+           COALESCE(version.preview_status, '')::text AS preview_status,
+           version.preview_failure_code,
+           version.preview_failure_params,
+           preview_task.status AS preview_task_status,
+           preview_task.error_code AS preview_task_error_code,
+           preview_task.error_params AS preview_task_error_params,
+           preview_artifact.verification_status AS preview_artifact_verification_status,
+           CASE
+               WHEN import_job.status IN ('failed', 'cancelled')
+                 OR version.preview_status = 'failed'
+                 OR preview_task.status IN ('failed', 'cancelled') THEN 'failed'
+               WHEN import_job.status = 'succeeded'
+                 AND candidate.id IS NOT NULL
+                 AND version.id IS NOT NULL
+                 AND candidate.scene_snapshot_id IS NOT NULL
+                 AND version.preview_artifact_id IS NOT NULL
+                 AND version.preview_status = 'ready'
+                 AND preview_artifact.verification_status = 'verified' THEN 'ready'
+               ELSE 'processing'
+           END::text AS processing_status
+    FROM component_repo.imports import_job
+    JOIN component_repo.artifacts source_artifact
+      ON source_artifact.id = import_job.source_artifact_id
+     AND source_artifact.owner_id = import_job.owner_id
+    LEFT JOIN component_repo.candidates candidate
+      ON candidate.import_id = import_job.id
+     AND candidate.owner_id = import_job.owner_id
+    LEFT JOIN LATERAL (
+        SELECT version_record.id, version_record.component_id,
+               version_record.preview_task_id, version_record.preview_artifact_id,
+               version_record.preview_status,
+               version_record.preview_failure_code,
+               version_record.preview_failure_params
+        FROM component_repo.component_versions version_record
+        WHERE version_record.component_candidate_id = candidate.id
+        ORDER BY (version_record.deleted_at IS NULL) DESC,
+                 version_record.created_at DESC, version_record.id DESC
+        LIMIT 1
+    ) version ON true
+    LEFT JOIN component_repo.tasks preview_task
+      ON preview_task.id = version.preview_task_id
+     AND preview_task.owner_id = import_job.owner_id
+    LEFT JOIN component_repo.artifacts preview_artifact
+      ON preview_artifact.id = version.preview_artifact_id
+     AND preview_artifact.owner_id = import_job.owner_id
+     AND preview_artifact.deleted_at IS NULL
+    WHERE import_job.owner_id = $6
+)
+SELECT id, owner_id, source_artifact_id, exchange_artifact_id, target_component_id, base_version_id, status, parser_version, part_library_version_id, locale, timezone, failure_code, failure_params, metadata, created_by, created_at, started_at, completed_at, upload_session_id, parse_task_id, original_filename, file_size, mime_type, candidate_id, scene_snapshot_id, draft_version_id, component_id, preview_task_id, preview_artifact_id, preview_status, preview_failure_code, preview_failure_params, preview_task_status, preview_task_error_code, preview_task_error_params, preview_artifact_verification_status, processing_status
+FROM import_views
+WHERE ($1::uuid IS NULL
+       OR COALESCE(target_component_id, component_id) = $1::uuid)
+  AND ($2::text = ''
+       OR import_views.processing_status = $2::text)
+  AND (
+      $3::text = ''
+      OR original_filename ILIKE '%' || $3::text || '%'
+      OR id::text ILIKE '%' || $3::text || '%'
+  )
+ORDER BY created_at DESC, id DESC
+LIMIT $5 OFFSET $4
+`
+
+type ListOwnedImportsParams struct {
+	ComponentID      pgtype.UUID
+	ProcessingStatus string
+	SearchQuery      string
+	PageOffset       int32
+	PageSize         int32
+	ActorID          pgtype.UUID
+}
+
+type ListOwnedImportsRow struct {
+	ID                                pgtype.UUID
+	OwnerID                           pgtype.UUID
+	SourceArtifactID                  pgtype.UUID
+	ExchangeArtifactID                pgtype.UUID
+	TargetComponentID                 pgtype.UUID
+	BaseVersionID                     pgtype.UUID
+	Status                            string
+	ParserVersion                     *string
+	PartLibraryVersionID              pgtype.UUID
+	Locale                            string
+	Timezone                          string
+	FailureCode                       *string
+	FailureParams                     []byte
+	Metadata                          []byte
+	CreatedBy                         pgtype.UUID
+	CreatedAt                         pgtype.Timestamptz
+	StartedAt                         pgtype.Timestamptz
+	CompletedAt                       pgtype.Timestamptz
+	UploadSessionID                   pgtype.UUID
+	ParseTaskID                       pgtype.UUID
+	OriginalFilename                  string
+	FileSize                          int64
+	MimeType                          string
+	CandidateID                       pgtype.UUID
+	SceneSnapshotID                   pgtype.UUID
+	DraftVersionID                    pgtype.UUID
+	ComponentID                       pgtype.UUID
+	PreviewTaskID                     pgtype.UUID
+	PreviewArtifactID                 pgtype.UUID
+	PreviewStatus                     string
+	PreviewFailureCode                *string
+	PreviewFailureParams              []byte
+	PreviewTaskStatus                 *string
+	PreviewTaskErrorCode              *string
+	PreviewTaskErrorParams            []byte
+	PreviewArtifactVerificationStatus *string
+	ProcessingStatus                  string
+}
+
+// Import 状态是解析、Draft 与 Preview 制品的聚合结果；组件筛选同时覆盖“更新既有组件”和“导入后新建组件”两条关联路径。
+func (q *Queries) ListOwnedImports(ctx context.Context, arg ListOwnedImportsParams) ([]ListOwnedImportsRow, error) {
+	rows, err := q.db.Query(ctx, listOwnedImports,
+		arg.ComponentID,
+		arg.ProcessingStatus,
+		arg.SearchQuery,
+		arg.PageOffset,
+		arg.PageSize,
+		arg.ActorID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOwnedImportsRow{}
+	for rows.Next() {
+		var i ListOwnedImportsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.SourceArtifactID,
+			&i.ExchangeArtifactID,
+			&i.TargetComponentID,
+			&i.BaseVersionID,
+			&i.Status,
+			&i.ParserVersion,
+			&i.PartLibraryVersionID,
+			&i.Locale,
+			&i.Timezone,
+			&i.FailureCode,
+			&i.FailureParams,
+			&i.Metadata,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.UploadSessionID,
+			&i.ParseTaskID,
+			&i.OriginalFilename,
+			&i.FileSize,
+			&i.MimeType,
+			&i.CandidateID,
+			&i.SceneSnapshotID,
+			&i.DraftVersionID,
+			&i.ComponentID,
+			&i.PreviewTaskID,
+			&i.PreviewArtifactID,
+			&i.PreviewStatus,
+			&i.PreviewFailureCode,
+			&i.PreviewFailureParams,
+			&i.PreviewTaskStatus,
+			&i.PreviewTaskErrorCode,
+			&i.PreviewTaskErrorParams,
+			&i.PreviewArtifactVerificationStatus,
+			&i.ProcessingStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

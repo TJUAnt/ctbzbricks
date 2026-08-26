@@ -3,6 +3,9 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -111,6 +114,67 @@ func TestMiddlewareAppliesDeadlineAndBodyLimit(t *testing.T) {
 	}
 }
 
+func TestGoSessionRouteConfirmsUserThroughSupabaseAuth(t *testing.T) {
+	const actorID = "00000000-0000-0000-0000-000000000001"
+	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("apikey") != "publishable-key" || request.Header.Get("Authorization") == "" {
+			t.Fatalf("unexpected provider headers: %+v", request.Header)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"id":"` + actorID + `","email":"user@example.com"}`))
+	}))
+	defer provider.Close()
+
+	cfg := testConfig()
+	cfg.Auth = config.AuthConfig{
+		JWTSecret:                  testRouterJWTSecret,
+		JWTIssuer:                  "router-test",
+		JWTAudience:                "authenticated",
+		SessionVerificationURL:     provider.URL,
+		PublishableKey:             "publishable-key",
+		SessionVerificationTimeout: time.Second,
+	}
+	router := NewApplicationRouter(cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	request.Header.Set("Authorization", "Bearer "+routerToken(t, actorID))
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"authenticated":true`) ||
+		!strings.Contains(recorder.Body.String(), `"email":"user@example.com"`) {
+		t.Fatalf("session status/body = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGoSessionRouteDoesNotConvertProviderOutageIntoLogout(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer provider.Close()
+
+	cfg := testConfig()
+	cfg.Auth = config.AuthConfig{
+		JWTSecret:                  testRouterJWTSecret,
+		JWTIssuer:                  "router-test",
+		JWTAudience:                "authenticated",
+		SessionVerificationURL:     provider.URL,
+		PublishableKey:             "publishable-key",
+		SessionVerificationTimeout: time.Second,
+	}
+	router := NewApplicationRouter(cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	request.Header.Set("Authorization", "Bearer "+routerToken(t, "00000000-0000-0000-0000-000000000001"))
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable ||
+		!strings.Contains(recorder.Body.String(), `"code":"auth.session_verification_unavailable"`) {
+		t.Fatalf("session outage status/body = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func testRouter(t *testing.T, pinger stubPinger) *gin.Engine {
 	t.Helper()
 	return NewRouter(testConfig(), pinger, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -126,4 +190,21 @@ func testConfig() config.Config {
 		},
 		Database: config.DatabaseConfig{ConnectTimeout: time.Second},
 	}
+}
+
+const testRouterJWTSecret = "0123456789abcdef0123456789abcdef"
+
+func routerToken(t *testing.T, subject string) string {
+	t.Helper()
+	header, _ := json.Marshal(map[string]any{"alg": "HS256", "typ": "JWT"})
+	claims, _ := json.Marshal(map[string]any{
+		"sub": subject,
+		"exp": time.Now().Add(time.Minute).Unix(),
+		"iss": "router-test",
+		"aud": "authenticated",
+	})
+	unsigned := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
+	signature := hmac.New(sha256.New, []byte(testRouterJWTSecret))
+	_, _ = signature.Write([]byte(unsigned))
+	return unsigned + "." + base64.RawURLEncoding.EncodeToString(signature.Sum(nil))
 }

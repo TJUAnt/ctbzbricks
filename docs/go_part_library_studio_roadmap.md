@@ -1,6 +1,6 @@
 # Studio Part Library 基准路线图与数据来源依据
 
-> 状态：Roadmap / data provenance baseline  
+> 状态：S1/S2/S5 与 active 切换已执行；S3/S4 和最终数据清理待完成
 > 日期：2026-08-15  
 > 所属阶段：G8 后续 Part Library / Part preview 数据基准收口  
 > 迁移原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)  
@@ -11,9 +11,12 @@
 snapshot 作为几何和零件清单基准。legacy 数据仅作为名称、类别、历史 Rebrickable
 映射等 catalog/enrichment 来源。
 
-本文是 roadmap，不表示数据库已经完成重建。任何真实数据库写入仍必须使用显式
-Goose migration 或 data migration 脚本；API 和 Worker 启动不得执行 DDL、schema
-repair 或数据回填。
+本文同时保留 roadmap 与已执行证据，不表示所有阶段已经完成。当前执行事实以
+[进度台账](./go_migration_progress.md) 为准。任何真实数据库写入仍必须使用显式 Goose migration
+或 data migration 脚本；API 和 Worker 启动不得执行 DDL、schema repair 或数据回填。
+
+Component Repo 已确定 Go-only 目标。本路线图中的 manifest/import/enrichment/connectivity
+工具和在线 Worker 新能力默认使用 Go；不得新增 Python 运行时或 Python task consumer。
 
 ## 1. 已确认方向
 
@@ -25,8 +28,9 @@ repair 或数据回填。
   `component_repo.part_external_ids`，不改核心 Part ID。
 - LEGO element ID 是颜色/材质相关编号，不能作为无颜色 Part 的唯一身份。
 - logical size 从几何派生，并通过 `logical_size_derivation_status` 记录可信度。
-- Studio connectivity/collider 是后续连接/碰撞阶段的来源，不混入本次 Part preview
-  几何基准。
+- Studio connectivity/collider 是关系能力的独立来源，不混入 Part preview 几何基准。
+- `status=active` 只表示 library 生命周期；`preview_ready` 与 `relation_ready` 分别表示预览和
+  关系检测能力，不允许从 `active` 隐式推断任一能力。
 
 ## 2. 本地 Studio 数据来源依据
 
@@ -86,7 +90,8 @@ source_system              bricklink_studio_ldraw
 source_root                /Applications/Studio 2.0/ldraw（仅开发环境记录）
 source_snapshot_label      Studio 2.0 local install snapshot / captured date
 source_manifest_sha256     对 manifest 内容计算的 hash
-importer_version           studio-part-library-importer-v1
+importer_version           studio-part-library-importer-v3
+connector_parser_version  studio-connectivity-v0-parser-v1
 geometry_generator_version part-preview-ldraw-glb-v1 或后续版本
 captured_at                timestamptz
 metadata                   文件数量、目录摘要、输入文件版本等
@@ -272,6 +277,18 @@ Studio LDraw geometry 处理原则：
 - API/Worker startup 无 DDL/回填；
 - 至少用 `3001.dat`、printed part、`bl_` part、unofficial part 做 preview smoke。
 
+后续本机 Studio 更新使用保留脚本：
+
+```bash
+cd backend-go
+./scripts/update-studio-part-library.sh
+```
+
+脚本要求输入其打印的精确数据库目标，依次生成新 manifest、完整 dry-run、执行 Goose up、导入并
+原子切换 active library。新 snapshot 使用 manifest hash 派生新 Library ID；旧 active 在同一导入
+事务内改为 retired，导入失败时不会切走旧版本。自动化环境可把脚本打印的值传给
+`CONFIRM_DATABASE_TARGET`；只有已经单独验证过 snapshot 时才应设置 `SKIP_STUDIO_DRY_RUN=1`。
+
 2026-08-15 真实开发库执行结果：
 
 ```text
@@ -326,9 +343,9 @@ metadata。对于当前 Part preview，解析这些文件的标准几何坐标�
 bl_10202pb016.dat ready face_count=2444
 ```
 
-注意：本次 smoke 到的是 DB-level Part/geometry/preview metadata。真正 GLB Artifact
-materialize 仍需要下一步用 Go API/Worker + Storage 执行 `component.part_preview.materialize`
-任务验证。
+历史说明：本节最初只完成 DB-level Part/geometry/preview metadata smoke；后续已经通过 Go
+API/Worker + Storage 完成真实 GLB Artifact materialize。当前状态以本路线图后续章节和
+[迁移进度台账](./go_migration_progress.md) 最新摘要为准。
 
 ### S3：外部编号补充
 
@@ -370,18 +387,62 @@ materialize 仍需要下一步用 Go API/Worker + Storage 执行 `component.part
 
 目标：把 Studio connector/collider 作为下一阶段独立能力接入。
 
+状态：2026-08-22 已完成 Go importer、schema、关系 Worker、隔离 PostgreSQL E2E 与真实 Supabase
+导入；真实库当前 Goose v11，active library 已 `preview_ready/relation_ready=true`。
+
 交付：
 
-- `.conn` / `.col` 格式调研和 parser spike；
-- 与既有 `part_connector_definitions` 的 schema 映射；
-- 连接数据版本化；
-- 与 Part preview 解耦的 worker/importer。
+- [x] Go `.conn` parser 覆盖 Studio Axle、Ball、Hole、Stud、Fixed、Hinge、Rail、Slider
+  record，并展开 Stud/Hole cell matrix；坐标由 Studio 左手系稳定转换为 LDraw。
+- [x] Go `.col` parser 覆盖已观测的 type `9/8192` box record；历史数据中的 signed
+  half-extents 取绝对值规范化，原值保留在 `raw_params`，不把合法旧数据误报为失败。
+- [x] connector 映射到版本化 `part_connector_definitions`；collider 写入
+  `part_collider_definitions`，二者都绑定不可变 `part_library_version_id`。
+- [x] Goose v10 为 Part Library 增加 `preview_ready/relation_ready`、connector/collider
+  source hash、parser version 和 count。生命周期 `status` 与能力状态彻底分离。
+- [x] `studio-import` v2 校验 sidecar manifest size/hash，使用 staging + `CopyFrom` 与显式
+  transaction 批量替换同版本定义；`--dry-run` 不连接数据库。
+- [x] Go Worker 注册 `component.relations.detect`，从 Candidate 冻结的 Part Library 读取
+  connector/collider，原子物化 RelationCandidate、ConnectorAnalysis、external Interface 与
+  Candidate/Draft interface signature。旧 Python relation worker/adapter/launcher 已删除。
 
 验收：
 
-- connector/collider 不影响 Part preview 可用性；
-- 连接识别任务 input hash 覆盖 connector library version；
-- 旧 ComponentVersion 继续引用冻结 Part Library / Connector Library。
+- [x] connector/collider 失败不改变 `preview_ready`；关系调度仅接受
+  `relation_ready=true` 的冻结 library。
+- [x] 关系任务 input hash 覆盖 structure/geometry、snapshot schema/parser、
+  `partLibraryVersionId`、library source hash、connector source hash/parser version 和 detector
+  version。
+- [x] 旧 ComponentVersion/Candidate 继续引用冻结 Part Library，不读取后来切换的 active
+  library 重解释历史数据。
+- [x] Go relation PostgreSQL E2E 验证 task schedule/claim/handle/complete、3 个 connector、
+  1 个 relation 和 3 个 external interface 的原子结果。
+
+2026-08-22 完整本机 Studio manifest dry-run（未写数据库）：
+
+```text
+manifest sha256              524fee2594a1e8023965e718b398b90d7bc8a10adc864dbbd84e64c77bc50e2b
+parts                        24,426
+geometry ready               24,373
+geometry failed                  53（缺失 LDraw reference，沿用 S2 可审计失败）
+connector files               8,881（canonical Part sidecar）
+connector definitions       190,419
+connector parse failed            0
+connector source hash       0aab7080e5d1ba2f365037e22f09ee26518f507f7e4b70be394765221d2be7ac
+collider files                10,295（canonical Part sidecar）
+collider definitions parsed 1,876,415
+collider source hash       1266cefe0db7cd1db7cca8b94e480bba106bb1e4e03845724a1fa070f821e5b6
+collider parse failed              0
+preview_ready                  true
+relation_ready                 true
+```
+
+上面的 file count 是 canonical top-level Part 实际采用的 sidecar 数量，不等同于 manifest 中
+官方/非官方目录合计的原始文件数。`.conn/.col` 属于本机只读导入输入；仓库不提交或分发 Studio
+源数据及其导出数据集。真实 Supabase 默认使用 `colliderStorage=metadata-only`：完整解析并保存
+1,876,415 的 count/hash/parser 证据，但不把 145 MB `.col` 源展开成 187 万 PostgreSQL 行。精确
+collider clearance/raycast 算法不属于本次 S5：未来应把压缩 collider bundle 放对象存储并按 Part
+读取，不能把“输入已验证”宣称为已经完成精确碰撞求解。
 
 ### S6：切换与清理
 
@@ -414,14 +475,21 @@ materialize 仍需要下一步用 Go API/Worker + Storage 执行 `component.part
   当前 Go Worker 使用 ComponentVersion 固定的 Part Library、SceneSnapshot、structure/geometry
   hash 和 Studio LDraw source path 按需生成整体 GLB；没有 structural cube fallback，也不读取
   当前 active library 重解释旧版本。
+- 冻结库中 geometry 为 `failed/missing` 的 Part 保留在 BOM 并明确标注，ComponentVersion GLB
+  跳过对应实例后继续生成；任务结果与 Artifact metadata 记录 omissions。geometry 已为 ready 时的
+  source 缺失或 hash 漂移仍严格失败。
 - 批量 materialize 每个 Part 的 GLB 是后续缓存/性能优化 TODO，不是当前 Component preview
   的前置条件。Part-level GLB 仍可按单个 Part preview API 逐个生成。
 
 ## 7. 当前未解决问题
 
+- 后续 Studio snapshot 更新仍必须由保留脚本确认精确数据库目标；同一 active/ready manifest
+  默认 no-op，强制重建需显式设置 `FORCE_STUDIO_REIMPORT=1`。
+- 精确 collider clearance/raycast 算法尚未实现；S5 只完成数据接入、版本冻结和可用性标记。
 - Studio 文件版本号/发布日期应如何从本地安装稳定提取，仍需 importer spike 确认。
 - `bl_*.dat` 到 BrickLink item 的 relation_type 需要抽样校验，不能全部假设 exact。
 - `elementInfoList.json` 的 `blColorCode` 到系统颜色表尚未建立；LEGO element 暂只能作为带
   metadata 的 color_variant external ID。
-- `.conn` / `.col` 是 Studio 专有连接/碰撞数据，格式和许可都需要单独确认。
+- `.conn` / `.col` parser 已按本机 Studio snapshot 和公开社区资料完成兼容性验证；若要分发
+  Studio 原始或派生数据集，许可与再分发边界仍需单独确认。
 - legacy Part 名称/类别与 Studio part 的冲突解决规则尚未制定。

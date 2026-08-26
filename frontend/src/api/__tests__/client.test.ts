@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '../../i18n';
-import { ApiError, apiFetch, errorMessage, requestJson } from '../client';
+import {
+  ApiError,
+  apiFetch,
+  errorMessage,
+  requestJson,
+  subscribeInvalidSession,
+} from '../client';
 
 describe('API error client', () => {
   beforeEach(async () => {
@@ -53,5 +59,51 @@ describe('API error client', () => {
     if (!(error instanceof ApiError)) throw new Error('Expected ApiError');
     expect(error.code).toBe('common.network_error');
     expect(error.message).not.toContain('socket details');
+  });
+
+  it('notifies AuthContext only for an explicit invalid-session response', async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeInvalidSession(listener);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: {
+        code: 'auth.session_invalid',
+        params: {},
+        traceId: 'req_auth',
+      },
+    }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    await expect(apiFetch('/api/v1/components', {
+      headers: { Authorization: 'Bearer rejected-token' },
+    })).rejects.toMatchObject({
+      code: 'auth.session_invalid',
+      status: 401,
+    });
+    expect(listener).toHaveBeenCalledWith('rejected-token');
+    unsubscribe();
+  });
+
+  it('does not invalidate the local session when verification is unavailable', async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeInvalidSession(listener);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: {
+        code: 'auth.session_verification_unavailable',
+        params: {},
+        traceId: 'req_auth',
+      },
+    }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    await expect(apiFetch('/api/v1/auth/session')).rejects.toMatchObject({
+      code: 'auth.session_verification_unavailable',
+      status: 503,
+    });
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
   });
 });

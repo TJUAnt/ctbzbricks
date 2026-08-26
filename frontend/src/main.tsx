@@ -27,6 +27,8 @@ import { requestJson } from './api/client';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ComponentCandidateWorkbenchPage } from './componentRepo/ComponentCandidateWorkbenchPage';
 import { ComponentImportPage } from './componentRepo/ComponentImportPage';
+import { ComponentImportHistoryPage } from './componentRepo/ComponentImportHistoryPage';
+import { ComponentImportStatusPage } from './componentRepo/ComponentImportStatusPage';
 import { ComponentRepoPage } from './componentRepo/ComponentRepoPage';
 import { ComponentDetailPage } from './componentRepo/ComponentDetailPage';
 import { LegoDesignPage } from './legoDesign/LegoDesignPage';
@@ -349,6 +351,14 @@ function WorkbenchRoutes({
       <Route element={<PartViewerPage />} path={routePathFor(appConfig.pages.partViewer as PageKey)} />
       <Route element={<ComponentRepoPage />} path={routePathFor(appConfig.pages.componentRepo as PageKey)} />
       <Route element={<ComponentImportPage />} path={routePathFor(appConfig.pages.componentRepoImport as PageKey)} />
+      <Route
+        element={<ComponentImportHistoryPage />}
+        path={routePathFor(appConfig.pages.componentRepoImportHistory as PageKey)}
+      />
+      <Route
+        element={<ComponentImportStatusPage />}
+        path={routePathFor(appConfig.pages.componentRepoImportStatus as PageKey)}
+      />
       <Route
         element={<ComponentCandidateWorkbenchPage />}
         path={routePathFor(appConfig.pages.componentRepoCandidate as PageKey)}

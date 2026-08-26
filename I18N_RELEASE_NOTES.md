@@ -2,6 +2,68 @@
 
 资源版本只追加、不复用。前端资源内容由 SHA-256 锁定，服务端导出版本写入每个正式产物。
 
+## frontend-2026.08.25.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：964
+- 内容哈希：`0d75a5beb557077fd3cb96260c051118b400c6231e0dfdadea4ded01e28055f1`
+- Component Repo 搜索改为按 Enter 追加 AND 条件，并在搜索框右侧显示可分别清除的条件标签；新增当前条件和清除按钮的无障碍语义文案。
+- 用户输入的名称、UUID 或尺寸查询保持原文展示和传输；条件值、Box 数值及 `x/X/×` 分隔符不翻译。
+
+## frontend-2026.08.24.2
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：962
+- 内容哈希：`51167620152381700db4ca56a0fafef3a90d629847bd28053cd7ab952a234929`
+- Component Repo 新增全局导入记录页面和组件详情导入记录 Tab；组件列表状态收敛为“全部 / 草稿 / 已发布”。
+- Import 的 `processing/ready/failed`、Component 的 `draft/active`、ID、文件大小与时间字段保持机器数据；源文件名按用户原文展示，失败继续通过 `code + params` 本地化。
+
+## frontend-2026.08.24.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：941
+- 内容哈希：`27e0a34eea2255209feb1f11d163c3c2ff1027a0f7ef0e94740f507321241d4c`
+- Component 发布与验证解耦；详情页复用既有“验证 / 已通过”语义 key，并新增“当前版本无法验证”的结构化错误文案。
+- Version ID、Candidate ID、`passed`、ValidationReport ID、task 状态和错误 code 继续作为机器数据，不翻译。
+
+## frontend-2026.08.23.3
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：940
+- 内容哈希：`f79746ec4a2c52ec9061622ed0f43ff454eacdaaa761684a195ff1a3924bd726`
+- Component 候选页和详情页的 BOM 对缺少 ready geometry 的 Part 显示“缺少预览几何”；Part 编号、数量及 `ready/failed/missing` 状态保持机器数据，不翻译。
+
+## frontend-2026.08.23.2
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：939
+- 内容哈希：`645fa27f5f45b7c2e112a194a50e6b24246346c2937c07cdeb9d66b4f89e9b04`
+- Component 上传弹窗文案收敛为“只等待文件上传完成”；upload complete 返回后进入独立的解析中状态页，不再暗示弹窗等待 Worker 处理。
+- Import ID、处理状态、task/candidate/version ID 和 API 字段继续作为机器数据；状态页使用既有 typed semantic key。
+
+## frontend-2026.08.23.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：939
+- 内容哈希：`a1df75fe1221177d4efd58e7818fb311468895007441a96056d65a7633e42b81`
+- Component Candidate 默认结果页新增按需加载连接信息的开关说明与 BOM 独立失败提示；默认只展示 Worker 已生成的整体 GLB 与 Version BOM。
+- Connector、relation、interface、Part 编号、数量和状态继续作为机器数据，不翻译；开关标题与说明使用 typed semantic key。
+
+## frontend-2026.08.21.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：936
+- 内容哈希：`93479d839918ae1af7dc517030383981ad8ff5a7d50312f60f2a338761fae8b9`
+- 撤销未采用的 Component Repo 永久删除 / purge 文案和错误资源；当前 Component 删除只保留 soft delete 入口。
+- Component 名称仍按用户内容原样插值；Component ID、删除审计字段、Storage key 和状态保持机器数据，不翻译。
+
 ## frontend-2026.08.17.2
 
 - 生产语言：`zh-CN`、`en-US`

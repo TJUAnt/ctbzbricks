@@ -174,7 +174,12 @@ SELECT c.id, c.owner_id, c.content_kind,
        COALESCE(CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END, '')::text AS selected_description,
        (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
        (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
-       c.category, c.status, c.current_version_id, c.metadata, c.created_at, c.updated_at,
+       c.category, c.status, c.current_version_id,
+       COALESCE(display_version.logical_width_stud, c.logical_width_stud) AS logical_width_stud,
+       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
+       COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
+       c.metadata, c.created_at, c.updated_at,
+       COALESCE(c.owner_id = sqlc.arg(owner_id), false)::boolean AS owned_by_actor,
        (c.content_kind = 'official' AND c.content_locale <> sqlc.arg(locale)
         AND translation.id IS NULL)::boolean AS translation_missing,
        EXISTS (
@@ -196,6 +201,20 @@ LEFT JOIN component_repo.component_group_memberships membership
   ON membership.owner_id = g.owner_id
  AND membership.group_id = g.id
  AND membership.component_id = c.id
+LEFT JOIN LATERAL (
+    SELECT version.logical_width_stud, version.logical_depth_stud,
+           version.logical_height_plate
+    FROM component_repo.component_versions version
+    WHERE version.component_id = c.id
+      AND version.deleted_at IS NULL
+      AND (
+          version.id = c.current_version_id
+          OR (c.current_version_id IS NULL AND version.status = 'draft')
+      )
+    ORDER BY (version.id = c.current_version_id) DESC,
+             version.created_at DESC, version.id DESC
+    LIMIT 1
+) display_version ON true
 LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
     FROM component_repo.component_translations t
@@ -239,8 +258,12 @@ SELECT c.id, c.owner_id, c.content_kind,
        COALESCE(CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END, '')::text AS selected_description,
        (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
        (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
-       c.category, c.status, c.current_version_id, c.logical_width_stud,
-       c.logical_depth_stud, c.logical_height_plate, c.metadata, c.created_at, c.updated_at,
+       c.category, c.status, c.current_version_id,
+       COALESCE(display_version.logical_width_stud, c.logical_width_stud) AS logical_width_stud,
+       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
+       COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
+       c.metadata, c.created_at, c.updated_at,
+       COALESCE(c.owner_id = sqlc.arg(owner_id), false)::boolean AS owned_by_actor,
        (c.content_kind = 'official' AND c.content_locale <> sqlc.arg(locale)
         AND translation.id IS NULL)::boolean AS translation_missing,
        EXISTS (
@@ -258,6 +281,41 @@ JOIN component_repo.components c
         AND membership.group_id = group_record.id
         AND membership.component_id = c.id
   )
+LEFT JOIN LATERAL (
+    SELECT version.logical_width_stud, version.logical_depth_stud,
+           version.logical_height_plate
+    FROM component_repo.component_versions version
+    WHERE version.component_id = c.id
+      AND version.deleted_at IS NULL
+      AND (
+          version.id = c.current_version_id
+          OR (c.current_version_id IS NULL AND version.status = 'draft')
+      )
+    ORDER BY (version.id = c.current_version_id) DESC,
+             version.created_at DESC, version.id DESC
+    LIMIT 1
+) display_version ON true
+-- 尺寸搜索忽略 Box 轴方向：先把三个业务尺寸归一化为升序 a/b/c；任一尺寸缺失时不参与尺寸匹配。
+LEFT JOIN LATERAL (
+    SELECT LEAST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
+                 COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
+                 COALESCE(display_version.logical_height_plate, c.logical_height_plate))::double precision AS size_a,
+           (COALESCE(display_version.logical_width_stud, c.logical_width_stud)
+            + COALESCE(display_version.logical_depth_stud, c.logical_depth_stud)
+            + COALESCE(display_version.logical_height_plate, c.logical_height_plate)
+            - LEAST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
+                    COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
+                    COALESCE(display_version.logical_height_plate, c.logical_height_plate))
+            - GREATEST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
+                       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
+                       COALESCE(display_version.logical_height_plate, c.logical_height_plate)))::double precision AS size_b,
+           GREATEST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
+                    COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
+                    COALESCE(display_version.logical_height_plate, c.logical_height_plate))::double precision AS size_c
+    WHERE COALESCE(display_version.logical_width_stud, c.logical_width_stud) IS NOT NULL
+      AND COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) IS NOT NULL
+      AND COALESCE(display_version.logical_height_plate, c.logical_height_plate) IS NOT NULL
+) normalized_size ON true
 LEFT JOIN LATERAL (
     SELECT translation_record.id, translation_record.locale, translation_record.name,
            translation_record.description, translation_record.tags
@@ -282,10 +340,52 @@ WHERE group_record.id = sqlc.arg(group_id)
         )
   )
   AND (cardinality(sqlc.arg(status_filters)::text[]) = 0 OR c.status = ANY(sqlc.arg(status_filters)::text[]))
-  AND (
-      sqlc.arg(search_query)::text = ''
-      OR CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END ILIKE '%' || sqlc.arg(search_query) || '%'
-      OR c.id::text ILIKE '%' || sqlc.arg(search_query) || '%'
+  -- 每个重复 query 都是独立条件；NOT EXISTS 反例使全部文字条件按 AND 组合。
+  AND NOT EXISTS (
+      SELECT 1
+      FROM unnest(sqlc.arg(text_filters)::text[]) AS requested_text(value)
+      WHERE NOT (
+          CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
+              ILIKE '%' || requested_text.value || '%'
+          OR c.id::text ILIKE '%' || requested_text.value || '%'
+      )
+  )
+  -- 二维/三维条件也逐个满足；COALESCE(false) 确保缺少 Box 时不会被 SQL NULL 误判为通过。
+  AND NOT EXISTS (
+      SELECT 1
+      FROM jsonb_to_recordset(sqlc.arg(size_filters)::jsonb)
+          AS requested_size(dimension_count integer, size_a double precision,
+                            size_b double precision, size_c double precision)
+      WHERE NOT COALESCE((
+          (
+              requested_size.dimension_count = 3
+              AND normalized_size.size_a > requested_size.size_a - 1
+              AND normalized_size.size_a < requested_size.size_a + 1
+              AND normalized_size.size_b > requested_size.size_b - 1
+              AND normalized_size.size_b < requested_size.size_b + 1
+              AND normalized_size.size_c > requested_size.size_c - 1
+              AND normalized_size.size_c < requested_size.size_c + 1
+          )
+          OR (
+              requested_size.dimension_count = 2
+              AND (
+                  (normalized_size.size_a > requested_size.size_a - 1
+                   AND normalized_size.size_a < requested_size.size_a + 1
+                   AND normalized_size.size_b > requested_size.size_b - 1
+                   AND normalized_size.size_b < requested_size.size_b + 1)
+                  OR
+                  (normalized_size.size_a > requested_size.size_a - 1
+                   AND normalized_size.size_a < requested_size.size_a + 1
+                   AND normalized_size.size_c > requested_size.size_b - 1
+                   AND normalized_size.size_c < requested_size.size_b + 1)
+                  OR
+                  (normalized_size.size_b > requested_size.size_a - 1
+                   AND normalized_size.size_b < requested_size.size_a + 1
+                   AND normalized_size.size_c > requested_size.size_b - 1
+                   AND normalized_size.size_c < requested_size.size_b + 1)
+              )
+          )
+      ), false)
   )
 ORDER BY c.updated_at DESC, c.id
 LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset);
@@ -300,7 +400,42 @@ JOIN component_repo.components c
       WHERE membership.owner_id = group_record.owner_id
         AND membership.group_id = group_record.id
         AND membership.component_id = c.id
-  )
+      )
+LEFT JOIN LATERAL (
+    SELECT version.logical_width_stud, version.logical_depth_stud,
+           version.logical_height_plate
+    FROM component_repo.component_versions version
+    WHERE version.component_id = c.id
+      AND version.deleted_at IS NULL
+      AND (
+          version.id = c.current_version_id
+          OR (c.current_version_id IS NULL AND version.status = 'draft')
+      )
+    ORDER BY (version.id = c.current_version_id) DESC,
+             version.created_at DESC, version.id DESC
+    LIMIT 1
+) display_version ON true
+-- 状态统计必须复用与结果列表完全相同的尺寸归一化，否则分页总数和状态数量会发生漂移。
+LEFT JOIN LATERAL (
+    SELECT LEAST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
+                 COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
+                 COALESCE(display_version.logical_height_plate, c.logical_height_plate))::double precision AS size_a,
+           (COALESCE(display_version.logical_width_stud, c.logical_width_stud)
+            + COALESCE(display_version.logical_depth_stud, c.logical_depth_stud)
+            + COALESCE(display_version.logical_height_plate, c.logical_height_plate)
+            - LEAST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
+                    COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
+                    COALESCE(display_version.logical_height_plate, c.logical_height_plate))
+            - GREATEST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
+                       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
+                       COALESCE(display_version.logical_height_plate, c.logical_height_plate)))::double precision AS size_b,
+           GREATEST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
+                    COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
+                    COALESCE(display_version.logical_height_plate, c.logical_height_plate))::double precision AS size_c
+    WHERE COALESCE(display_version.logical_width_stud, c.logical_width_stud) IS NOT NULL
+      AND COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) IS NOT NULL
+      AND COALESCE(display_version.logical_height_plate, c.logical_height_plate) IS NOT NULL
+) normalized_size ON true
 LEFT JOIN LATERAL (
     SELECT translation_record.id, translation_record.name
     FROM component_repo.component_translations translation_record
@@ -323,10 +458,50 @@ WHERE group_record.id = sqlc.arg(group_id)
             OR (c.status = 'active' AND version.status <> 'draft')
         )
   )
-  AND (
-      sqlc.arg(search_query)::text = ''
-      OR CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END ILIKE '%' || sqlc.arg(search_query) || '%'
-      OR c.id::text ILIKE '%' || sqlc.arg(search_query) || '%'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM unnest(sqlc.arg(text_filters)::text[]) AS requested_text(value)
+      WHERE NOT (
+          CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
+              ILIKE '%' || requested_text.value || '%'
+          OR c.id::text ILIKE '%' || requested_text.value || '%'
+      )
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM jsonb_to_recordset(sqlc.arg(size_filters)::jsonb)
+          AS requested_size(dimension_count integer, size_a double precision,
+                            size_b double precision, size_c double precision)
+      WHERE NOT COALESCE((
+          (
+              requested_size.dimension_count = 3
+              AND normalized_size.size_a > requested_size.size_a - 1
+              AND normalized_size.size_a < requested_size.size_a + 1
+              AND normalized_size.size_b > requested_size.size_b - 1
+              AND normalized_size.size_b < requested_size.size_b + 1
+              AND normalized_size.size_c > requested_size.size_c - 1
+              AND normalized_size.size_c < requested_size.size_c + 1
+          )
+          OR (
+              requested_size.dimension_count = 2
+              AND (
+                  (normalized_size.size_a > requested_size.size_a - 1
+                   AND normalized_size.size_a < requested_size.size_a + 1
+                   AND normalized_size.size_b > requested_size.size_b - 1
+                   AND normalized_size.size_b < requested_size.size_b + 1)
+                  OR
+                  (normalized_size.size_a > requested_size.size_a - 1
+                   AND normalized_size.size_a < requested_size.size_a + 1
+                   AND normalized_size.size_c > requested_size.size_b - 1
+                   AND normalized_size.size_c < requested_size.size_b + 1)
+                  OR
+                  (normalized_size.size_b > requested_size.size_a - 1
+                   AND normalized_size.size_b < requested_size.size_a + 1
+                   AND normalized_size.size_c > requested_size.size_b - 1
+                   AND normalized_size.size_c < requested_size.size_b + 1)
+              )
+          )
+      ), false)
   )
 GROUP BY c.status
 ORDER BY c.status;

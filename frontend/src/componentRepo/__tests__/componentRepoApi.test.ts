@@ -4,12 +4,13 @@ import {
   addComponentToGroup,
   deleteComponent,
   listComponentGroups,
-  purgeComponent,
+  listComponentImports,
   searchComponentGroupComponents,
   deleteComponentVersion,
   detectRelations,
   getComponentVersion,
   getConnectorAnalysis,
+  loadComponentVersionParts,
   loadComponentVersionPreview,
   loadPartPreview,
   publishVersion,
@@ -81,12 +82,12 @@ describe('Component Repo Go API adapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await searchComponentGroupComponents('group-1', {
-      query: 'sample', statuses: ['draft', 'active'], page: 2, pageSize: 20,
+      queries: ['sample', '2x4'], statuses: ['draft', 'active'], page: 2, pageSize: 20,
     });
     const searchURL = new URL(String(fetchMock.mock.calls[0]?.[0]));
     expect(searchURL.pathname).toBe('/api/v1/component-groups/group-1/components/search');
     expect(searchURL.searchParams.getAll('status')).toEqual(['draft', 'active']);
-    expect(searchURL.searchParams.get('query')).toBe('sample');
+    expect(searchURL.searchParams.getAll('query')).toEqual(['sample', '2x4']);
 
     await addComponentToGroup('group-1', 'component-1');
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -94,6 +95,32 @@ describe('Component Repo Go API adapter', () => {
       '/api/v1/component-groups/group-1/components',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ componentId: 'component-1' }) }),
     );
+  });
+
+  it('reads owner-scoped import history with component and aggregate status filters', async () => {
+    vi.stubGlobal('window', {
+      location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
+      items: [], total: 0, page: 2, pageSize: 20, totalPages: 0,
+      statusCounts: { processing: 0, ready: 0, failed: 0 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listComponentImports({
+      page: 2,
+      pageSize: 20,
+      processingStatus: 'ready',
+      query: 'model.io',
+      componentId: 'component-1',
+    });
+
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe('/api/v1/component-imports');
+    expect(url.searchParams.get('processingStatus')).toBe('ready');
+    expect(url.searchParams.get('componentId')).toBe('component-1');
+    expect(url.searchParams.get('query')).toBe('model.io');
+    expect(url.searchParams.get('page')).toBe('2');
   });
 
   it('waits for asynchronous relation detection and then reads durable results', async () => {
@@ -135,15 +162,9 @@ describe('Component Repo Go API adapter', () => {
     );
   });
 
-  it('materializes a pending preview through a durable task before returning its signed model', async () => {
+  it('only reads a Worker-materialized preview and never starts the first preview task', async () => {
     const previewUrl = 'https' + '://storage.example/preview.glb';
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({
-        versionId: 'version-1', status: 'pending', generatorVersion: null,
-        artifactId: null, sha256: null, fileSize: null, url: null, failure: null,
-      }))
-      .mockResolvedValueOnce(jsonResponse({ taskId: 'task-1', status: 'queued' }, 202))
-      .mockResolvedValueOnce(jsonResponse(taskSucceeded))
       .mockResolvedValueOnce(jsonResponse({
         versionId: 'version-1', status: 'ready', generatorVersion: 'preview-v1',
         artifactId: 'artifact-1', sha256: 'abc', fileSize: 42,
@@ -160,11 +181,42 @@ describe('Component Repo Go API adapter', () => {
       sha256: 'abc',
       byteLength: 42,
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      '/api/v1/component-versions/version-1/preview/materialize',
-      expect.objectContaining({ method: 'POST' }),
-    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/component-versions/version-1/preview', undefined);
+  });
+
+  it('preserves each BOM Part geometry status from the Go API', async () => {
+    vi.stubGlobal('window', {
+      location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
+      versionId: 'version-1', partLibraryVersionId: 'library-1', partCount: 2,
+      items: [
+        { ldrawPartNum: '3001.dat', quantity: 1, name: 'Brick', contentLocale: 'en-US', translationStatus: 'fallback', geometryStatus: 'ready' },
+        { ldrawPartNum: 'missing.dat', quantity: 1, name: null, contentLocale: null, translationStatus: 'missing', geometryStatus: 'missing' },
+      ],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await loadComponentVersionParts('version-1');
+
+    expect(response.parts.map((part) => [part.partRef, part.geometryStatus])).toEqual([
+      ['3001.dat', 'ready'],
+      ['missing.dat', 'missing'],
+    ]);
+  });
+
+  it('rejects a pending preview without asking the API to materialize it', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
+      versionId: 'version-1', status: 'pending', generatorVersion: null,
+      artifactId: null, sha256: null, fileSize: null, url: null, failure: null,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(loadComponentVersionPreview('version-1')).rejects.toMatchObject({
+      code: 'component_repo.preview_unavailable',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('loads an immutable Part preview through the Go durable task contract', async () => {
@@ -245,33 +297,6 @@ describe('Component Repo Go API adapter', () => {
       '/api/v1/components/component-1',
       expect.objectContaining({ method: 'DELETE' }),
     );
-  });
-
-  it('starts and waits for component purge through the purge task endpoint', async () => {
-    vi.stubGlobal('window', { location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' } });
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ taskId: 'purge-task-1', status: 'queued' }, 202))
-      .mockResolvedValueOnce(jsonResponse({
-        ...taskSucceeded,
-        id: 'purge-task-1',
-        taskType: 'component.purge',
-        status: 'succeeded',
-      }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(purgeComponent('component-1', 'My Component')).resolves.toMatchObject({
-      id: 'purge-task-1',
-      status: 'succeeded',
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      '/api/v1/components/component-1/purge',
-      expect.objectContaining({
-        method: 'POST',
-        body: expect.stringContaining('"confirmComponentName":"My Component"'),
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/tasks/purge-task-1', undefined);
   });
 
   it('combines Go connector and interface resources without fabricating legacy analysis metadata', async () => {

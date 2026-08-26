@@ -30,6 +30,8 @@ type Store interface {
 	Put(context.Context, string, string, io.Reader, int64) error
 	Delete(context.Context, string) error
 	SignDownload(context.Context, string, time.Duration) (string, error)
+	// SignDownloads 为同一授权边界内的一组对象执行一次批量签名；返回值只包含成功签名的 key。
+	SignDownloads(context.Context, []string, time.Duration) (map[string]string, error)
 	SignDownloadForUser(context.Context, string, time.Duration, string) (string, error)
 }
 
@@ -59,6 +61,9 @@ func (disabledStore) Put(context.Context, string, string, io.Reader, int64) erro
 func (disabledStore) Delete(context.Context, string) error { return ErrUnavailable }
 func (disabledStore) SignDownload(context.Context, string, time.Duration) (string, error) {
 	return "", ErrUnavailable
+}
+func (disabledStore) SignDownloads(context.Context, []string, time.Duration) (map[string]string, error) {
+	return nil, ErrUnavailable
 }
 func (disabledStore) SignDownloadForUser(context.Context, string, time.Duration, string) (string, error) {
 	return "", ErrUnavailable

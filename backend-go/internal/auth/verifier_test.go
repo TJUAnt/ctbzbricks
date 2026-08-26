@@ -138,7 +138,13 @@ func TestVerifierRejectsUnsupportedOrTamperedES256Tokens(t *testing.T) {
 	valid := signedES256Token(t, privateKey, "key-a", map[string]any{
 		"sub": "00000000-0000-0000-0000-000000000001", "exp": now,
 	})
-	tampered := valid[:len(valid)-1] + map[bool]string{true: "A", false: "B"}[strings.HasSuffix(valid, "B")]
+	tokenParts := strings.Split(valid, ".")
+	tamperedSignature, decodeErr := base64.RawURLEncoding.DecodeString(tokenParts[2])
+	if decodeErr != nil {
+		t.Fatalf("decode ES256 signature: %v", decodeErr)
+	}
+	tamperedSignature[0] ^= 0xff
+	tampered := tokenParts[0] + "." + tokenParts[1] + "." + base64.RawURLEncoding.EncodeToString(tamperedSignature)
 	unknownKey := signedES256Token(t, privateKey, "key-b", map[string]any{
 		"sub": "00000000-0000-0000-0000-000000000001", "exp": now,
 	})
