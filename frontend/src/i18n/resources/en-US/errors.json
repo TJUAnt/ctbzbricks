@@ -80,6 +80,8 @@
   "component_repo.group_name_duplicate": "A group with this name already exists under the same parent.",
   "component_repo.group_name_invalid": "A group name is required and cannot exceed {{maximumLength}} characters.",
   "component_repo.component_not_managed": "You do not currently manage this component.",
+  "component_repo.star_own_component_forbidden": "You cannot star your own component.",
+  "component_repo.star_component_unavailable": "This component is not currently available to star.",
   "component_repo.subscription_own_component_forbidden": "You cannot subscribe to your own component.",
   "component_repo.subscription_component_unavailable": "This component is not currently available to subscribe to.",
   "component_repo.library_item_not_found": "The {{itemType}} item {{itemId}} was not found.",

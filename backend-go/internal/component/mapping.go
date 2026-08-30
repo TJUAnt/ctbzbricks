@@ -17,8 +17,9 @@ func componentFromVisible(row db.GetVisibleComponentRow) Component {
 		Tags: nonNilStrings(row.SelectedTags), Category: row.Category, Status: row.Status,
 		CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID), Metadata: validJSON(row.Metadata),
 		LogicalSize:  logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
-		OwnedByActor: row.OwnedByActor, Subscribed: row.Subscribed, TranslationMissing: row.TranslationMissing,
-		CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		OwnedByActor: row.OwnedByActor, StarredByActor: row.StarredByActor, StarCount: row.StarCount,
+		TranslationMissing: row.TranslationMissing,
+		CreatedAt:          row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 }
 
@@ -30,8 +31,9 @@ func componentFromList(row db.ListVisibleComponentsRow) Component {
 		Tags: nonNilStrings(row.SelectedTags), Category: row.Category, Status: row.Status,
 		CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID), Metadata: validJSON(row.Metadata),
 		LogicalSize:  logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
-		OwnedByActor: row.OwnedByActor, Subscribed: row.Subscribed, TranslationMissing: row.TranslationMissing,
-		CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		OwnedByActor: row.OwnedByActor, StarredByActor: row.StarredByActor, StarCount: row.StarCount,
+		TranslationMissing: row.TranslationMissing,
+		CreatedAt:          row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 }
 
@@ -82,8 +84,9 @@ func groupMemberFromDB(row db.ListComponentGroupMembersRow) GroupMember {
 			Tags: nonNilStrings(row.SelectedTags), Category: row.Category, Status: row.Status,
 			CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID), Metadata: validJSON(row.Metadata),
 			LogicalSize:  logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
-			OwnedByActor: row.OwnedByActor, Subscribed: row.Subscribed, TranslationMissing: row.TranslationMissing,
-			CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+			OwnedByActor: row.OwnedByActor, StarredByActor: row.StarredByActor, StarCount: row.StarCount,
+			TranslationMissing: row.TranslationMissing,
+			CreatedAt:          row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 		},
 		AddedAt: row.AddedAt.Time,
 	}
@@ -97,9 +100,28 @@ func componentFromGroupSearch(row db.SearchComponentGroupComponentsRow) Componen
 		Tags: nonNilStrings(row.SelectedTags), Category: row.Category, Status: row.Status,
 		CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID),
 		LogicalSize:      logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
-		Metadata:         validJSON(row.Metadata), OwnedByActor: row.OwnedByActor, Subscribed: row.Subscribed,
+		Metadata:         validJSON(row.Metadata), OwnedByActor: row.OwnedByActor,
+		StarredByActor: row.StarredByActor, StarCount: row.StarCount,
 		TranslationMissing: row.TranslationMissing, CreatedAt: row.CreatedAt.Time,
 		UpdatedAt: row.UpdatedAt.Time,
+	}
+}
+
+func starredComponentFromDB(row db.ListStarredComponentsRow) StarredComponent {
+	return StarredComponent{
+		Component: Component{
+			ID: uuidutil.String(row.ID), OwnerID: uuidutil.NullableString(row.OwnerID),
+			ContentKind: row.ContentKind, ContentLocale: row.SelectedContentLocale,
+			Name: row.SelectedName, Description: optionalSelected(row.SelectedDescription, row.HasDescription),
+			Tags: nonNilStrings(row.SelectedTags), Category: row.Category, Status: row.Status,
+			CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID),
+			LogicalSize:      logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
+			Metadata:         validJSON(row.Metadata), OwnedByActor: row.OwnedByActor,
+			StarredByActor: row.StarredByActor, StarCount: row.StarCount,
+			TranslationMissing: row.TranslationMissing, CreatedAt: row.CreatedAt.Time,
+			UpdatedAt: row.UpdatedAt.Time,
+		},
+		StarredAt: row.StarredAt.Time,
 	}
 }
 

@@ -7,6 +7,7 @@ import {
   Crosshair,
   FileClock,
   FolderTree,
+  GitCompareArrows,
   GitBranch,
   Layers3,
   LoaderCircle,
@@ -14,6 +15,7 @@ import {
   RefreshCw,
   Rocket,
   ShieldCheck,
+  Star,
   Trash2,
   X,
 } from 'lucide-react';
@@ -31,9 +33,12 @@ import {
   listComponentGroups,
   listComponentVersions,
   listRelations,
+  loadComponentVersionDiff,
   loadComponentVersionParts,
   loadComponentVersionPreview,
   publishVersion,
+  starComponent,
+  unstarComponent,
   validateCandidate,
   type ComponentConnectorAnalysisResponse,
   type ComponentConnectorResponse,
@@ -42,10 +47,13 @@ import {
   type ComponentValidationReportResponse,
   type ComponentResponse,
   type ComponentVersionPartsResponse,
+  type ComponentVersionDiffChangeKind,
+  type ComponentVersionDiffResponse,
   type ComponentVersionPreviewModelResponse,
   type ComponentVersionResponse,
 } from './componentRepoApi';
 import { ComponentVersionActions } from './ComponentVersionActions';
+import { ComponentDiffScene, type ComponentDiffFocus } from './ComponentDiffScene';
 import { ComponentImportHistoryList } from './ComponentImportHistoryPage';
 import { routeFor, StatusPill } from './ComponentRepoPage';
 
@@ -85,6 +93,15 @@ type ConnectorPartGroup = {
   connectors: ComponentConnectorResponse[];
 };
 
+type ComponentDiffViewState = {
+  afterPreview: ComponentVersionPreviewModelResponse | null;
+  beforePreview: ComponentVersionPreviewModelResponse | null;
+  diff: ComponentVersionDiffResponse | null;
+  error: string | null;
+  loading: boolean;
+  targetVersion: ComponentVersionResponse | null;
+};
+
 const connectorGroupLabelKeys: Record<ComponentConnectorResponse['state'], TranslationKey> = {
   internal: 'componentRepo:connectorGroupInternal',
   external: 'componentRepo:connectorGroupExternal',
@@ -103,6 +120,15 @@ const connectorStateRank = new Map(
   connectorStateOrder.map((state, index) => [state, index]),
 );
 
+const diffChangeLabelKeys: Record<ComponentVersionDiffChangeKind, TranslationKey> = {
+  part_added: 'componentRepo:diffAdded',
+  part_removed: 'componentRepo:diffRemoved',
+  transform_changed: 'componentRepo:diffMoved',
+  color_changed: 'componentRepo:diffColorChanged',
+  part_replaced: 'componentRepo:diffReplaced',
+};
+
+/** ComponentDetailPage 聚合不可变版本详情，并为 owner 提供相邻版本的只读三维对比入口。 */
 export function ComponentDetailPage() {
   const tr = useAppTranslation();
   const trDynamic = useDynamicTranslation();
@@ -116,11 +142,23 @@ export function ComponentDetailPage() {
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [publishing, setPublishing] = React.useState(false);
   const [validating, setValidating] = React.useState(false);
+  const [starring, setStarring] = React.useState(false);
   const [confirmingDeleteComponent, setConfirmingDeleteComponent] = React.useState(false);
   const [deletingComponent, setDeletingComponent] = React.useState(false);
   const [activeConnectorPartId, setActiveConnectorPartId] = React.useState<string | null>(null);
   const [selectedConnectorId, setSelectedConnectorId] = React.useState<string | null>(null);
   const [historyTab, setHistoryTab] = React.useState<'versions' | 'imports'>('versions');
+  const diffRequestRef = React.useRef(0);
+  const diffResetRef = React.useRef<(() => void) | null>(null);
+  const [diffFocus, setDiffFocus] = React.useState<ComponentDiffFocus | null>(null);
+  const [diffView, setDiffView] = React.useState<ComponentDiffViewState>({
+    afterPreview: null,
+    beforePreview: null,
+    diff: null,
+    error: null,
+    loading: false,
+    targetVersion: null,
+  });
   const trRef = React.useRef(tr);
   trRef.current = tr;
   const [state, setState] = React.useState<ComponentDetailState>({
@@ -145,6 +183,21 @@ export function ComponentDetailPage() {
   });
 
   React.useEffect(() => {
+    // 同一路由切换 Component 时必须丢弃旧版本的异步响应，避免把上一组件的 Diff 投影到新详情页。
+    diffRequestRef.current += 1;
+    diffResetRef.current = null;
+    setDiffFocus(null);
+    setDiffView({
+      afterPreview: null,
+      beforePreview: null,
+      diff: null,
+      error: null,
+      loading: false,
+      targetVersion: null,
+    });
+  }, [componentId]);
+
+  React.useEffect(() => {
     let active = true;
     const load = async () => {
       setState((current) => ({
@@ -159,15 +212,18 @@ export function ComponentDetailPage() {
         connectorError: null,
       }));
       try {
-        const [component, versions, groupTree, groupIds] = await Promise.all([
+        const [component, versions] = await Promise.all([
           getComponent(componentId),
           listComponentVersions(componentId),
-          listComponentGroups(),
-          listComponentGroupIds(componentId),
         ]);
+        // 分组关系属于 owner 私有数据；公开详情只读取 Component 和版本，不探测他人的分组。
+        const [groupTree, groupIds] = component.ownedByActor
+          ? await Promise.all([listComponentGroups(), listComponentGroupIds(componentId)])
+          : [null, [] as string[]];
         const version = preferredDetailVersion(component, versions);
         if (!version) throw new Error(trRef.current('componentRepo:noComponentVersions'));
-        const connectorAnalysisPromise = version.componentCandidateId
+        // Relation/Connector 是 Candidate owner 的审核数据；公开详情只读取 Version 级公开投影。
+        const connectorAnalysisPromise = component.ownedByActor && version.componentCandidateId
           ? getConnectorAnalysis(version.componentCandidateId)
           .then((connectorAnalysis) => ({
             connectorAnalysis,
@@ -209,7 +265,7 @@ export function ComponentDetailPage() {
                 ? previewError.message
                 : trRef.current('errors:common.unknown'),
             })),
-          version.componentCandidateId
+          component.ownedByActor && version.componentCandidateId
             ? listRelations(version.componentCandidateId)
             : Promise.resolve([]),
         ]);
@@ -352,6 +408,70 @@ export function ComponentDetailPage() {
       && componentOwnershipResolved
       && componentOwnedByActor,
   );
+  const canStarComponent = Boolean(
+    state.component
+      && componentOwnershipResolved
+      && !componentOwnedByActor,
+  );
+  // Version Diff 是 owner-only 只读能力；前端只并行读取两个已有 GLB，不触发 Preview 物化。
+  const compareVersion = async (version: ComponentVersionResponse) => {
+    const requestID = diffRequestRef.current + 1;
+    diffRequestRef.current = requestID;
+    setDiffFocus(null);
+    setDiffView({
+      afterPreview: null,
+      beforePreview: null,
+      diff: null,
+      error: null,
+      loading: true,
+      targetVersion: version,
+    });
+    try {
+      const diff = await loadComponentVersionDiff(version.id);
+      const afterPromise = state.version?.id === version.id && state.preview?.model
+        ? Promise.resolve(state.preview)
+        : loadComponentVersionPreview(version.id);
+      const beforePromise = diff.baseVersionId
+        ? loadComponentVersionPreview(diff.baseVersionId)
+        : Promise.resolve(null);
+      const [afterPreview, beforePreview] = await Promise.all([afterPromise, beforePromise]);
+      if (!afterPreview.model || (diff.baseVersionId && !beforePreview?.model)) {
+        throw new Error(trRef.current('componentRepo:diffPreviewUnavailable'));
+      }
+      if (diffRequestRef.current !== requestID) return;
+      setDiffView({
+        afterPreview,
+        beforePreview,
+        diff,
+        error: null,
+        loading: false,
+        targetVersion: version,
+      });
+    } catch (error) {
+      if (diffRequestRef.current !== requestID) return;
+      setDiffView({
+        afterPreview: null,
+        beforePreview: null,
+        diff: null,
+        error: error instanceof Error ? error.message : trRef.current('errors:common.unknown'),
+        loading: false,
+        targetVersion: version,
+      });
+    }
+  };
+  const closeVersionDiff = () => {
+    diffRequestRef.current += 1;
+    diffResetRef.current = null;
+    setDiffFocus(null);
+    setDiffView({
+      afterPreview: null,
+      beforePreview: null,
+      diff: null,
+      error: null,
+      loading: false,
+      targetVersion: null,
+    });
+  };
   const publish = async () => {
     if (!state.version || !canPublish) return;
     setPublishing(true);
@@ -410,6 +530,40 @@ export function ComponentDetailPage() {
       setDeletingComponent(false);
     }
   };
+  const toggleStar = async () => {
+    if (!state.component || !canStarComponent || starring) return;
+    const componentID = state.component.id;
+    const wasStarred = state.component.starredByActor;
+    setStarring(true);
+    setActionError(null);
+    setActionNotice(null);
+    setState((current) => current.component ? {
+      ...current,
+      component: {
+        ...current.component,
+        starredByActor: !wasStarred,
+        starCount: Math.max(0, current.component.starCount + (wasStarred ? -1 : 1)),
+      },
+    } : current);
+    try {
+      if (wasStarred) await unstarComponent(componentID);
+      else await starComponent(componentID);
+      setActionNotice(tr(wasStarred ? 'componentRepo:componentUnstarred' : 'componentRepo:componentStarred'));
+    } catch (starError) {
+      setActionError(starError instanceof Error ? starError.message : tr('errors:common.unknown'));
+      setRefreshToken((current) => current + 1);
+    } finally {
+      setStarring(false);
+    }
+  };
+  const diffBaseVersion = diffView.diff?.baseVersionId
+    ? state.versions.find((version) => version.id === diffView.diff?.baseVersionId) ?? null
+    : null;
+  const visibleDiffChanges = diffView.diff?.instanceChanges.slice(0, 100) ?? [];
+  const hiddenDiffChangeCount = Math.max(
+    0,
+    (diffView.diff?.instanceChanges.length ?? 0) - visibleDiffChanges.length,
+  );
   return (
     <section className="component-repo-page component-detail-page">
       <header className="component-repo-header">
@@ -421,6 +575,26 @@ export function ComponentDetailPage() {
           <button onClick={() => navigate(routeFor('componentRepo'))} type="button">
             {appConfig.texts.componentRepoBackToList}
           </button>
+          {canStarComponent && state.component ? (
+            <button
+              aria-pressed={state.component.starredByActor}
+              className="component-detail-star-button"
+              disabled={starring}
+              onClick={() => void toggleStar()}
+              title={tr(state.component.starredByActor ? 'componentRepo:unstarComponent' : 'componentRepo:starComponent')}
+              type="button"
+            >
+              {starring
+                ? <LoaderCircle aria-hidden="true" className="component-library-spin" />
+                : <Star aria-hidden="true" fill={state.component.starredByActor ? 'currentColor' : 'none'} />}
+              {tr(state.component.starredByActor ? 'componentRepo:starred' : 'componentRepo:star')}
+              <span>{state.component.starCount}</span>
+            </button>
+          ) : state.component ? (
+            <span className="component-detail-star-count" title={tr('componentRepo:starCount')}>
+              <Star aria-hidden="true" />{state.component.starCount}
+            </span>
+          ) : null}
           {canDeleteComponent ? (
             <button
               className="component-repo-danger-button"
@@ -588,6 +762,18 @@ export function ComponentDetailPage() {
           <span>{state.version ? `v${state.version.version} · ${state.version.id}` : '—'}</span>
           {state.version ? <StatusPill status={state.version.status} /> : null}
           {state.validationReport?.passed ? <StatusPill status="passed" /> : null}
+          {componentOwnedByActor && state.version ? (
+            <button
+              className="component-diff-open-button"
+              onClick={() => {
+                if (state.version) void compareVersion(state.version);
+              }}
+              type="button"
+            >
+              <GitCompareArrows aria-hidden="true" />
+              {tr('componentRepo:compareWithPreviousVersion')}
+            </button>
+          ) : null}
           <div className="component-detail-groups">
             <span><FolderTree aria-hidden="true" />{tr('componentRepo:groups')}</span>
             <div>
@@ -598,6 +784,118 @@ export function ComponentDetailPage() {
           </div>
         </div>
       </section>
+
+      {diffView.targetVersion ? (
+        <section className="component-version-diff-panel" aria-live="polite">
+          <header className="component-version-diff-header">
+            <div>
+              <span><GitCompareArrows aria-hidden="true" /></span>
+              <div>
+                <h2>{tr('componentRepo:versionComparison')}</h2>
+                <p>{tr('componentRepo:versionComparisonDescription')}</p>
+              </div>
+            </div>
+            <div>
+              {diffView.diff ? (
+                <button onClick={() => diffResetRef.current?.()} type="button">
+                  <RefreshCw aria-hidden="true" />
+                  {tr('componentRepo:resetPreview')}
+                </button>
+              ) : null}
+              <button onClick={closeVersionDiff} type="button">
+                <X aria-hidden="true" />
+                {tr('componentRepo:closeComparison')}
+              </button>
+            </div>
+          </header>
+
+          {diffView.loading ? (
+            <div className="component-version-diff-status">
+              <LoaderCircle aria-hidden="true" className="component-library-spin" />
+              {tr('componentRepo:loadingVersionComparison')}
+            </div>
+          ) : null}
+          {diffView.error ? <div className="asset-error">{diffView.error}</div> : null}
+
+          {diffView.diff && diffView.afterPreview?.model ? (
+            <>
+              <ComponentDiffScene
+                afterLabel={tr('componentRepo:diffAfterVersion', {
+                  version: diffView.targetVersion.version,
+                })}
+                afterModel={diffView.afterPreview.model}
+                beforeLabel={diffBaseVersion
+                  ? tr('componentRepo:diffBeforeVersion', { version: diffBaseVersion.version })
+                  : tr('componentRepo:diffEmptyBaseline')}
+                beforeModel={diffView.beforePreview?.model ?? null}
+                diff={diffView.diff}
+                emptyBeforeLabel={tr('componentRepo:diffNoPreviousModel')}
+                focus={diffFocus}
+                loadFailedLabel={tr('componentRepo:diffPreviewUnavailable')}
+                registerReset={(reset) => { diffResetRef.current = reset; }}
+              />
+
+              <div className="component-version-diff-summary">
+                <DiffMetric label={tr('componentRepo:diffAdded')} value={diffView.diff.summary.addedInstances} />
+                <DiffMetric label={tr('componentRepo:diffRemoved')} value={diffView.diff.summary.removedInstances} />
+                <DiffMetric label={tr('componentRepo:diffMoved')} value={diffView.diff.summary.transformChangedInstances} />
+                <DiffMetric label={tr('componentRepo:diffColorChanged')} value={diffView.diff.summary.colorChangedInstances} />
+                <DiffMetric label={tr('componentRepo:diffReplaced')} value={diffView.diff.summary.replacedInstances} />
+                <DiffMetric label={tr('componentRepo:diffAmbiguous')} value={diffView.diff.summary.ambiguousGroups} />
+              </div>
+
+              <div className="component-version-diff-legend" aria-label={tr('componentRepo:diffLegend')}>
+                {Object.entries(diffChangeLabelKeys).map(([kind, key]) => (
+                  <span key={kind}>
+                    <i className={`component-diff-color component-diff-color-${kind}`} />
+                    {trDynamic(key)}
+                  </span>
+                ))}
+                <span>
+                  <i className="component-diff-color component-diff-color-ambiguous" />
+                  {tr('componentRepo:diffAmbiguous')}
+                </span>
+              </div>
+
+              {diffView.diff.truncated ? (
+                <div className="component-version-diff-warning">
+                  <AlertTriangle aria-hidden="true" />
+                  {tr('componentRepo:diffDetailsTruncated')}
+                </div>
+              ) : null}
+
+              <div className="component-version-diff-change-list">
+                {visibleDiffChanges.map((change, index) => {
+                  const beforeInstanceId = change.before?.instanceId;
+                  const afterInstanceId = change.after?.instanceId;
+                  const selected = diffFocus?.beforeInstanceId === beforeInstanceId
+                    && diffFocus?.afterInstanceId === afterInstanceId;
+                  return (
+                    <button
+                      aria-pressed={selected}
+                      className={selected ? 'is-selected' : undefined}
+                      key={`${change.kind}-${beforeInstanceId ?? ''}-${afterInstanceId ?? ''}-${index}`}
+                      onClick={() => setDiffFocus(selected ? null : { beforeInstanceId, afterInstanceId })}
+                      type="button"
+                    >
+                      <i className={`component-diff-color component-diff-color-${change.kind}`} />
+                      <strong>{trDynamic(diffChangeLabelKeys[change.kind])}</strong>
+                      <span>{change.after?.partRef ?? change.before?.partRef}</span>
+                      <small>{change.after?.instanceId ?? change.before?.instanceId}</small>
+                    </button>
+                  );
+                })}
+                {hiddenDiffChangeCount > 0 ? (
+                  <div>{tr('componentRepo:moreDiffChangesNotShown', { count: hiddenDiffChangeCount })}</div>
+                ) : null}
+                {visibleDiffChanges.length === 0 && diffView.diff.summary.ambiguousGroups === 0 ? (
+                  <div>{tr('componentRepo:noVersionChanges')}</div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+        </section>
+      ) : null}
 
       {state.validationLoading && state.version?.validationReportId ? (
         <section className="component-repo-panel">
@@ -746,6 +1044,16 @@ export function ComponentDetailPage() {
                   <strong>v{version.version}</strong>
                   <span>{version.id}</span>
                   <StatusPill status={version.status} />
+                  {componentOwnedByActor ? (
+                    <button
+                      className="component-version-diff-list-button"
+                      onClick={() => void compareVersion(version)}
+                      type="button"
+                    >
+                      <GitCompareArrows aria-hidden="true" />
+                      {tr('componentRepo:compareWithPreviousVersion')}
+                    </button>
+                  ) : null}
                   {state.component ? (
                     <ComponentVersionActions
                       componentName={state.component.name}
@@ -783,6 +1091,15 @@ function preferredDetailVersion(
     (item) => item.status === 'draft' && Date.parse(item.createdAt) > currentCreatedAt,
   );
   return newerDraft ?? current ?? versions[0];
+}
+
+function DiffMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <article>
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </article>
+  );
 }
 
 function DetailMetric({

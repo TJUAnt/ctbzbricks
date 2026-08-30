@@ -90,7 +90,7 @@ component_translations
 ```text
 component_groups
 component_group_memberships
-component_subscriptions
+component_stars
 ```
 
 导入与资产：
@@ -155,7 +155,7 @@ GET    /api/v1/component-versions/:versionId/parts
 GET    /api/v1/component-versions/:versionId/source
 ```
 
-### 5.2 分组与订阅
+### 5.2 分组与 Star
 
 ```text
 GET    /api/v1/component-groups
@@ -168,8 +168,9 @@ GET    /api/v1/component-groups/:groupId/components
 POST   /api/v1/component-groups/:groupId/components
 DELETE /api/v1/component-groups/:groupId/components/:componentId
 
-PUT    /api/v1/components/:componentId/subscription
-DELETE /api/v1/components/:componentId/subscription
+GET    /api/v1/component-stars
+PUT    /api/v1/components/:componentId/star
+DELETE /api/v1/components/:componentId/star
 ```
 
 ### 5.3 导入、候选和任务
@@ -306,7 +307,7 @@ Import DTO 已提供 `processingStatus` 与 `previewTaskId`；本计划不要求
 - Component CRUD；
 - ComponentVersion 查询、创建草稿和生命周期；
 - ComponentGroup 树、移动和成员关系；
-- ComponentSubscription；
+- ComponentStar；
 - owner/actor 授权；
 - 官方翻译选择和用户 `contentLocale`；
 - 列表过滤、分页和稳定排序。

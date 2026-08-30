@@ -65,7 +65,7 @@ BOM、源文件下载、draft 删除、分组库查询/管理、Draft Version �
 1. **根分组初始化与根视图**
    - GET 保持只读，不能恢复 `EnsureComponentRootGroup` 写入。
    - 提供显式、幂等的 repository/bootstrap mutation，或接入明确的用户 provisioning 写路径。
-   - 根视图表示当前用户可管理/订阅的组件全集；不能要求每个组件复制一条 root membership。
+   - 根视图只表示当前用户拥有的组件；Star 使用独立“我的收藏”，custom Group 继续使用显式 membership。
    - 分组树返回稳定 root、custom groups 和 direct count。
 
 2. **组件库查询投影**

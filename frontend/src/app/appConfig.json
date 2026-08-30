@@ -76,6 +76,8 @@
   "meshModelFileApiUrl": "/api/mesh-models/{modelId}/file",
   "componentRepoApi": {
     "components": "/api/v1/components",
+    "componentStars": "/api/v1/component-stars",
+    "componentStar": "/api/v1/components/{componentId}/star",
     "componentGroups": "/api/v1/component-groups",
     "componentGroupsBootstrap": "/api/v1/component-groups/bootstrap",
     "componentGroup": "/api/v1/component-groups/{groupId}",
@@ -104,6 +106,7 @@
     "componentDetail": "/api/v1/components/{componentId}",
     "componentVersions": "/api/v1/components/{componentId}/versions",
     "componentVersion": "/api/v1/component-versions/{versionId}",
+    "componentVersionDiff": "/api/v1/component-versions/{versionId}/diff",
     "componentVersionDelete": "/api/v1/component-versions/{versionId}",
     "componentVersionPreview": "/api/v1/component-versions/{versionId}/preview",
     "componentVersionPreviewMaterialize": "/api/v1/component-versions/{versionId}/preview/materialize",

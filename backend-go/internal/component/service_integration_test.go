@@ -4,6 +4,7 @@ package component
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/scene"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -129,6 +131,9 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	if _, err := service.GetVersion(ctx, actorB, version.ID); errorCode(err) != "component_repo.version_not_found" {
 		t.Fatalf("cross-user draft version read code = %q", errorCode(err))
 	}
+	if _, err := service.Star(ctx, actorB, created.ID); errorCode(err) != "component_repo.component_not_found" {
+		t.Fatalf("draft-only component star code = %q, error = %v", errorCode(err), err)
+	}
 	published, err := service.PublishVersion(ctx, actorA, version.ID)
 	if err != nil || published.Status != "published" || published.PublishedAt == nil {
 		t.Fatalf("publish version: %+v, %v", published, err)
@@ -141,8 +146,39 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 		t.Fatalf("published version should be visible: %v", err)
 	}
 
+	// Diff 的父版本必须来自新 Import 的 base_version_id；即使已发布版本公开，Diff 仍只允许 owner 读取。
+	rootDiff, err := service.GetVersionDiff(ctx, actorA, version.ID)
+	if err != nil || rootDiff.ComparisonBasis != "empty" || rootDiff.BaseVersionID != nil || rootDiff.Summary.AddedInstances != 1 {
+		t.Fatalf("root version diff: %+v, %v", rootDiff, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE component_repo.artifacts SET verification_status='verified', verified_at=now() WHERE id='20000000-0000-0000-0000-000000000030'`); err != nil {
+		t.Fatalf("verify head diff artifact: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE component_repo.upload_sessions SET base_version_id=$1 WHERE id='20000000-0000-0000-0000-000000000034'`, mustUUID(t, version.ID)); err != nil {
+		t.Fatalf("seed head upload lineage: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE component_repo.imports SET base_version_id=$1 WHERE id='20000000-0000-0000-0000-000000000031'`, mustUUID(t, version.ID)); err != nil {
+		t.Fatalf("seed head diff lineage: %v", err)
+	}
+	headVersion, err := service.CreateVersion(ctx, actorA, created.ID, CreateVersionInput{
+		ComponentCandidateID: "20000000-0000-0000-0000-000000000033",
+		Version:              "2.0.0",
+		Revision:             1,
+	})
+	if err != nil {
+		t.Fatalf("create head diff version: %v", err)
+	}
+	diff, err := service.GetVersionDiff(ctx, actorA, headVersion.ID)
+	if err != nil || diff.BaseVersionID == nil || *diff.BaseVersionID != version.ID || diff.ComparisonBasis != "import_base_version" ||
+		diff.Summary.ColorChangedInstances != 1 || diff.Summary.AddedInstances != 1 || diff.Summary.BeforeInstances != 1 || diff.Summary.AfterInstances != 2 {
+		t.Fatalf("lineage version diff: %+v, %v", diff, err)
+	}
+	if _, err := service.GetVersionDiff(ctx, actorB, headVersion.ID); errorCode(err) != "component_repo.version_not_found" {
+		t.Fatalf("cross-user version diff code = %q, error = %v", errorCode(err), err)
+	}
+
 	testOfficialTranslationSelection(t, service, pool, actorA)
-	testGroupsMembershipsAndSubscriptions(t, service, actorA, actorB, created.ID)
+	testGroupsMembershipsAndStars(t, service, actorA, actorB, created.ID)
 	testStablePagination(t, service, actorA)
 
 	if err := service.DeleteComponent(ctx, actorA, created.ID); err != nil {
@@ -153,6 +189,9 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	}
 	if _, err := service.GetComponent(ctx, actorB, created.ID, "en-US"); errorCode(err) != "component_repo.component_not_found" {
 		t.Fatalf("deleted component public read code = %q, error = %v", errorCode(err), err)
+	}
+	if _, err := service.Star(ctx, actorB, created.ID); errorCode(err) != "component_repo.component_not_found" {
+		t.Fatalf("deleted component star code = %q, error = %v", errorCode(err), err)
 	}
 }
 
@@ -192,7 +231,7 @@ func testOfficialTranslationSelection(t *testing.T, service *Service, pool *pgxp
 	}
 }
 
-func testGroupsMembershipsAndSubscriptions(t *testing.T, service *Service, actorA, actorB pgtype.UUID, componentID string) {
+func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actorB pgtype.UUID, componentID string) {
 	t.Helper()
 	ctx := context.Background()
 	groups, err := service.ListGroups(ctx, actorA)
@@ -321,15 +360,104 @@ func testGroupsMembershipsAndSubscriptions(t *testing.T, service *Service, actor
 	if err != nil || len(members.Items) != 1 || members.Items[0].ID != componentID {
 		t.Fatalf("group members: %+v, %v", members, err)
 	}
-	if _, err := service.Subscribe(ctx, actorA, componentID); errorCode(err) != "component_repo.subscription_own_component_forbidden" {
-		t.Fatalf("own subscription code = %q", errorCode(err))
+	if _, err := service.Star(ctx, actorA, componentID); errorCode(err) != "component_repo.star_own_component_forbidden" {
+		t.Fatalf("own star code = %q", errorCode(err))
 	}
-	subscription, err := service.Subscribe(ctx, actorB, componentID)
-	if err != nil || subscription.ComponentID != componentID {
-		t.Fatalf("subscribe to active component: %+v, %v", subscription, err)
+	starResults := make(chan Star, 2)
+	starErrors := make(chan error, 2)
+	var starWait sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		starWait.Add(1)
+		go func() {
+			defer starWait.Done()
+			star, err := service.Star(ctx, actorB, componentID)
+			starResults <- star
+			starErrors <- err
+		}()
 	}
-	if err := service.Unsubscribe(ctx, actorB, componentID); err != nil {
-		t.Fatalf("unsubscribe: %v", err)
+	starWait.Wait()
+	close(starResults)
+	close(starErrors)
+	starsCreated := make([]Star, 0, 2)
+	for star := range starResults {
+		starsCreated = append(starsCreated, star)
+	}
+	for err := range starErrors {
+		if err != nil {
+			t.Fatalf("concurrent star active component: %v", err)
+		}
+	}
+	if len(starsCreated) != 2 || starsCreated[0].ComponentID != componentID || starsCreated[0].StarredAt.IsZero() ||
+		!starsCreated[0].StarredAt.Equal(starsCreated[1].StarredAt) {
+		t.Fatalf("concurrent star must converge on one timestamp: %+v", starsCreated)
+	}
+	star := starsCreated[0]
+	repeatedStar, err := service.Star(ctx, actorB, componentID)
+	if err != nil || !repeatedStar.StarredAt.Equal(star.StarredAt) {
+		t.Fatalf("repeated star must preserve original timestamp: %+v, %v", repeatedStar, err)
+	}
+	starredComponent, err := service.GetComponent(ctx, actorB, componentID, "en-US")
+	if err != nil || !starredComponent.StarredByActor || starredComponent.StarCount != 1 {
+		t.Fatalf("starred component projection: %+v, %v", starredComponent, err)
+	}
+	stars, err := service.ListStars(ctx, actorB, StarListRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US",
+	})
+	if err != nil || stars.Total != 1 || stars.RelationshipTotal != 1 || len(stars.Items) != 1 || stars.Items[0].ID != componentID || stars.Items[0].StarredAt.IsZero() {
+		t.Fatalf("star list: %+v, %v", stars, err)
+	}
+	sizeStars, err := service.ListStars(ctx, actorB, StarListRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US", Query: "1x2x3", Sort: "starred_at_desc",
+	})
+	if err != nil || sizeStars.Total != 1 || len(sizeStars.Items) != 1 || sizeStars.Items[0].ID != componentID {
+		t.Fatalf("star logical size filter: %+v, %v", sizeStars, err)
+	}
+	if _, err := service.ListStars(ctx, actorB, StarListRequest{Sort: "name_asc"}); errorCode(err) != "request.validation_failed" {
+		t.Fatalf("invalid star sort code = %q, error = %v", errorCode(err), err)
+	}
+	if err := service.BootstrapGroups(ctx, actorB); err != nil {
+		t.Fatalf("bootstrap actor B root group: %v", err)
+	}
+	actorBGroups, err := service.ListGroups(ctx, actorB)
+	if err != nil || len(actorBGroups) == 0 {
+		t.Fatalf("actor B groups after star: %+v, %v", actorBGroups, err)
+	}
+	actorBRoot, err := service.SearchGroupComponents(ctx, actorB, actorBGroups[0].ID, ComponentGroupSearchRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US", Statuses: []string{"active"},
+	})
+	if err != nil || actorBRoot.Total != 0 || len(actorBRoot.Items) != 0 {
+		t.Fatalf("starred component must not enter owned-only root: %+v, %v", actorBRoot, err)
+	}
+	actorBGroup, err := service.CreateGroup(ctx, actorB, CreateGroupInput{
+		ParentGroupID: &actorBGroups[0].ID, Name: "Saved", ContentLocale: "en-US",
+	})
+	if err != nil {
+		t.Fatalf("create actor B custom group: %v", err)
+	}
+	if err := service.AddGroupMember(ctx, actorB, actorBGroup.ID, componentID); err != nil {
+		t.Fatalf("add starred component to custom group: %v", err)
+	}
+	if err := service.Unstar(ctx, actorB, componentID); err != nil {
+		t.Fatalf("unstar: %v", err)
+	}
+	if err := service.Unstar(ctx, actorB, componentID); err != nil {
+		t.Fatalf("idempotent unstar: %v", err)
+	}
+	unstarredComponent, err := service.GetComponent(ctx, actorB, componentID, "en-US")
+	if err != nil || unstarredComponent.StarredByActor || unstarredComponent.StarCount != 0 {
+		t.Fatalf("unstarred component projection: %+v, %v", unstarredComponent, err)
+	}
+	actorBCustom, err := service.SearchGroupComponents(ctx, actorB, actorBGroup.ID, ComponentGroupSearchRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US", Statuses: []string{"active"},
+	})
+	if err != nil || actorBCustom.Total != 1 || len(actorBCustom.Items) != 1 || actorBCustom.Items[0].ID != componentID {
+		t.Fatalf("unstar must preserve custom group membership: %+v, %v", actorBCustom, err)
+	}
+	actorBRoot, err = service.SearchGroupComponents(ctx, actorB, actorBGroups[0].ID, ComponentGroupSearchRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US", Statuses: []string{"active"},
+	})
+	if err != nil || actorBRoot.Total != 0 || len(actorBRoot.Items) != 0 {
+		t.Fatalf("unstarred component removed from personal root: %+v, %v", actorBRoot, err)
 	}
 }
 
@@ -398,6 +526,11 @@ func seedListableOfficialComponents(t *testing.T, pool *pgxpool.Pool, actor pgty
 func seedVersionDependencies(t *testing.T, pool *pgxpool.Pool, actorA, actorB pgtype.UUID, componentID string) {
 	t.Helper()
 	ctx := context.Background()
+	baseDocument := diffSceneDocument([]scene.RootInstance{{InstanceID: "base-root", TargetModelID: "assembly", Transform: scene.IdentityTransform()}}, "4")
+	headDocument := diffSceneDocument([]scene.RootInstance{
+		{InstanceID: "head-left", TargetModelID: "assembly", Transform: scene.IdentityTransform()},
+		{InstanceID: "head-right", TargetModelID: "assembly", Transform: translatedSceneTransform(20)},
+	}, "14")
 	_, err := pool.Exec(ctx, `
 		INSERT INTO component_repo.artifacts
 			(id, owner_id, artifact_type, source_kind, original_filename, storage_provider,
@@ -479,11 +612,11 @@ func seedVersionDependencies(t *testing.T, pool *pgxpool.Pool, actorA, actorB pg
 			(id, import_id, schema_version, parser_version, document, bom, parse_issues)
 		VALUES
 			('20000000-0000-0000-0000-000000000012',
-			 '20000000-0000-0000-0000-000000000011', '1', 'g3-fixture', '{}', '{}', '[]'),
+			 '20000000-0000-0000-0000-000000000011', '1', 'g3-fixture', $1::jsonb, '{"3001.dat":1}', '[]'),
 			('20000000-0000-0000-0000-000000000022',
-			 '20000000-0000-0000-0000-000000000021', '1', 'g3-foreign', '{}', '{}', '[]'),
+			 '20000000-0000-0000-0000-000000000021', '1', 'g3-foreign', $1::jsonb, '{"3001.dat":1}', '[]'),
 			('20000000-0000-0000-0000-000000000032',
-			 '20000000-0000-0000-0000-000000000031', '1', 'g3-pending', '{}', '{}', '[]')`)
+			 '20000000-0000-0000-0000-000000000031', '1', 'g3-pending', $2::jsonb, '{"3001.dat":2}', '[]')`, baseDocument, headDocument)
 	if err != nil {
 		t.Fatalf("seed scene snapshots: %v", err)
 	}
@@ -504,6 +637,24 @@ func seedVersionDependencies(t *testing.T, pool *pgxpool.Pool, actorA, actorB pg
 	if err != nil {
 		t.Fatalf("seed candidates: %v", err)
 	}
+}
+
+func diffSceneDocument(roots []scene.RootInstance, colorCode string) json.RawMessage {
+	document := scene.Document{
+		RootInstances: roots,
+		Models: []scene.Model{{ModelID: "assembly", References: []scene.Reference{{
+			InstanceID: "leaf", ReferenceName: "3001.dat", ReferenceKind: "part",
+			ColorCode: colorCode, Transform: scene.IdentityTransform(),
+		}}}},
+	}
+	encoded, _ := json.Marshal(document)
+	return encoded
+}
+
+func translatedSceneTransform(x float64) scene.Transform {
+	transform := scene.IdentityTransform()
+	transform.Position.X = x
+	return transform
 }
 
 func resetComponentRepo(t *testing.T, pool *pgxpool.Pool) {

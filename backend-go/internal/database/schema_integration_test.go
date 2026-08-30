@@ -27,7 +27,7 @@ func TestComponentRepoBaselineContract(t *testing.T) {
 
 	expectedTables := []string{
 		"artifacts", "assembly_relation_connector_occupancies", "assembly_relations", "candidates", "component_group_memberships",
-		"component_groups", "component_subscriptions", "component_translations",
+		"component_groups", "component_stars", "component_translations",
 		"component_versions", "components", "connector_analyses",
 		"connector_analysis_blockers", "connector_analysis_items",
 		"connector_analysis_path_nodes", "connector_analysis_relations", "imports",

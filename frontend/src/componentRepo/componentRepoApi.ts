@@ -28,10 +28,38 @@ export type ComponentResponse = {
   tags: string[];
   metadata: Record<string, unknown>;
   createdBy?: string;
-  subscribed?: boolean;
+  starredByActor: boolean;
+  starCount: number;
   translationMissing?: boolean;
   createdAt: string;
   updatedAt: string | null;
+  starredAt?: string;
+};
+
+export type ComponentStarResponse = {
+  componentId: string;
+  starredAt: string;
+};
+
+export type StarredComponentResponse = ComponentResponse & {
+  starredAt: string;
+};
+
+export type ComponentStarPageResponse = {
+  items: StarredComponentResponse[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  relationshipTotal: number;
+};
+
+export type ComponentPageResponse = {
+  items: ComponentResponse[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 };
 
 export type ComponentGroupResponse = {
@@ -135,6 +163,70 @@ export type ComponentVersionPreviewModelResponse = {
   status: 'pending' | 'ready' | 'failed' | 'stale';
   model: ComponentPreviewResponse['model'] | null;
   failure: StructuredMessage | null;
+};
+
+/** Component Version Diff 对外稳定的实例变化枚举；值是机器数据，不参与本地化。 */
+export type ComponentVersionDiffChangeKind =
+  | 'part_added'
+  | 'part_removed'
+  | 'transform_changed'
+  | 'color_changed'
+  | 'part_replaced';
+
+/** Diff 实例状态使用 LDraw 世界坐标；前端渲染时必须复用 Component GLB 根坐标转换。 */
+export type ComponentVersionDiffPartState = {
+  instanceId: string;
+  partRef: string;
+  colorCode: string;
+  worldMatrix: number[];
+};
+
+/** Go componentdiff 的只读响应契约，包含完整统计和可能截断的实例明细。 */
+export type ComponentVersionDiffResponse = {
+  versionId: string;
+  baseVersionId: string | null;
+  comparisonBasis: 'empty' | 'import_base_version';
+  algorithmVersion: string;
+  structureHash: string;
+  geometryHash: string;
+  baseStructureHash: string | null;
+  baseGeometryHash: string | null;
+  summary: {
+    beforeInstances: number;
+    afterInstances: number;
+    unchangedInstances: number;
+    addedInstances: number;
+    removedInstances: number;
+    transformChangedInstances: number;
+    colorChangedInstances: number;
+    replacedInstances: number;
+    ambiguousBeforeInstances: number;
+    ambiguousAfterInstances: number;
+    ambiguousGroups: number;
+    bomChangedPartTypes: number;
+  };
+  bomChanges: Array<{
+    partRef: string;
+    beforeQuantity: number;
+    afterQuantity: number;
+    delta: number;
+  }>;
+  instanceChanges: Array<{
+    kind: ComponentVersionDiffChangeKind;
+    before?: ComponentVersionDiffPartState;
+    after?: ComponentVersionDiffPartState;
+    transformDelta?: {
+      translationChanged: boolean;
+      linearTransformChanged: boolean;
+    };
+  }>;
+  ambiguousGroups: Array<{
+    partRef: string;
+    colorCode: string;
+    beforeInstanceIds: string[];
+    afterInstanceIds: string[];
+  }>;
+  truncated: boolean;
 };
 
 export type ComponentVersionPartSummary = {
@@ -493,14 +585,50 @@ type GoConnector = Omit<
   accessAxis: number[];
 };
 
-export async function listComponents(status?: string): Promise<ComponentResponse[]> {
+/** 读取公开目录和 actor 自有 Component 的稳定分页投影。 */
+export async function listComponents(payload: {
+  page: number;
+  pageSize: number;
+  query?: string;
+  status?: string;
+}): Promise<ComponentPageResponse> {
   const url = new URL(appConfig.componentRepoApi.components, window.location.origin);
   url.searchParams.set('locale', currentTaskContext().locale);
-  if (status) {
-    url.searchParams.set('status', status);
-  }
-  const response = await requestJson<{ items: ComponentResponse[] }>(url.toString());
-  return response.items;
+  url.searchParams.set('page', String(payload.page));
+  url.searchParams.set('pageSize', String(payload.pageSize));
+  if (payload.query) url.searchParams.set('query', payload.query);
+  if (payload.status) url.searchParams.set('status', payload.status);
+  return requestJson<ComponentPageResponse>(url.toString());
+}
+
+/** 读取当前用户仍公开可见的收藏，按收藏时间倒序稳定分页。 */
+export async function listComponentStars(payload: {
+  page: number;
+  pageSize: number;
+  query?: string;
+  category?: string;
+  sort?: 'starred_at_desc';
+}): Promise<ComponentStarPageResponse> {
+  const url = new URL(appConfig.componentRepoApi.componentStars, window.location.origin);
+  url.searchParams.set('locale', currentTaskContext().locale);
+  url.searchParams.set('page', String(payload.page));
+  url.searchParams.set('pageSize', String(payload.pageSize));
+  if (payload.query) url.searchParams.set('query', payload.query);
+  if (payload.category) url.searchParams.set('category', payload.category);
+  if (payload.sort) url.searchParams.set('sort', payload.sort);
+  return requestJson<ComponentStarPageResponse>(url.toString());
+}
+
+/** 幂等收藏一个公开的非本人 Component。 */
+export async function starComponent(componentId: string): Promise<ComponentStarResponse> {
+  return requestJson<ComponentStarResponse>(pathFor('componentStar', { componentId }), {
+    method: 'PUT',
+  });
+}
+
+/** 幂等取消当前用户与 Component 的收藏关系。 */
+export async function unstarComponent(componentId: string): Promise<void> {
+  await requestVoid(pathFor('componentStar', { componentId }), { method: 'DELETE' });
 }
 
 export async function listComponentGroups(): Promise<ComponentGroupTreeResponse> {
@@ -693,6 +821,11 @@ export async function deleteComponent(componentId: string): Promise<void> {
 export async function getComponentVersion(versionId: string): Promise<ComponentVersionResponse> {
   const version = await requestJson<GoComponentVersionResponse>(pathFor('componentVersion', { versionId }));
   return componentVersionFromGo(version);
+}
+
+/** 读取由 Go componentdiff 即时计算的只读结果；本调用不创建 Task 或派生 Artifact。 */
+export async function loadComponentVersionDiff(versionId: string): Promise<ComponentVersionDiffResponse> {
+  return requestJson<ComponentVersionDiffResponse>(pathFor('componentVersionDiff', { versionId }));
 }
 
 export async function updateComponentVersion(

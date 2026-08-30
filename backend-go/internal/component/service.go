@@ -12,6 +12,7 @@ import (
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentdiff"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -93,6 +94,7 @@ func (s *Service) GetComponent(ctx context.Context, actor pgtype.UUID, component
 	return componentFromVisible(row), nil
 }
 
+// ListComponents 返回 actor 自有和公开可见的目录；列表与总数必须使用完全一致的授权条件。
 func (s *Service) ListComponents(ctx context.Context, actor pgtype.UUID, request ComponentListRequest) (ComponentPage, error) {
 	request.PageRequest = normalizePage(request.PageRequest)
 	locale := displayLocale(request.Locale)
@@ -102,11 +104,19 @@ func (s *Service) ListComponents(ctx context.Context, actor pgtype.UUID, request
 	if request.Status != "" && request.Status != "draft" && request.Status != "active" {
 		return ComponentPage{}, validationError("status")
 	}
-	rows, err := s.q.ListVisibleComponents(ctx, db.ListVisibleComponentsParams{
+	params := db.ListVisibleComponentsParams{
 		Locale: locale, ActorID: actor, StatusFilter: request.Status,
 		CategoryFilter: strings.TrimSpace(request.Category), SearchQuery: strings.TrimSpace(request.Query),
 		PageOffset: int32((request.Page - 1) * request.PageSize), PageSize: int32(request.PageSize),
+	}
+	total, err := s.q.CountVisibleComponents(ctx, db.CountVisibleComponentsParams{
+		Locale: params.Locale, ActorID: params.ActorID, StatusFilter: params.StatusFilter,
+		CategoryFilter: params.CategoryFilter, SearchQuery: params.SearchQuery,
 	})
+	if err != nil {
+		return ComponentPage{}, err
+	}
+	rows, err := s.q.ListVisibleComponents(ctx, params)
 	if err != nil {
 		return ComponentPage{}, err
 	}
@@ -114,7 +124,62 @@ func (s *Service) ListComponents(ctx context.Context, actor pgtype.UUID, request
 	for _, row := range rows {
 		items = append(items, componentFromList(row))
 	}
-	return ComponentPage{Items: items, Page: request.Page, PageSize: request.PageSize}, nil
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(request.PageSize) - 1) / int64(request.PageSize))
+	}
+	return ComponentPage{
+		Items: items, Page: request.Page, PageSize: request.PageSize,
+		Total: total, TotalPages: totalPages,
+	}, nil
+}
+
+// ListStars 返回 actor 的个人收藏；软删除或不再公开的 Component 保留关系但不进入结果。
+func (s *Service) ListStars(ctx context.Context, actor pgtype.UUID, request StarListRequest) (StarPage, error) {
+	request.PageRequest = normalizePage(request.PageRequest)
+	if len(request.Query) > 200 || len(request.Category) > 128 {
+		return StarPage{}, validationError("query")
+	}
+	if request.Sort != "" && request.Sort != "starred_at_desc" {
+		return StarPage{}, validationError("sort")
+	}
+	searchQuery := strings.TrimSpace(request.Query)
+	sizeFilter := componentSizeFilter{}
+	if parsed, ok := parseComponentSizeQuery(searchQuery); ok {
+		// 完整尺寸表达式只参与 Box 匹配，避免同时把“2x4x3”误当名称关键字。
+		sizeFilter = parsed
+		searchQuery = ""
+	}
+	params := db.ListStarredComponentsParams{
+		Locale: displayLocale(request.Locale), ActorID: actor,
+		CategoryFilter: strings.TrimSpace(request.Category), SearchQuery: searchQuery,
+		SizeDimensionCount: sizeFilter.DimensionCount, SizeA: sizeFilter.A, SizeB: sizeFilter.B, SizeC: sizeFilter.C,
+		PageOffset: int32((request.Page - 1) * request.PageSize), PageSize: int32(request.PageSize),
+	}
+	counts, err := s.q.CountStarredComponents(ctx, db.CountStarredComponentsParams{
+		Locale: params.Locale, ActorID: actor,
+		CategoryFilter: params.CategoryFilter, SearchQuery: params.SearchQuery,
+		SizeDimensionCount: params.SizeDimensionCount, SizeA: params.SizeA, SizeB: params.SizeB, SizeC: params.SizeC,
+	})
+	if err != nil {
+		return StarPage{}, err
+	}
+	rows, err := s.q.ListStarredComponents(ctx, params)
+	if err != nil {
+		return StarPage{}, err
+	}
+	items := make([]StarredComponent, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, starredComponentFromDB(row))
+	}
+	totalPages := 0
+	if counts.Total > 0 {
+		totalPages = int((counts.Total + int64(request.PageSize) - 1) / int64(request.PageSize))
+	}
+	return StarPage{
+		Items: items, Page: request.Page, PageSize: request.PageSize,
+		Total: counts.Total, TotalPages: totalPages, RelationshipTotal: counts.RelationshipTotal,
+	}, nil
 }
 
 func (s *Service) UpdateComponent(ctx context.Context, actor pgtype.UUID, componentID string, input UpdateComponentInput) (Component, error) {
@@ -236,6 +301,63 @@ func (s *Service) GetVersion(ctx context.Context, actor pgtype.UUID, versionID s
 		return ComponentVersion{}, err
 	}
 	return versionFromDB(row), nil
+}
+
+// GetVersionDiff 计算 owner 当前版本相对其 Import.base_version_id 的结构差异。
+// 该方法不写数据库、不读取 GLB，也不会按时间猜测父版本；首个版本与空树比较。
+func (s *Service) GetVersionDiff(ctx context.Context, actor pgtype.UUID, versionID string) (VersionDiff, error) {
+	id, err := resourceID(versionID, "versionId")
+	if err != nil {
+		return VersionDiff{}, err
+	}
+	head, err := s.q.GetOwnedVersionDiffHead(ctx, db.GetOwnedVersionDiffHeadParams{ActorID: actor, VersionID: id})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return VersionDiff{}, notFound("component_repo.version_not_found", "versionId", versionID)
+	}
+	if err != nil {
+		return VersionDiff{}, err
+	}
+
+	response := VersionDiff{
+		VersionID:       uuidutil.String(head.ID),
+		ComparisonBasis: "empty",
+		StructureHash:   head.StructureHash,
+		GeometryHash:    head.GeometryHash,
+	}
+	if !head.BaseVersionID.Valid {
+		result, compareErr := componentdiff.CompareFromEmptyJSON(head.Document, componentdiff.Options{})
+		if compareErr != nil {
+			return VersionDiff{}, mapVersionDiffError(compareErr)
+		}
+		response.Result = result
+		return response, nil
+	}
+
+	base, err := s.q.GetOwnedVersionDiffBase(ctx, db.GetOwnedVersionDiffBaseParams{
+		ActorID: actor, VersionID: head.BaseVersionID, ComponentID: head.ComponentID,
+	})
+	if err != nil {
+		// 外键存在但跨 Component、被软删除或快照缺失都属于持久化 lineage 不变量损坏，不对外泄露细节。
+		return VersionDiff{}, err
+	}
+	baseVersionID := uuidutil.String(base.ID)
+	response.BaseVersionID = &baseVersionID
+	response.ComparisonBasis = "import_base_version"
+	response.BaseStructureHash = &base.StructureHash
+	response.BaseGeometryHash = &base.GeometryHash
+	result, err := componentdiff.CompareJSON(base.Document, head.Document, componentdiff.Options{})
+	if err != nil {
+		return VersionDiff{}, mapVersionDiffError(err)
+	}
+	response.Result = result
+	return response, nil
+}
+
+func mapVersionDiffError(err error) error {
+	if errors.Is(err, componentdiff.ErrTooLarge) {
+		return validationError("versionDiff")
+	}
+	return err
 }
 
 func (s *Service) ListVersions(ctx context.Context, actor pgtype.UUID, componentID string, page PageRequest) (VersionPage, error) {
@@ -765,37 +887,46 @@ func (s *Service) ListGroupMembers(ctx context.Context, actor pgtype.UUID, group
 	return GroupMemberPage{Items: items, Page: page.Page, PageSize: page.PageSize}, nil
 }
 
-func (s *Service) Subscribe(ctx context.Context, actor pgtype.UUID, componentID string) (Subscription, error) {
+// Star 幂等收藏一个公开非本人 Component。资格检查只读取目标状态和既有关系，收藏不会授予额外权限。
+func (s *Service) Star(ctx context.Context, actor pgtype.UUID, componentID string) (Star, error) {
 	id, err := resourceID(componentID, "componentId")
 	if err != nil {
-		return Subscription{}, err
+		return Star{}, err
 	}
-	return withTx(ctx, s.pool, func(q *db.Queries) (Subscription, error) {
-		componentRow, err := q.GetVisibleComponent(ctx, db.GetVisibleComponentParams{Locale: "zh-CN", ActorID: actor, ComponentID: id})
+	return withTx(ctx, s.pool, func(q *db.Queries) (Star, error) {
+		target, err := q.GetComponentStarTarget(ctx, db.GetComponentStarTargetParams{ActorID: actor, ComponentID: id})
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Subscription{}, notFound("component_repo.component_not_found", "componentId", componentID)
+			return Star{}, notFound("component_repo.component_not_found", "componentId", componentID)
 		}
 		if err != nil {
-			return Subscription{}, err
+			return Star{}, err
 		}
-		if uuidutil.Equal(componentRow.OwnerID, actor) {
-			return Subscription{}, apierror.New("component_repo.subscription_own_component_forbidden", http.StatusConflict, nil)
+		if uuidutil.Equal(target.OwnerID, actor) {
+			return Star{}, apierror.New("component_repo.star_own_component_forbidden", http.StatusConflict, nil)
 		}
-		row, err := q.CreateComponentSubscription(ctx, db.CreateComponentSubscriptionParams{OwnerID: actor, ComponentID: id})
+		// 已收藏是 PUT 的幂等成功路径：返回首次时间，不重复写库，也不让后续计数规模进入资格检查。
+		if target.StarredAt.Valid {
+			return Star{ComponentID: componentID, StarredAt: target.StarredAt.Time}, nil
+		}
+		if target.Status != "active" || !target.PublicVersionAvailable {
+			return Star{}, apierror.New("component_repo.star_component_unavailable", http.StatusConflict, nil)
+		}
+		row, err := q.CreateComponentStar(ctx, db.CreateComponentStarParams{ActorID: actor, ComponentID: id})
 		if err != nil {
-			return Subscription{}, err
+			return Star{}, err
 		}
-		return Subscription{ComponentID: uuidutil.String(row.ComponentID), SubscribedAt: row.SubscribedAt.Time}, nil
+		return Star{ComponentID: uuidutil.String(row.ComponentID), StarredAt: row.StarredAt.Time}, nil
 	})
 }
 
-func (s *Service) Unsubscribe(ctx context.Context, actor pgtype.UUID, componentID string) error {
+// Unstar 幂等删除 actor 的收藏；即使 Component 后续不可见，actor 仍能清理自己的关系。
+func (s *Service) Unstar(ctx context.Context, actor pgtype.UUID, componentID string) error {
 	id, err := resourceID(componentID, "componentId")
 	if err != nil {
 		return err
 	}
 	_, err = withTx(ctx, s.pool, func(q *db.Queries) (struct{}, error) {
-		_, err := q.DeleteComponentSubscription(ctx, db.DeleteComponentSubscriptionParams{OwnerID: actor, ComponentID: id})
+		_, err := q.DeleteComponentStar(ctx, db.DeleteComponentStarParams{ActorID: actor, ComponentID: id})
 		if errors.Is(err, pgx.ErrNoRows) {
 			err = nil
 		}

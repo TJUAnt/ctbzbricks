@@ -2,6 +2,7 @@ package scene
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -41,6 +42,20 @@ func TestExpandCountsRepeatedNestedInstancesAndIgnoresUnusedDefinitions(t *testi
 	if expanded.Parts[0].Matrix[12] != 12 || expanded.Parts[0].Matrix[13] != 0 ||
 		expanded.Parts[1].Matrix[12] != 22 || expanded.Parts[1].Matrix[13] != 0 {
 		t.Fatalf("world transforms = %+v / %+v", expanded.Parts[0].Matrix, expanded.Parts[1].Matrix)
+	}
+}
+
+func TestExpandWithLimitsStopsBeforeBuildingUnboundedResult(t *testing.T) {
+	document := Document{
+		RootInstances: []RootInstance{{InstanceID: "root", TargetModelID: "assembly", Transform: IdentityTransform()}},
+		Models: []Model{{ModelID: "assembly", References: []Reference{
+			instance("part-1", "3001.dat", "part", "", 0),
+			instance("part-2", "3002.dat", "part", "", 20),
+		}}},
+	}
+	_, err := ExpandWithLimits(document, ExpansionLimits{MaxPartInstances: 1, MaxSubmodelInstances: 1})
+	if !errors.Is(err, ErrExpansionLimit) {
+		t.Fatalf("limit error = %v", err)
 	}
 }
 

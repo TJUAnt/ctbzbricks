@@ -5,15 +5,20 @@ import {
   deleteComponent,
   listComponentGroups,
   listComponentImports,
+  listComponents,
   searchComponentGroupComponents,
   deleteComponentVersion,
   detectRelations,
   getComponentVersion,
   getConnectorAnalysis,
+  loadComponentVersionDiff,
   loadComponentVersionParts,
   loadComponentVersionPreview,
   loadPartPreview,
   publishVersion,
+  listComponentStars,
+  starComponent,
+  unstarComponent,
   validateCandidate,
 } from '../componentRepoApi';
 
@@ -95,6 +100,57 @@ describe('Component Repo Go API adapter', () => {
       '/api/v1/component-groups/group-1/components',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ componentId: 'component-1' }) }),
     );
+  });
+
+  it('uses the Go Star contract for list, star, and unstar', async () => {
+    vi.stubGlobal('window', {
+      location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
+    });
+    const page = { items: [], total: 0, page: 2, pageSize: 20, totalPages: 0, relationshipTotal: 0 };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(page))
+      .mockResolvedValueOnce(jsonResponse({ componentId: 'component-1', starredAt: '2026-08-29T00:00:00Z' }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listComponentStars({
+      page: 2, pageSize: 20, query: 'castle', category: 'vehicle', sort: 'starred_at_desc',
+    })).resolves.toEqual(page);
+    const listURL = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(listURL.pathname).toBe('/api/v1/component-stars');
+    expect(listURL.searchParams.get('page')).toBe('2');
+    expect(listURL.searchParams.get('query')).toBe('castle');
+    expect(listURL.searchParams.get('category')).toBe('vehicle');
+    expect(listURL.searchParams.get('sort')).toBe('starred_at_desc');
+
+    await starComponent('component-1');
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/components/component-1/star',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    await unstarComponent('component-1');
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/components/component-1/star',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('reads the paginated public Component directory used to discover Star targets', async () => {
+    vi.stubGlobal('window', {
+      location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
+    });
+    const page = { items: [], total: 42, page: 2, pageSize: 20, totalPages: 3 };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(page));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listComponents({ page: 2, pageSize: 20, query: 'train', status: 'active' })).resolves.toEqual(page);
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe('/api/v1/components');
+    expect(url.searchParams.get('query')).toBe('train');
+    expect(url.searchParams.get('status')).toBe('active');
+    expect(url.searchParams.get('page')).toBe('2');
   });
 
   it('reads owner-scoped import history with component and aggregate status filters', async () => {
@@ -183,6 +239,40 @@ describe('Component Repo Go API adapter', () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/component-versions/version-1/preview', undefined);
+  });
+
+  it('reads the Go-computed immutable version diff without creating a task', async () => {
+    const response = {
+      versionId: 'version-2',
+      baseVersionId: 'version-1',
+      comparisonBasis: 'import_base_version',
+      algorithmVersion: 'component-scene-diff-v1',
+      structureHash: 'structure-2',
+      geometryHash: 'geometry-2',
+      baseStructureHash: 'structure-1',
+      baseGeometryHash: 'geometry-1',
+      summary: {
+        beforeInstances: 1, afterInstances: 1, unchangedInstances: 0,
+        addedInstances: 0, removedInstances: 0, transformChangedInstances: 1,
+        colorChangedInstances: 0, replacedInstances: 0,
+        ambiguousBeforeInstances: 0, ambiguousAfterInstances: 0, ambiguousGroups: 0,
+        bomChangedPartTypes: 0,
+      },
+      bomChanges: [],
+      instanceChanges: [{
+        kind: 'transform_changed',
+        before: { instanceId: 'root/a', partRef: '3001.dat', colorCode: '4', worldMatrix: [] },
+        after: { instanceId: 'root/a', partRef: '3001.dat', colorCode: '4', worldMatrix: [] },
+      }],
+      ambiguousGroups: [],
+      truncated: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(response));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(loadComponentVersionDiff('version-2')).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/component-versions/version-2/diff', undefined);
   });
 
   it('preserves each BOM Part geometry status from the Go API', async () => {

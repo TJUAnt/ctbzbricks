@@ -114,10 +114,11 @@ type ComponentRepoComponentGroupMembership struct {
 	AddedAt     pgtype.Timestamptz
 }
 
-type ComponentRepoComponentSubscription struct {
-	OwnerID      pgtype.UUID
-	ComponentID  pgtype.UUID
-	SubscribedAt pgtype.Timestamptz
+type ComponentRepoComponentStar struct {
+	ActorID     pgtype.UUID
+	ComponentID pgtype.UUID
+	StarredAt   pgtype.Timestamptz
+	Source      string
 }
 
 type ComponentRepoComponentTranslation struct {

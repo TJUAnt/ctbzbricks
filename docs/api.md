@@ -1,7 +1,7 @@
 # Component Repo Go API
 
 > 状态：Current implementation contract；目标漂移均显式标注为尚未实现
-> 更新日期：2026-08-25
+> 更新日期：2026-08-30
 > 范围：`backend-go` 当前注册的认证与 Component Repo HTTP API；不包含旧 FastAPI 路由
 > 长期原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)
 > 任务协议：[go_task_protocol.md](./go_task_protocol.md)
@@ -58,7 +58,7 @@ panic recovery。
 ### 1.3 可见性与写入边界
 
 - 用户自己的 Component、Draft、Import、Candidate、Task、Group 和 Artifact 由 owner 边界保护。
-- 非 owner 只可读取 `active` Component 及其非 draft Version；订阅不会授予修改权限。
+- 非 owner 只可读取 `active` Component 及其非 draft Version；Star 只表示个人收藏，不授予读取或修改权限。
 - 官方 Component/Part 只选择目标 locale 下 `reviewed` 的翻译；缺失时返回源内容并标记
   `translationMissing` 或 `translationStatus=fallback/missing`。
 - Component、Version、Group 等多步 mutation 使用 PostgreSQL transaction；需要并发保护的流程使用
@@ -120,9 +120,9 @@ session；网络或 provider 暂不可用只隐藏未经确认的用户信息并
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
-| `GET /api/v1/components` | Query：`page/pageSize/locale/query/category/status`；`200 ComponentPage` | 查询 actor 可见的 Component 目录。 | 过滤未删除记录，并要求至少存在一个未删除 Version；owner 可见自己的记录，其他用户只见 `active` 且存在非 draft Version 的记录；按 reviewed translation 选择展示内容，返回 `subscribed` 与服务端授权投影 `ownedByActor`，按 `updatedAt DESC,id` 稳定排序。`logicalSize` 投影当前发布 Version 的 Preview Box；尚未发布、`currentVersionId` 为空时投影最新 Draft，旧 `components.logical_*` 仅为历史兼容回退。公开 `status` 筛选只允许 `draft/active`；`archived` 是 soft delete 内部状态，不属于正常组件列表。 |
+| `GET /api/v1/components` | Query：`page/pageSize/locale/query/category/status`；`200 {items,page,pageSize,total,totalPages}` | 查询 actor 可见的公开/自有 Component 目录。 | 过滤未删除记录，并要求至少存在一个未删除 Version；owner 可见自己的记录，其他用户只见 `active` 且存在非 draft Version 的记录；按 reviewed translation 选择展示内容，返回 `ownedByActor/starredByActor/starCount`，按 `updatedAt DESC,id` 稳定排序。`query` 同时匹配展示名称和 Component ID。查询先固定当前页，再按页内 Component ID 一次聚合 Star 数，不逐行执行收藏计数。`total/totalPages` 复用与列表相同的授权和过滤条件。`logicalSize` 投影当前发布 Version 的 Preview Box；尚未发布、`currentVersionId` 为空时投影最新 Draft，旧 `components.logical_*` 仅为历史兼容回退。公开 `status` 筛选只允许 `draft/active`；`archived` 是 soft delete 内部状态，不属于正常组件列表。 |
 | `POST /api/v1/components` | Body：`name,description?,tags,category?,contentLocale`；`201 Component` | 创建用户 Component 元数据。 | 校验名称、tag 数量和 locale；生成 UUID，在事务中写入 owner/creator；初始 Component 尚无结构版本，因此创建后可按 ID 读取，但在产生首个 Version 前不会进入 Component 列表投影。 |
-| `GET /api/v1/components/:componentId` | Query：`locale`；`200 Component` | 读取单个可见 Component。 | 校验 UUID，通过 actor/active 可见性查询；返回 `ownedByActor` 作为当前鉴权 actor 的稳定管理权限投影，前端不得依赖浏览器缓存用户对象自行推断；官方内容只选 reviewed translation，否则返回源内容及缺失标记。Preview stale/failed 不改变 Component 可见性、所有权或删除权限。 |
+| `GET /api/v1/components/:componentId` | Query：`locale`；`200 Component` | 读取单个可见 Component。 | 校验 UUID，通过 actor/active 可见性查询；返回 `ownedByActor/starredByActor/starCount`，其中所有权是稳定管理权限投影，前端不得依赖浏览器缓存用户对象自行推断；官方内容只选 reviewed translation，否则返回源内容及缺失标记。Preview stale/failed 不改变 Component 可见性、所有权或删除权限。 |
 | `PATCH /api/v1/components/:componentId` | Partial Body：`name,description,tags,category,contentLocale`；`200 Component` | 修改 owner 的 Component 展示元数据。 | 至少提交一个字段；`description/category` 可显式传 `null` 清空；只更新 owner、未删除的用户 Component，并返回更新后的可见投影。 |
 | `DELETE /api/v1/components/:componentId` | 无 Body；`204` | 删除用户 Component 的当前产品入口。 | 执行 soft delete：写 `status=archived`、`deleted_at/deleted_by`；不物理删除 Version、Import、Artifact、Task 或 Storage object。仅 owner 的 `content_kind=user` 可执行。 |
 
@@ -133,36 +133,97 @@ session；网络或 provider 暂不可用只隐藏未经确认的用户信息并
 | `GET /api/v1/components/:componentId/versions` | Query：`page/pageSize`；`200 VersionPage` | 列出 Component 的可见版本。 | 先校验 Component 可见性；owner 可读取自己的 draft，非 owner 只读取 active Component 的非 draft Version；稳定分页。 |
 | `POST /api/v1/components/:componentId/versions` | Body：`componentCandidateId,version,revision,releaseNote?,releaseNoteLocale?,metadata?`；`201 ComponentVersion` | 从已审核 Candidate 显式创建 Draft Version。 | 锁定 owner Component；沿 `Candidate -> SceneSnapshot -> Import -> Artifact` 读取服务端可信的 source/exchange artifact、parser、Part Library 和三类 hash，客户端不能直接指定这些字段；冲突由唯一约束返回稳定错误。 |
 | `GET /api/v1/component-versions/:versionId` | `200 ComponentVersion` | 读取单个可见版本及 validation/preview 状态。 | 使用 actor 可见性查询；不生成 Preview，也不读取对象正文。 |
+| `GET /api/v1/component-versions/:versionId/diff` | `200 VersionDiff` | 计算 owner 当前版本相对本次导入基准版本的 BOM 与实例级结构差异。 | 只认 `Version -> Candidate -> Import.base_version_id` 的声明 lineage，不按创建时间猜父版本；首个版本与空树比较。读取两侧不可变 SceneSnapshot，在 Go `componentdiff` 内同步但严格有界地展开全部 root，返回 BOM 变化、确定匹配的实例变化和歧义组；不读取 GLB/Storage、不写数据库、不创建 Task。任一侧最多 50,000 个展开实例，明细最多 10,000 条，超限使用既有 `request.validation_failed`。即使 Version 已公开，本接口当前仍只允许 Component owner。 |
 | `PATCH /api/v1/component-versions/:versionId` | Partial Body：`version,revision,releaseNote,releaseNoteLocale`；`200 ComponentVersion` | 修改 owner Draft Version 的展示元数据。 | 只允许未删除 draft；release note 与 locale 必须同时设置或同时清空；结构、hash、Artifact 和 Part Library 不可通过本接口修改。 |
 | `DELETE /api/v1/component-versions/:versionId` | `204` | 删除未发布的 Draft Version。 | 只对 owner 用户 Component 的非 current draft 写 `deleted_at/deleted_by`；不删除已发布/废弃/归档版本。 |
 | `POST /api/v1/component-versions/:versionId/publish` | 无 Body；`200 ComponentVersion` | 直接发布 owner 的 Draft。 | serializable transaction 锁定 owner Version，deprecated 其他 published Version、发布目标 Version，并设置 Component current version。ValidationReport 是可选质量信息，不参与 API 或数据库发布门禁。 |
 | `POST /api/v1/component-versions/:versionId/deprecate` | 无 Body；`200 ComponentVersion` | 将 published Version 标记为 deprecated。 | 仅 owner；只允许 `published -> deprecated`，非法状态返回 conflict。 |
 | `POST /api/v1/component-versions/:versionId/archive` | 无 Body；`200 ComponentVersion` | 归档 published/deprecated Version。 | 仅 owner；允许 `published -> archived` 或 `deprecated -> archived`，不修改版本的不可变结构字段。 |
 
-## 5. Component Group 与订阅
+### 4.1 Component Version Diff v1
+
+`VersionDiff.algorithmVersion` 当前为 `component-scene-diff-v1`。结构权威输入是 SceneSnapshot document，
+不是 GLB mesh；`structureHash/geometryHash` 及基准 hash 用于响应诊断，不替代实际展开与比较。响应中的
+Part 编号、颜色、矩阵、change kind、hash 与算法版本都是机器数据，不做翻译。
+
+核心响应结构：
+
+```json
+{
+  "versionId": "uuid",
+  "baseVersionId": "uuid",
+  "comparisonBasis": "import_base_version",
+  "algorithmVersion": "component-scene-diff-v1",
+  "summary": {
+    "beforeInstances": 12,
+    "afterInstances": 13,
+    "unchangedInstances": 10,
+    "addedInstances": 1,
+    "removedInstances": 0,
+    "transformChangedInstances": 1,
+    "colorChangedInstances": 1,
+    "replacedInstances": 0,
+    "ambiguousGroups": 0
+  },
+  "bomChanges": [
+    {"partRef": "3001.dat", "beforeQuantity": 2, "afterQuantity": 3, "delta": 1}
+  ],
+  "instanceChanges": [],
+  "ambiguousGroups": [],
+  "truncated": false
+}
+```
+
+实例匹配按固定优先级执行：完全相同的 `part + color + worldMatrix`、同 Part/位置的改色、同颜色/位置的
+Part 替换、同 Part/颜色且两侧都唯一的 transform 变化，最后才是新增/删除。world matrix 以 `1e-6`
+归一化，避免解析期无意义浮点噪声。若同 Part/颜色在两侧剩余多个实例且不能唯一配对，返回
+`ambiguousGroups`，不会按数组顺序伪造 `transform_changed`。BOM 数量差独立计算，始终覆盖完整结果；
+`truncated=true` 只表示实例/歧义明细达到 10,000 条，Summary 和 BOM 仍完整。
+
+Component 详情页按用户选择的目标 Version 调用本接口，并只读取目标/基准 Version 已由 Worker 物化的整体
+GLB；页面不会为 Diff 创建 Task，也不会请求 Preview 物化。两个 GLB 使用相同的 Component 根坐标转换和一次
+共同居中，以左右双栏、同步相机显示。未变化实例作为半透明上下文，新增、删除、移动、改色、替换和歧义实例
+使用稳定颜色、发光轮廓与缓慢脉冲标记；系统开启 `prefers-reduced-motion` 时停止脉冲但保留静态高亮。点击实例
+明细会用相同相机目标同时聚焦两侧。首版左侧显示空基准；任一所需 GLB 不可用时仅报告对比预览不可用，不会
+改变 Version 或 Artifact 状态。
+
+离线调试可复用同一纯 Go 算法，不访问 PostgreSQL 或 Storage：
+
+```bash
+cd backend-go
+go run ./cmd/component-diff --before base-document.json --after head-document.json
+```
+
+省略 `--before` 时与空树比较；文件内容必须是 `scene_snapshots.document` JSON，而不是完整数据库行或 GLB。
+
+## 5. Component Group 与 Star
 
 ### 5.1 Group
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
-| `GET /api/v1/component-groups` | `200 {items: Group[]}` | 读取 actor 的 root/custom Group 树投影。 | 严格只读，不自动创建 root；返回 depth、sort order 和 direct component count。 |
+| `GET /api/v1/component-groups` | `200 {items: Group[]}` | 读取 actor 的 root/custom Group 树投影。 | 严格只读，不自动创建 root；返回 depth、sort order 和 direct component count。root 明确表示 actor 自己拥有的 Component；Star 由独立“我的收藏”视图承载。root 计数从 owner 索引取得候选，不扫描 Star 或公开 Component 全集。 |
 | `POST /api/v1/component-groups/bootstrap` | `204` | 显式初始化个人仓库 root Group。 | serializable transaction 内执行幂等 `ensure root`；重复调用不创建多个 root。 |
 | `POST /api/v1/component-groups` | Body：`parentGroupId?,name,contentLocale,sortOrder`；`201 Group` | 创建 custom Group。 | parent 缺省时显式确保 root；校验 owner parent、同级规范化名称唯一和最大深度 5。 |
 | `PATCH /api/v1/component-groups/:groupId` | Partial Body：`name,contentLocale,sortOrder`；`200 Group` | 修改 custom Group。 | 至少一个字段；仅 owner custom Group；更新规范化名称并由唯一约束防止同级重名。 |
 | `DELETE /api/v1/component-groups/:groupId` | `204` | 删除 custom Group。 | 仅 owner custom Group；root 不能删除；关联行为继续由 Goose 外键/约束控制。 |
 | `POST /api/v1/component-groups/:groupId/move` | Body：`parentGroupId,sortOrder`；`200 Group` | 移动 custom Group。 | 锁定 owner group，拒绝移动到自身子树形成循环；计算 parent depth 与 subtree depth，保证整体最大深度 5，并重新检查同级名称唯一。 |
-| `GET /api/v1/component-groups/:groupId/components` | Query：`page/pageSize/locale`；`200 GroupMemberPage` | 列出该 Group 的直接成员。 | 校验 owner Group；按 membership 读取直接成员和 `addedAt`，使用 Component 可见性、reviewed translation 与 Version `logicalSize` 投影规则。 |
-| `GET /api/v1/component-groups/:groupId/components/search` | Query：`page/pageSize/locale/query/status`；`query` 最多重复 8 次，`status` 可重复且只允许 `draft/active`；`200 {items,total,totalPages,statusCounts,...}` | 为仓库页面提供名称、ID 或 Box 尺寸的复合搜索、分页和状态统计。 | root Group 表示 actor 可管理/可见的全集，custom Group 按直接 membership。每个非空 `query` 都是必须满足的独立条件，条件之间按 AND 组合并忽略大小写重复项。普通条件对名称或 Component ID 做模糊搜索；完整的 `a x b` 或 `a x b x c`（兼容 `x/X/×` 和小数）进入尺寸模式。输入与 Version `logicalSize` 都按升序归一化；三值逐维满足严格开区间 `(target-1,target+1)`，两值枚举 `ab/ac/bc` 三组配对且每维使用同一开区间，边界恰好相差 1 不命中。缺少任一 Box 尺寸的组件不能满足尺寸条件。状态统计与结果使用完全相同的复合条件、可见性及尺寸规则；`logicalSize` 仍按当前发布 Version / 最新 Draft 投影。Import/Task 的处理中或失败状态不得作为 Component 状态传入。 |
+| `GET /api/v1/component-groups/:groupId/components` | Query：`page/pageSize/locale`；`200 GroupMemberPage` | 列出该 Group 的直接成员。 | 校验 owner Group；custom Group 按 membership 驱动，root 只按 actor 自有 Component 驱动；使用 Component 可见性、reviewed translation 与 Version `logicalSize` 投影规则。取消 Star 不自动删除 custom membership，当前仍可见的外部成员可继续移出分组。结果先分页，再一次聚合页内 `starCount`。 |
+| `GET /api/v1/component-groups/:groupId/components/search` | Query：`page/pageSize/locale/query/status`；`query` 最多重复 8 次，`status` 可重复且只允许 `draft/active`；`200 {items,total,totalPages,statusCounts,...}` | 为仓库页面提供名称、ID 或 Box 尺寸的复合搜索、分页和状态统计。 | root Group 只表示 actor 自己拥有的 Component，custom Group 按直接 membership。每个非空 `query` 都是必须满足的独立条件，条件之间按 AND 组合并忽略大小写重复项。普通条件对名称或 Component ID 做模糊搜索；完整的 `a x b` 或 `a x b x c`（兼容 `x/X/×` 和小数）进入尺寸模式。输入与 Version `logicalSize` 都按升序归一化；三值逐维满足严格开区间 `(target-1,target+1)`，两值枚举 `ab/ac/bc` 三组配对且每维使用同一开区间，边界恰好相差 1 不命中。缺少任一 Box 尺寸的组件不能满足尺寸条件。状态统计与结果使用完全相同的候选集、复合条件、可见性及尺寸规则；结果页内 Star 数一次聚合。`logicalSize` 仍按当前发布 Version / 最新 Draft 投影。Import/Task 的处理中或失败状态不得作为 Component 状态传入。 |
 | `POST /api/v1/component-groups/:groupId/components` | Body：`{componentId}`；`204` | 将可见 Component 加入 custom Group。 | 校验 owner custom Group 与 Component 可见性；以 `(owner,group,component)` 幂等写 membership。 |
 | `DELETE /api/v1/component-groups/:groupId/components/:componentId` | `204` | 从 Group 移除成员。 | owner-scoped 删除 membership；记录不存在也按成功处理。 |
 | `GET /api/v1/components/:componentId/groups` | `200 {componentId,groupIds}` | 查询 Component 当前所在的 custom Group IDs。 | 先校验 Component 对 actor 可见，再只返回 actor 自己的 custom Group membership，不返回其他用户分组。 |
 
-### 5.2 Subscription
+### 5.2 Star
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
-| `PUT /api/v1/components/:componentId/subscription` | `200 {componentId,subscribedAt}` | 订阅可见的非本人 Component。 | 校验 Component 可见；拒绝订阅自己的 Component；使用唯一键幂等创建，重复调用保留原订阅时间。 |
-| `DELETE /api/v1/components/:componentId/subscription` | `204` | 取消订阅。 | owner-scoped 删除 subscription；不存在也按成功处理。 |
+| `GET /api/v1/component-stars` | Query：`page/pageSize/locale/query/category/sort`；`sort` 只允许 `starred_at_desc`；`200 {items,total,page,pageSize,totalPages,relationshipTotal}` | 读取当前 actor 的个人收藏。 | 按 `starredAt DESC,componentId` 稳定排序；`query` 匹配展示名称/Component ID，完整 `axb/axbxc` 复用 Group 的轴无关 logical-size 开区间规则，`category` 精确匹配。只投影当前 `active` 且存在非 draft Version 的 Component；软删除或暂时不可见时保留关系但隐藏结果。`total` 是当前过滤后的可见数，`relationshipTotal` 只返回 actor 的关系总数以区分空状态，不暴露不可见 Component 内容。计数在一条 SQL 中返回两个值；列表先分页再一次聚合页内 `starCount`，不公开收藏者列表。 |
+| `PUT /api/v1/components/:componentId/star` | `200 {componentId,starredAt}` | 收藏可见的非本人 Component。 | 使用轻量目标查询读取 Component 删除/可见性、owner、状态、非 draft Version 存在性和已有关系；不读取完整详情或收藏总数。首次创建要求目标未删除、非本人、`active` 且存在非 draft Version；已有关系直接返回原 `starredAt` 并跳过写入，并发首次收藏仍由 `(actor_id,component_id)` 唯一键收敛；不产生 Watch 通知。 |
+| `DELETE /api/v1/components/:componentId/star` | `204` | 取消收藏。 | actor-scoped 删除 Star；Component 后续不可见或关系不存在时也按成功处理。 |
+
+Goose `00014_component_stars.sql` 将旧 `component_subscriptions` 一次迁移为 `component_stars`，迁移来源写入
+`source=subscription_migration`；新用户操作写入 `source=user_action`。迁移完成后不存在双写或旧 Subscription API。
 
 ## 6. 上传、Artifact 与源文件
 
@@ -244,6 +305,11 @@ Studio `.io` 接受 `application/x-studioformat` 和 `application/octet-stream`�
 成功或失败；页面不会因为其中一项失败而隐藏另一项。relation、connector 和 interface 不在默认读取
 集合中，只有用户开启“加载连接信息”开关后才读取对应 Candidate 投影。关闭开关只隐藏高级工作台，
 不会创建、修改或删除 connector 数据。
+
+公开 Component 详情的读取矩阵与 Candidate 审核页不同：非 owner 可以读取已发布 Version、整体 Preview、
+冻结 BOM 和按 Version 可见性授权的 ValidationReport，但不得请求 Candidate-scoped relation、connector 或
+interface；这些接口继续由 Workbench `ownedCandidate` 边界保护。前端以 `ownedByActor` 决定是否发起这组请求，
+不能把 404 降级当作正常的公开详情加载流程。
 
 ## 8. Durable Task
 

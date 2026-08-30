@@ -93,16 +93,27 @@ func (q *Queries) ComponentGroupSubtreeDepth(ctx context.Context, arg ComponentG
 }
 
 const countComponentGroupStatuses = `-- name: CountComponentGroupStatuses :many
+WITH group_record AS MATERIALIZED (
+    SELECT group_item.id, group_item.owner_id, group_item.group_type
+    FROM component_repo.component_groups group_item
+    WHERE group_item.id = $5
+      AND group_item.owner_id = $3
+), candidate_component_ids AS MATERIALIZED (
+    SELECT component.id AS component_id
+    FROM group_record
+    JOIN component_repo.components component ON component.owner_id = group_record.owner_id
+    WHERE group_record.group_type = 'root'
+    UNION ALL
+    SELECT membership.component_id
+    FROM group_record
+    JOIN component_repo.component_group_memberships membership
+      ON membership.owner_id = group_record.owner_id
+     AND membership.group_id = group_record.id
+    WHERE group_record.group_type = 'custom'
+)
 SELECT c.status, count(*)::bigint AS component_count
-FROM component_repo.component_groups group_record
-JOIN component_repo.components c
-  ON group_record.group_type = 'root'
-  OR EXISTS (
-      SELECT 1 FROM component_repo.component_group_memberships membership
-      WHERE membership.owner_id = group_record.owner_id
-        AND membership.group_id = group_record.id
-        AND membership.component_id = c.id
-      )
+FROM candidate_component_ids
+JOIN component_repo.components c ON c.id = candidate_component_ids.component_id
 LEFT JOIN LATERAL (
     SELECT version.logical_width_stud, version.logical_depth_stud,
            version.logical_height_plate
@@ -140,14 +151,14 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT translation_record.id, translation_record.name
     FROM component_repo.component_translations translation_record
-    WHERE translation_record.component_id = c.id
-      AND translation_record.locale = $1
+    WHERE c.content_kind = 'official'
+      AND cardinality($1::text[]) > 0
+      AND translation_record.component_id = c.id
+      AND translation_record.locale = $2
       AND translation_record.translation_status = 'reviewed'
     LIMIT 1
-) translation ON c.content_kind = 'official'
-WHERE group_record.id = $2
-  AND group_record.owner_id = $3
-  AND c.deleted_at IS NULL
+) translation ON true
+WHERE c.deleted_at IS NULL
   AND (c.owner_id = $3 OR c.status = 'active')
   AND EXISTS (
       SELECT 1
@@ -161,7 +172,7 @@ WHERE group_record.id = $2
   )
   AND NOT EXISTS (
       SELECT 1
-      FROM unnest($4::text[]) AS requested_text(value)
+      FROM unnest($1::text[]) AS requested_text(value)
       WHERE NOT (
           CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
               ILIKE '%' || requested_text.value || '%'
@@ -170,7 +181,7 @@ WHERE group_record.id = $2
   )
   AND NOT EXISTS (
       SELECT 1
-      FROM jsonb_to_recordset($5::jsonb)
+      FROM jsonb_to_recordset($4::jsonb)
           AS requested_size(dimension_count integer, size_a double precision,
                             size_b double precision, size_c double precision)
       WHERE NOT COALESCE((
@@ -209,11 +220,11 @@ ORDER BY c.status
 `
 
 type CountComponentGroupStatusesParams struct {
-	Locale      string
-	GroupID     pgtype.UUID
-	OwnerID     pgtype.UUID
 	TextFilters []string
+	Locale      string
+	OwnerID     pgtype.UUID
 	SizeFilters []byte
+	GroupID     pgtype.UUID
 }
 
 type CountComponentGroupStatusesRow struct {
@@ -224,11 +235,11 @@ type CountComponentGroupStatusesRow struct {
 // 状态统计必须复用与结果列表完全相同的尺寸归一化，否则分页总数和状态数量会发生漂移。
 func (q *Queries) CountComponentGroupStatuses(ctx context.Context, arg CountComponentGroupStatusesParams) ([]CountComponentGroupStatusesRow, error) {
 	rows, err := q.db.Query(ctx, countComponentGroupStatuses,
-		arg.Locale,
-		arg.GroupID,
-		arg.OwnerID,
 		arg.TextFilters,
+		arg.Locale,
+		arg.OwnerID,
 		arg.SizeFilters,
+		arg.GroupID,
 	)
 	if err != nil {
 		return nil, err
@@ -422,6 +433,25 @@ func (q *Queries) ListComponentGroupDescendantIDs(ctx context.Context, arg ListC
 }
 
 const listComponentGroupMembers = `-- name: ListComponentGroupMembers :many
+WITH group_record AS MATERIALIZED (
+    SELECT group_item.id, group_item.owner_id, group_item.group_type
+    FROM component_repo.component_groups group_item
+    WHERE group_item.id = $1
+      AND group_item.owner_id = $2
+), candidate_components AS MATERIALIZED (
+    -- root 只表示 actor 自有 Component；custom 只读取显式 membership，二者都避免扫描公开全集。
+    SELECT component.id AS component_id, component.created_at AS added_at
+    FROM group_record
+    JOIN component_repo.components component ON component.owner_id = group_record.owner_id
+    WHERE group_record.group_type = 'root'
+    UNION ALL
+    SELECT membership.component_id, membership.added_at
+    FROM group_record
+    JOIN component_repo.component_group_memberships membership
+      ON membership.owner_id = group_record.owner_id
+     AND membership.group_id = group_record.id
+    WHERE group_record.group_type = 'custom'
+), page AS MATERIALIZED (
 SELECT c.id, c.owner_id, c.content_kind,
        (CASE WHEN translation.id IS NULL THEN c.content_locale ELSE translation.locale END)::text AS selected_content_locale,
        (CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END)::text AS selected_name,
@@ -433,28 +463,17 @@ SELECT c.id, c.owner_id, c.content_kind,
        COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
        COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
        c.metadata, c.created_at, c.updated_at,
-       COALESCE(c.owner_id = $1, false)::boolean AS owned_by_actor,
-       (c.content_kind = 'official' AND c.content_locale <> $2
+       COALESCE(c.owner_id = $2, false)::boolean AS owned_by_actor,
+       (c.content_kind = 'official' AND c.content_locale <> $3
         AND translation.id IS NULL)::boolean AS translation_missing,
        EXISTS (
-           SELECT 1 FROM component_repo.component_subscriptions subscription
-           WHERE subscription.owner_id = $1
-             AND subscription.component_id = c.id
-       ) AS subscribed,
-       COALESCE(membership.added_at, c.created_at)::timestamptz AS added_at
-FROM component_repo.component_groups g
-JOIN component_repo.components c
-  ON g.group_type = 'root'
-  OR EXISTS (
-      SELECT 1 FROM component_repo.component_group_memberships membership_filter
-      WHERE membership_filter.owner_id = g.owner_id
-        AND membership_filter.group_id = g.id
-        AND membership_filter.component_id = c.id
-  )
-LEFT JOIN component_repo.component_group_memberships membership
-  ON membership.owner_id = g.owner_id
- AND membership.group_id = g.id
- AND membership.component_id = c.id
+           SELECT 1 FROM component_repo.component_stars star
+           WHERE star.actor_id = $2
+             AND star.component_id = c.id
+       ) AS starred_by_actor,
+       candidate_components.added_at
+FROM candidate_components
+JOIN component_repo.components c ON c.id = candidate_components.component_id
 LEFT JOIN LATERAL (
     SELECT version.logical_width_stud, version.logical_depth_stud,
            version.logical_height_plate
@@ -472,33 +491,49 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
     FROM component_repo.component_translations t
-    WHERE t.component_id = c.id
-      AND t.locale = $2
+    WHERE c.content_kind = 'official'
+      AND t.component_id = c.id
+      AND t.locale = $3
       AND t.translation_status = 'reviewed'
     LIMIT 1
-) translation ON c.content_kind = 'official'
-WHERE g.owner_id = $1
-  AND g.id = $3
-  AND c.deleted_at IS NULL
-  AND (c.owner_id = $1 OR c.status = 'active')
+) translation ON true
+WHERE c.deleted_at IS NULL
+  AND (c.owner_id = $2 OR c.status = 'active')
   AND EXISTS (
       SELECT 1
       FROM component_repo.component_versions version
       WHERE version.component_id = c.id
         AND version.deleted_at IS NULL
         AND (
-            c.owner_id = $1
+            c.owner_id = $2
             OR (c.status = 'active' AND version.status <> 'draft')
         )
   )
-ORDER BY COALESCE(membership.added_at, c.created_at) DESC, c.id
+ORDER BY candidate_components.added_at DESC, c.id
 LIMIT $5 OFFSET $4
+), page_star_counts AS (
+    SELECT aggregate_star.component_id, count(*)::bigint AS star_count
+    FROM component_repo.component_stars aggregate_star
+    JOIN page ON page.id = aggregate_star.component_id
+    GROUP BY aggregate_star.component_id
+)
+SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
+       page.selected_name, page.selected_description, page.has_description,
+       page.selected_tags, page.category, page.status, page.current_version_id,
+       page.logical_width_stud, page.logical_depth_stud, page.logical_height_plate,
+       page.metadata, page.created_at, page.updated_at, page.owned_by_actor,
+       page.translation_missing, page.starred_by_actor,
+       COALESCE(page_star_counts.star_count, 0)::bigint AS star_count,
+       page.added_at
+FROM page
+LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
+ORDER BY page.added_at DESC, page.id
 `
 
 type ListComponentGroupMembersParams struct {
+	GroupID    pgtype.UUID
 	OwnerID    pgtype.UUID
 	Locale     string
-	GroupID    pgtype.UUID
 	PageOffset int32
 	PageSize   int32
 }
@@ -523,15 +558,16 @@ type ListComponentGroupMembersRow struct {
 	UpdatedAt             pgtype.Timestamptz
 	OwnedByActor          bool
 	TranslationMissing    bool
-	Subscribed            bool
+	StarredByActor        bool
+	StarCount             int64
 	AddedAt               pgtype.Timestamptz
 }
 
 func (q *Queries) ListComponentGroupMembers(ctx context.Context, arg ListComponentGroupMembersParams) ([]ListComponentGroupMembersRow, error) {
 	rows, err := q.db.Query(ctx, listComponentGroupMembers,
+		arg.GroupID,
 		arg.OwnerID,
 		arg.Locale,
-		arg.GroupID,
 		arg.PageOffset,
 		arg.PageSize,
 	)
@@ -562,7 +598,8 @@ func (q *Queries) ListComponentGroupMembers(ctx context.Context, arg ListCompone
 			&i.UpdatedAt,
 			&i.OwnedByActor,
 			&i.TranslationMissing,
-			&i.Subscribed,
+			&i.StarredByActor,
+			&i.StarCount,
 			&i.AddedAt,
 		); err != nil {
 			return nil, err
@@ -630,19 +667,16 @@ WITH RECURSIVE group_tree AS (
 SELECT id, owner_id, parent_group_id, group_type, name, normalized_name,
        content_locale, sort_order, created_at, updated_at, depth,
        (CASE WHEN group_type = 'root' THEN (
+           -- root 明确表示“我的组件”，只走 owner 复合索引；收藏由独立 Star 视图承载。
            SELECT count(*)::bigint
            FROM component_repo.components component
-           WHERE component.deleted_at IS NULL
-             AND (component.owner_id = $1 OR component.status = 'active')
+           WHERE component.owner_id = $1
+             AND component.deleted_at IS NULL
              AND EXISTS (
                  SELECT 1
                  FROM component_repo.component_versions version
                  WHERE version.component_id = component.id
                    AND version.deleted_at IS NULL
-                   AND (
-                       component.owner_id = $1
-                       OR (component.status = 'active' AND version.status <> 'draft')
-                   )
              )
        ) ELSE (
            SELECT count(*)::bigint
@@ -779,6 +813,24 @@ func (q *Queries) RemoveComponentGroupMembership(ctx context.Context, arg Remove
 }
 
 const searchComponentGroupComponents = `-- name: SearchComponentGroupComponents :many
+WITH group_record AS MATERIALIZED (
+    SELECT group_item.id, group_item.owner_id, group_item.group_type
+    FROM component_repo.component_groups group_item
+    WHERE group_item.id = $1
+      AND group_item.owner_id = $2
+), candidate_component_ids AS MATERIALIZED (
+    SELECT component.id AS component_id
+    FROM group_record
+    JOIN component_repo.components component ON component.owner_id = group_record.owner_id
+    WHERE group_record.group_type = 'root'
+    UNION ALL
+    SELECT membership.component_id
+    FROM group_record
+    JOIN component_repo.component_group_memberships membership
+      ON membership.owner_id = group_record.owner_id
+     AND membership.group_id = group_record.id
+    WHERE group_record.group_type = 'custom'
+), page AS MATERIALIZED (
 SELECT c.id, c.owner_id, c.content_kind,
        (CASE WHEN translation.id IS NULL THEN c.content_locale ELSE translation.locale END)::text AS selected_content_locale,
        (CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END)::text AS selected_name,
@@ -790,24 +842,17 @@ SELECT c.id, c.owner_id, c.content_kind,
        COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
        COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
        c.metadata, c.created_at, c.updated_at,
-       COALESCE(c.owner_id = $1, false)::boolean AS owned_by_actor,
-       (c.content_kind = 'official' AND c.content_locale <> $2
+       COALESCE(c.owner_id = $2, false)::boolean AS owned_by_actor,
+       (c.content_kind = 'official' AND c.content_locale <> $3
         AND translation.id IS NULL)::boolean AS translation_missing,
        EXISTS (
-           SELECT 1 FROM component_repo.component_subscriptions subscription
-           WHERE subscription.owner_id = $1
-             AND subscription.component_id = c.id
-       ) AS subscribed,
+           SELECT 1 FROM component_repo.component_stars star
+           WHERE star.actor_id = $2
+             AND star.component_id = c.id
+       ) AS starred_by_actor,
        count(*) OVER()::bigint AS total_count
-FROM component_repo.component_groups group_record
-JOIN component_repo.components c
-  ON group_record.group_type = 'root'
-  OR EXISTS (
-      SELECT 1 FROM component_repo.component_group_memberships membership
-      WHERE membership.owner_id = group_record.owner_id
-        AND membership.group_id = group_record.id
-        AND membership.component_id = c.id
-  )
+FROM candidate_component_ids
+JOIN component_repo.components c ON c.id = candidate_component_ids.component_id
 LEFT JOIN LATERAL (
     SELECT version.logical_width_stud, version.logical_depth_stud,
            version.logical_height_plate
@@ -846,22 +891,21 @@ LEFT JOIN LATERAL (
     SELECT translation_record.id, translation_record.locale, translation_record.name,
            translation_record.description, translation_record.tags
     FROM component_repo.component_translations translation_record
-    WHERE translation_record.component_id = c.id
-      AND translation_record.locale = $2
+    WHERE c.content_kind = 'official'
+      AND translation_record.component_id = c.id
+      AND translation_record.locale = $3
       AND translation_record.translation_status = 'reviewed'
     LIMIT 1
-) translation ON c.content_kind = 'official'
-WHERE group_record.id = $3
-  AND group_record.owner_id = $1
-  AND c.deleted_at IS NULL
-  AND (c.owner_id = $1 OR c.status = 'active')
+) translation ON true
+WHERE c.deleted_at IS NULL
+  AND (c.owner_id = $2 OR c.status = 'active')
   AND EXISTS (
       SELECT 1
       FROM component_repo.component_versions version
       WHERE version.component_id = c.id
         AND version.deleted_at IS NULL
         AND (
-            c.owner_id = $1
+            c.owner_id = $2
             OR (c.status = 'active' AND version.status <> 'draft')
         )
   )
@@ -915,12 +959,29 @@ WHERE group_record.id = $3
   )
 ORDER BY c.updated_at DESC, c.id
 LIMIT $8 OFFSET $7
+), page_star_counts AS (
+    SELECT aggregate_star.component_id, count(*)::bigint AS star_count
+    FROM component_repo.component_stars aggregate_star
+    JOIN page ON page.id = aggregate_star.component_id
+    GROUP BY aggregate_star.component_id
+)
+SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
+       page.selected_name, page.selected_description, page.has_description,
+       page.selected_tags, page.category, page.status, page.current_version_id,
+       page.logical_width_stud, page.logical_depth_stud, page.logical_height_plate,
+       page.metadata, page.created_at, page.updated_at, page.owned_by_actor,
+       page.translation_missing, page.starred_by_actor,
+       COALESCE(page_star_counts.star_count, 0)::bigint AS star_count,
+       page.total_count
+FROM page
+LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
+ORDER BY page.updated_at DESC, page.id
 `
 
 type SearchComponentGroupComponentsParams struct {
+	GroupID       pgtype.UUID
 	OwnerID       pgtype.UUID
 	Locale        string
-	GroupID       pgtype.UUID
 	StatusFilters []string
 	TextFilters   []string
 	SizeFilters   []byte
@@ -948,16 +1009,17 @@ type SearchComponentGroupComponentsRow struct {
 	UpdatedAt             pgtype.Timestamptz
 	OwnedByActor          bool
 	TranslationMissing    bool
-	Subscribed            bool
+	StarredByActor        bool
+	StarCount             int64
 	TotalCount            int64
 }
 
 // 尺寸搜索忽略 Box 轴方向：先把三个业务尺寸归一化为升序 a/b/c；任一尺寸缺失时不参与尺寸匹配。
 func (q *Queries) SearchComponentGroupComponents(ctx context.Context, arg SearchComponentGroupComponentsParams) ([]SearchComponentGroupComponentsRow, error) {
 	rows, err := q.db.Query(ctx, searchComponentGroupComponents,
+		arg.GroupID,
 		arg.OwnerID,
 		arg.Locale,
-		arg.GroupID,
 		arg.StatusFilters,
 		arg.TextFilters,
 		arg.SizeFilters,
@@ -991,7 +1053,8 @@ func (q *Queries) SearchComponentGroupComponents(ctx context.Context, arg Search
 			&i.UpdatedAt,
 			&i.OwnedByActor,
 			&i.TranslationMissing,
-			&i.Subscribed,
+			&i.StarredByActor,
+			&i.StarCount,
 			&i.TotalCount,
 		); err != nil {
 			return nil, err

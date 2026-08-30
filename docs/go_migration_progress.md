@@ -1,6 +1,6 @@
 # Go 后端迁移进度
 
-> 最后更新：2026-08-26（Part Search meshopt GLB 静态缩略图）
+> 最后更新：2026-08-30（Component Repo Star 查询性能修正）
 > 状态依据：[go_component_migration_plan.md](./go_component_migration_plan.md)
 > 跟进指南：[go_migration_followup_guide.md](./go_migration_followup_guide.md)
 > Studio Part Library 路线图：[go_part_library_studio_roadmap.md](./go_part_library_studio_roadmap.md)
@@ -20,7 +20,7 @@
 | G7 关系、接口、校验和预览 | Completed | 关系检测/审核、可选版本验证、预览与 PostgreSQL 不变量均由 Go 承担 |
 | G8 前端切换与 Component Repo Python 删除 | In progress | 主要前端能力与全部 Component Repo task consumer 已切换 Go；尚需真实浏览器/RLS 验收和旧 Python 公共 router 删除 |
 
-当前 Go 后端已经覆盖 Component Repo 的目录、版本、分组、订阅、Artifact、上传、持久任务、导入、解析、Candidate、关系检测/审核、connector/interface、可选版本验证、直接发布、BOM 和预览闭环。发布与验证已解耦：owner 可直接发布 Draft，验证由用户在 Draft/Published 上显式异步触发，最近报告在详情页展示且不改变发布状态。`component.import.parse` 与 `component.relations.detect` 均由 Go Worker 执行，旧 Python import/relation worker adapter 与启动入口均已删除。上传弹窗以 complete `202` 为终点，Worker 持久执行 verify/parse/BOM/GLB；Candidate 默认只展示整体 GLB 与 BOM，Connector 按开关加载。BOM 已逐项返回 `geometryStatus`，缺少几何的 Part 保留并标注，整体 GLB 采用记录 omissions 的 partial preview。G8 已切换 Component Repo 的主要前端调用；Part preview 已切到 `/api/v1`，Studio LDraw snapshot 已成为 active Part Library。真实 Supabase 当前已执行 Goose v12 与 Studio connector 导入，active library 为 `preview_ready/relation_ready=true`；collider 采用 metadata-only。真实 Supabase 非 owner Preview RLS、完整双语言网络矩阵和旧 Python 公共 router 删除仍需完成。代码阶段状态与当前环境运行状态必须分开判断，详见[跟进指南](./go_migration_followup_guide.md)。
+当前 Go 后端已经覆盖 Component Repo 的目录、版本、分组、Star、Artifact、上传、持久任务、导入、解析、Candidate、关系检测/审核、connector/interface、可选版本验证、直接发布、BOM 和预览闭环。发布与验证已解耦：owner 可直接发布 Draft，验证由用户在 Draft/Published 上显式异步触发，最近报告在详情页展示且不改变发布状态。`component.import.parse` 与 `component.relations.detect` 均由 Go Worker 执行，旧 Python import/relation worker adapter 与启动入口均已删除。上传弹窗以 complete `202` 为终点，Worker 持久执行 verify/parse/BOM/GLB；Candidate 默认只展示整体 GLB 与 BOM，Connector 按开关加载。BOM 已逐项返回 `geometryStatus`，缺少几何的 Part 保留并标注，整体 GLB 采用记录 omissions 的 partial preview。G8 已切换 Component Repo 的主要前端调用；Part preview 已切到 `/api/v1`，Studio LDraw snapshot 已成为 active Part Library。真实 Supabase 当前已执行 Goose v12 与 Studio connector 导入，active library 为 `preview_ready/relation_ready=true`；collider 采用 metadata-only。真实 Supabase 非 owner Preview RLS、完整双语言网络矩阵、Star v14 迁移和旧 Python 公共 router 删除仍需完成。代码阶段状态与当前环境运行状态必须分开判断，详见[跟进指南](./go_migration_followup_guide.md)。
 
 ## 2. 已确认决策
 
@@ -135,7 +135,7 @@ Python backend pytest  PASS（294 tests；6 个既有 warning）
 
 完成内容：
 
-- [x] 增加 `/api/v1` 下 Component CRUD、版本查询/草稿创建/发布/弃用/归档/删除、分组树/移动/成员关系和订阅接口。
+- [x] 增加 `/api/v1` 下 Component CRUD、版本查询/草稿创建/发布/弃用/归档/删除、分组树/移动/成员关系和 Star 接口；旧 Subscription Go 契约已由 v14 取代。
 - [x] 增加 HS256 Bearer JWT 验证；只接受已验证 UUID `sub` 作为 actor，签名、过期时间、issuer 和 audience 均可校验，未配置时 fail closed。
 - [x] 所有业务 SQL 由 sqlc 生成并显式携带 actor/owner 条件；跨用户草稿读取、修改、分组操作和版本输入引用均被拒绝。
 - [x] 所有 mutation 通过 serializable pgx transaction 执行，serialization/deadlock 最多重试三次；版本发布在一个事务中弃用旧版本并更新 current version。
@@ -2699,3 +2699,211 @@ frontend npm run build                       PASS（仅既有 Vite deprecation/c
 i18n 影响：无用户可见或 locale-sensitive 变化；没有新增文案、semantic key、资源、API error code 或持久化
 内容。`previewModel` 字段名、format/compression、Artifact ID/SHA 均为稳定机器值，catalog version、content hash
 与 release notes 不变。
+
+## 64. G8 Component Version Diff v1（Go）
+
+日期：2026-08-26
+阶段：G8 / Component Version 只读结构能力
+状态：Implemented and verified
+
+实现内容：
+
+- [x] 新增纯 Go `internal/componentdiff`，以不可变 SceneSnapshot document 为权威输入，递归展开全部
+  `rootInstances[]`，同时支持旧 `rootModelId` 快照；GLB 与 Preview Artifact 不参与结构比较。
+- [x] 固定 `component-scene-diff-v1` 算法：先消除完全相同实例，再依次识别改色、同位置 Part 替换、
+  唯一 Part/颜色实例的 transform 变化；重复实例不能可靠配对时输出 `ambiguousGroups`，不依赖数组顺序或
+  临时 instance ID 猜测移动。
+- [x] BOM diff 独立按完整展开结果计算；实例与歧义明细合计最多 10,000 条，截断时 Summary/BOM 保持完整。
+  Scene expander 增加调用过程中的硬上限接口，API 任一侧最多展开 50,000 个 Part/子模型实例，不会先展开
+  一百万实例再事后拒绝。
+- [x] 新增 owner-only `GET /api/v1/component-versions/:versionId/diff`。父版本只从
+  `Version -> Candidate -> Import.base_version_id` 读取并要求同一 Component；首个版本与空树比较。
+  Handler 同步执行的是严格有界、只读、无网络计算，不创建 Worker Task、不读 Storage、不保存 diff 结果。
+- [x] 新增 `cmd/component-diff` 离线入口，可比较两个 snapshot document JSON 或把首版与空树比较；API 与 CLI
+  共用同一算法实现。
+- [x] 新增多 root、实例 ID/顺序稳定性、BOM、改色、移动、替换、新增/删除、重复实例歧义、浮点容差、
+  明细截断和实例上限测试；PostgreSQL 集成测试固定 owner 授权与 `Import.base_version_id` lineage。
+- [x] 未新增 migration、表、Task type 或 Storage Artifact；sqlc 只增加 owner-scoped 只读查询。
+
+验证：
+
+```text
+go tool sqlc generate          PASS
+backend-go make check         PASS（全量 Go tests、gofmt、go vet、sqlc vet）
+backend-go make test-postgres PASS（临时隔离 PostgreSQL；Goose 0 -> v13、Diff lineage/owner、API/Worker startup）
+component-diff --help         PASS
+```
+
+i18n 影响：无用户可见或 locale-sensitive 文案变化。新增的 change kind、comparison basis、算法版本、Part
+编号、颜色、矩阵、hash 与 JSON 字段均为稳定机器数据；超限复用已有 `request.validation_failed`，未知持久化
+错误继续只返回 `common.internal_error`。没有新增错误资源、typed semantic key、catalog version、content hash
+或 release notes。
+
+## 65. G8 Component Version Diff 双栏三维投影
+
+日期：2026-08-27
+阶段：G8 / Component Version Diff 前端投影
+状态：Implemented and verified
+
+实现内容：
+
+- [x] Component 详情页和每条版本历史记录新增 owner-only“与上一个版本对比”入口；前端调用既有 Go
+  `GET /api/v1/component-versions/:versionId/diff`，并只读取两侧已经 ready 的 Worker GLB，不触发 Preview
+  物化、不创建任务、不写入 Diff 结果。
+- [x] 新增左右双栏 Three.js 查看器。两侧 GLB 保留相同 Component 根转换，并使用一次共同世界 Box 居中；
+  OrbitControls 相机、target、缩放同步，避免分别居中后掩盖真实移动。
+- [x] 未变化实例降为半透明上下文；新增、删除、移动、改色、替换与歧义实例使用稳定颜色、发光材质和
+  BoxHelper 轮廓。变化标记缓慢脉冲，`prefers-reduced-motion` 下自动退化为静态高亮。
+- [x] 页面显示差异计数、图例和最多 100 条可点击明细；点击后两侧相机同时聚焦 before/after 实例。
+  API 明细截断和前端列表折叠分别明确提示，不改变完整 Summary/BOM。
+- [x] 首版与空基准并排显示；任一所需 GLB 缺失时只显示对比不可用，不触发耗时 Worker 工作，也不影响
+  原有版本详情预览。
+- [x] 新增 Diff API adapter 契约测试；`docs/api.md` 补充前端读取与渲染边界。
+
+验证：
+
+```text
+frontend npm run i18n:check PASS（2 locales / 10 namespaces / frontend-2026.08.27.1）
+frontend npm test           PASS（15 files / 67 tests）
+frontend npm run build      PASS（仅既有 Vite deprecation/chunk-size warning）
+backend-go make check       PASS（全量 Go tests、gofmt、go vet、sqlc vet）
+git diff --check            PASS
+```
+
+i18n 影响：新增双栏对比标题、操作、状态、变化图例与统计标签，均使用 typed semantic key；`zh-CN/en-US`
+各新增 20 个 key，catalog 升级为 `frontend-2026.08.27.1`，content hash 为
+`7dafd9b3a0bae49ec864c40be0280ab4e7453b465fbd3e79e10274d7e68e924a`，并更新
+`I18N_RELEASE_NOTES.md`。Version/Instance/Part ID、change kind、矩阵、颜色码、数量和算法版本继续作为
+稳定机器数据，不翻译。
+
+## 66. G8 Component Repo Star MVP
+
+日期：2026-08-29
+阶段：G8 / Component Repo 社交关系基础
+状态：Implemented and verified in isolated environment；真实目标库迁移待发布执行
+
+实现内容：
+
+- [x] 新增 Goose v14 `component_stars`，以 `(actor_id,component_id)` 保证幂等；旧
+  `component_subscriptions` 行一次复制为 `source=subscription_migration` 后删除旧表，不双写。
+- [x] 新增 `GET /api/v1/component-stars`、`PUT/DELETE /api/v1/components/:componentId/star`；拒绝收藏
+  自有 Component，只允许当前公开可用对象，取消收藏即使关系或 Component 已不可见也保持幂等。
+- [x] Component 目录、详情、Group 成员和搜索统一返回 `starredByActor/starCount`；不公开收藏者列表，Star
+  不产生通知、不授予额外资源权限。归档/不可见 Component 保留关系但在收藏查询中隐藏。
+- [x] 个人 root Group 收敛为 actor 自有或已 Star 的可见 Component；公开社区目录继续走 `/components`，
+  不再把公共发现与个人根分组混为一体。
+- [x] `/components` 补充复用同一可见性条件的总数查询和 `total/totalPages`，支持社区目录稳定分页。
+- [x] 前端启用社区目录、“我的收藏”、列表与详情 Star 按钮、收藏数、loading/选中态、乐观更新与失败回滚；
+  owner 只显示只读收藏数。
+- [x] Go PostgreSQL 集成测试覆盖自有对象拒绝、跨用户 Star、重复取消、计数、收藏列表和 root 联动；前端
+  adapter 测试固定公开目录与 Star API 路径/方法。
+
+验证：
+
+```text
+go tool sqlc generate             PASS
+backend-go make check             PASS（全量 Go tests、gofmt、go vet、sqlc vet）
+backend-go make test-postgres     PASS（隔离 PostgreSQL；Goose 0 -> v14、v14 down/up、Star integration）
+frontend npm run i18n:check       PASS（2 locales / 10 namespaces / frontend-2026.08.29.1）
+frontend npm test                 PASS（15 files / 69 tests）
+frontend npm run build            PASS（仅既有 Vite deprecation/chunk-size warning）
+backend Python pytest             PASS（298 tests；6 个既有 PytestReturnNotNoneWarning）
+```
+
+i18n 影响：新增社区目录说明、收藏/取消收藏、收藏数、个人收藏与空状态语义 key，以及 Star 结构化错误的
+`zh-CN/en-US` 资源；catalog 升级为 `frontend-2026.08.29.1`，content hash 为
+`241a429203a5b8f2f7f050cf4de198a50f2d7ead71a540d0aaaec4168a98fcb5`。Star 字段、ID、时间、来源和错误 code
+保持稳定机器数据。遗留 Python 源码仍声明的两个 Subscription 错误资源暂时保留，未恢复旧 Go API 或数据双写。
+
+## 67. G8 Component Repo Star 资格检查与查询性能修正
+
+日期：2026-08-30
+阶段：G8 / Component Repo Star hardening
+状态：Implemented and verified in isolated PostgreSQL
+
+实现内容：
+
+- [x] `Star()` 不再调用包含 translation、Preview Box 和 `starCount` 的完整 Component 详情查询；新增轻量目标投影，一次读取 owner、状态、非 Draft Version 存在性和 actor 既有 Star。
+- [x] 已有 Star 直接返回首次 `starredAt` 并跳过 INSERT；并发首次收藏继续由 `(actor_id,component_id)` 唯一键和 serializable transaction 收敛，数据库防竞态 upsert 保留。
+- [x] root Group 的直接计数、成员列表、复合搜索和状态统计改由 owner Component 索引、actor Star 索引或 custom membership 建立候选集；排除历史 self-Star 重复候选，不再用全 Component `owner OR Star EXISTS` 作为驱动表。
+- [x] Component 列表、收藏列表、Group 成员和 Group 搜索先固定当前页，再对页内 Component ID 一次 `GROUP BY` 聚合 Star；详情查询仍按 Star 设计直接 COUNT。
+- [x] PostgreSQL integration 增加 Draft-only、删除对象、own-component、并发 Star、重复 PUT 原时间保持和单行计数契约。
+
+验证：
+
+```text
+go tool sqlc generate PASS
+go tool sqlc vet      PASS
+make check            PASS（Go 全量 tests、gofmt、go vet、sqlc vet）
+make test-postgres    PASS（沙箱外隔离 PostgreSQL；Goose 0 -> v14、v14 down/up、全部 integration）
+frontend i18n/test/build PASS（2 locales；15 files / 69 tests；production build）
+```
+
+i18n 影响：无。API 路径、DTO、错误 code、用户文案、locale/timezone、领域内容和资源 catalog 均未变化；Star ID、时间、来源、计数和候选关系仍是机器数据。
+
+遗留：STAR-3 的 10 万/100 万关系压力测试、完整 `EXPLAIN ANALYZE` 基线、actor 限流和指标仍未完成；本记录只证明查询形状修正与隔离 PostgreSQL 功能契约，不代表真实发布 SLO 已验收。
+
+## 68. G8 Component Repo Star UI 契约修复与 SQL 计划复核
+
+日期：2026-08-30
+阶段：G8 / Component Repo Star hardening
+状态：Implemented and verified in isolated PostgreSQL；STAR-3 生产 SLO 未完成
+
+实现内容：
+
+- [x] root Group 从 owned+Star 收敛为 owned-only；“我的组件”“我的收藏”“公开发现”和 custom membership 四个集合不再互相冒充。
+- [x] Unstar 继续保留 custom membership；自定义分组行始终保留管理入口，分组候选合并 owned、当前 Star 和当前成员，保证取消收藏后的外部组件仍可移出。
+- [x] 公开详情按授权矩阵停止请求 Candidate owner-only relation/connector；已发布 Version Preview、BOM 与可见 ValidationReport 不受影响。
+- [x] `GET /component-stars` 校验 `sort=starred_at_desc`，新增 category、轴无关 logical-size 过滤和 `relationshipTotal`；计数在同一 SQL 返回过滤可见总数与关系总数。
+- [x] 前端显示 `starredAt`，区分三类收藏空状态，取消末页最后一项后回到前一页；社区目录查询补齐 Component ID 匹配。
+- [x] official translation 的 LATERAL 条件移入子查询，用户 Component 不再逐行执行空 translation 索引探测；无尺寸过滤的收藏计数不读取 Version Box。
+- [x] 双语言资源升级到 `frontend-2026.08.30.1`；机器字段、筛选参数、ID、时间和关系总数不翻译。
+
+验证：
+
+```text
+go tool sqlc generate/vet        PASS
+backend-go make check            PASS（Go 全量 tests、gofmt、go vet、sqlc vet）
+backend-go make test-postgres    PASS（隔离 PostgreSQL；Goose 0 -> v14、v14 down/up、全部 integration）
+frontend npm run i18n:check      PASS（2 locales / 10 namespaces / frontend-2026.08.30.1）
+frontend npm test                PASS（15 files / 69 tests）
+frontend npm run build           PASS（仅既有 Vite deprecation/chunk-size warning）
+backend Python pytest            NOT RUN（当前 shell 无 python；系统、bundled 与仓库 .venv 均缺少 pytest 模块）
+```
+
+10 万关系隔离 `EXPLAIN ANALYZE`：收藏首页 20 条约 `0.37 ms`；无筛选计数与关系总数约 `139 ms`（修正前约 `279 ms`）；category 5 万命中约 `57 ms`；logical size 10 万命中约 `364 ms`；OFFSET 99,980 深分页约 `215 ms`。该结果证明首页索引路径与逐行 translation 探测修复，但也确认 exact COUNT、computed size 和深 OFFSET 会随 actor 关系规模增长。
+
+i18n 影响：新增分类筛选、收藏时间和三类空状态 semantic key；用户输入的名称、Component ID、分类和尺寸保持原文。`sort=starred_at_desc`、`starredAt`、`relationshipTotal`、Star 数和 API error code 是稳定机器数据。catalog hash 为 `9bf13c034632618130ce2b73addc8c9c77bdb67f032cef38c487e8f8acf55a9f`。
+
+遗留：100 万关系、多 actor/冷热缓存/官方翻译分布的计划与生产 SLO 尚未完成；深分页需要 cursor/keyset 方案，名称/ID leading-wildcard、exact COUNT 与 logical-size 计算过滤需要独立索引/投影设计。actor 限流、metrics/dashboard 和灰度验收仍属于 STAR-3。
+
+## 69. G8 Component Repo Star review comments 归档与 SQL 性能规约固化
+
+日期：2026-08-30
+阶段：G8 / Component Repo Star hardening 文档收口
+状态：Review comments 已归档；5 项后续整改保持 Open
+
+记录内容：
+
+- [x] 在 Star 方案与路线文档第 21 节建立权威 review 跟踪表，为每项意见分配稳定 ID、优先级、量化证据、所属阶段和客观关闭条件。
+- [ ] `STAR-PERF-01`（P1）：深 `OFFSET` 在 10 万关系下约 `215 ms`；STAR-3 需完成 `(starred_at, component_id)` cursor/keyset 或冻结硬深度上限与已测 SLO。
+- [ ] `STAR-PERF-02`（P1）：computed logical-size 在 10 万高命中下约 `364 ms`；STAR-3 需完成权威规范化尺寸投影和谓词专用索引，或证明候选集硬上限。
+- [ ] `STAR-CONSISTENCY-01`（P2）：Count/List 为两个默认 `READ COMMITTED` 语句；STAR-3 需冻结一致性语义，并以单语句或显式一致读快照消除响应内快照差异，或明确接受最终一致。
+- [ ] `STAR-UI-01`（P2）：custom Group 批量管理只加载三个候选集合各自前 100 条；STAR-2 hardening 需补服务端搜索/分页及超过 100 条的可发现、加入、移除验证。
+- [ ] `STAR-A11Y-01`（P2）：Star 图标按钮没有显式 `aria-label`；STAR-2 hardening 需复用 typed semantic key 并增加双 locale 可访问名称/键盘测试。
+- [x] 仓库根 `AGENTS.md` 新增强制 SQL 性能 preflight、查询形状审查和量级验证规约，覆盖候选集驱动、先分页后聚合、LATERAL 内部门控、computed filter、exact COUNT、keyset、leading wildcard、UI first-N、索引证据及 10 万/100 万量级 `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)`。
+
+规约复盘：
+
+- SQL 功能正确、集成测试通过和普通索引存在，都不能替代执行计划与渐进复杂度审查。
+- 可选分支是否真正跳过必须查看实际 loops/buffers；JOIN 条件和 SQL 文本顺序不是执行器短路保证。
+- 列表分页、总数语义、计算型筛选和 UI 候选集上限必须在功能设计期冻结，不能作为上线后的单点调优处理。
+- 本次只更新文档和智能体规约；未修改 Go/Python/前端代码、API 契约、数据库 schema/query、用户文案或 i18n 资源。
+
+验证：
+
+```text
+git diff --check  PASS
+```
+
+i18n 影响：无用户可见或 locale-sensitive 影响；没有新增 semantic key、翻译资源、catalog version 或 content hash。

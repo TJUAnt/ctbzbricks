@@ -3,6 +3,8 @@ package component
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentdiff"
 )
 
 type PageRequest struct {
@@ -18,12 +20,35 @@ type ComponentListRequest struct {
 	Status   string
 }
 
+// ComponentPage 返回 actor 可见目录的稳定分页和总数；总数复用相同授权与过滤条件。
 type ComponentPage struct {
-	Items    []Component `json:"items"`
-	Page     int         `json:"page"`
-	PageSize int         `json:"pageSize"`
+	Items      []Component `json:"items"`
+	Page       int         `json:"page"`
+	PageSize   int         `json:"pageSize"`
+	Total      int64       `json:"total"`
+	TotalPages int         `json:"totalPages"`
 }
 
+// StarListRequest 描述当前 actor 的收藏列表查询；完整尺寸表达式复用分组搜索规范。
+type StarListRequest struct {
+	PageRequest
+	Locale   string
+	Query    string
+	Category string
+	Sort     string
+}
+
+// StarPage 返回稳定分页的个人收藏；RelationshipTotal 仅用于区分“从未收藏”和“关系存在但目标不可见”。
+type StarPage struct {
+	Items             []StarredComponent `json:"items"`
+	Page              int                `json:"page"`
+	PageSize          int                `json:"pageSize"`
+	Total             int64              `json:"total"`
+	TotalPages        int                `json:"totalPages"`
+	RelationshipTotal int64              `json:"relationshipTotal"`
+}
+
+// Component 是面向当前 actor 的展示投影；Star 字段只描述收藏关系与聚合计数，不授予权限。
 type Component struct {
 	ID                 string          `json:"id"`
 	OwnerID            *string         `json:"ownerId"`
@@ -38,7 +63,8 @@ type Component struct {
 	LogicalSize        *LogicalSize    `json:"logicalSize"`
 	Metadata           json.RawMessage `json:"metadata"`
 	OwnedByActor       bool            `json:"ownedByActor"`
-	Subscribed         bool            `json:"subscribed"`
+	StarredByActor     bool            `json:"starredByActor"`
+	StarCount          int64           `json:"starCount"`
 	TranslationMissing bool            `json:"translationMissing"`
 	CreatedAt          time.Time       `json:"createdAt"`
 	UpdatedAt          time.Time       `json:"updatedAt"`
@@ -117,6 +143,19 @@ type ComponentVersion struct {
 	Metadata                json.RawMessage `json:"metadata"`
 	CreatedAt               time.Time       `json:"createdAt"`
 	PublishedAt             *time.Time      `json:"publishedAt"`
+}
+
+// VersionDiff 是当前版本相对导入基准版本的只读结构差异。
+// ComparisonBasis 只使用 import_base_version 或 empty；版本标识、hash 与差异字段均为稳定机器数据。
+type VersionDiff struct {
+	VersionID         string  `json:"versionId"`
+	BaseVersionID     *string `json:"baseVersionId"`
+	ComparisonBasis   string  `json:"comparisonBasis"`
+	StructureHash     string  `json:"structureHash"`
+	GeometryHash      string  `json:"geometryHash"`
+	BaseStructureHash *string `json:"baseStructureHash"`
+	BaseGeometryHash  *string `json:"baseGeometryHash"`
+	componentdiff.Result
 }
 
 type CreateVersionInput struct {
@@ -198,7 +237,14 @@ type MembershipInput struct {
 	ComponentID string `json:"componentId"`
 }
 
-type Subscription struct {
-	ComponentID  string    `json:"componentId"`
-	SubscribedAt time.Time `json:"subscribedAt"`
+// Star 是 actor 对公开非本人 Component 的轻量收藏关系，不包含通知或授权语义。
+type Star struct {
+	ComponentID string    `json:"componentId"`
+	StarredAt   time.Time `json:"starredAt"`
+}
+
+// StarredComponent 在 Component 投影之外保留个人收藏时间，用于稳定倒序分页。
+type StarredComponent struct {
+	Component
+	StarredAt time.Time `json:"starredAt"`
 }

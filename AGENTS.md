@@ -34,6 +34,73 @@ a phase complete because scaffolding or planning exists.
 - Generated sqlc files are never manually edited. Business SQL lives in versioned query files and multi-step writes use explicit pgx transactions.
 - Preserve the approved i18n, content, API-error, ownership, immutable-version, and storage-security invariants during the rewrite.
 
+## Mandatory SQL performance preflight and review
+
+These rules apply whenever a change adds or materially modifies list, search, filter, pagination, count,
+aggregate, translation, membership, or relationship SQL. SQL correctness and passing functional tests are not
+sufficient evidence that the design is ready.
+
+### Required design preflight
+
+- Before implementation, record the expected cardinality and growth direction for the driving relation, the
+  actor/tenant distribution, candidate-set source, filter selectivity, exact `ORDER BY`, pagination model, total
+  count requirement, and whether list rows and totals must come from one consistent snapshot.
+- Start actor- or tenant-scoped queries from the narrow authoritative relationship/ownership/membership index.
+  Do not drive from the full business table with broad `OR`/`EXISTS` predicates when a scoped candidate relation
+  can establish the result set first.
+- Fix the page before running optional translations, per-row aggregates, current-version projections, preview
+  metadata, or other expensive enrichments. Page-level aggregates should operate on the selected page IDs.
+- An optional filter over a computed or normalized value is not indexable merely because its source columns are
+  indexed. The design must choose either a demonstrably bounded candidate scan or an authoritative persisted
+  projection with a predicate/order-specific index. Do not add a generic B-tree without plan evidence.
+- Page-number `OFFSET` pagination is linear in the skipped row count. For actor- or tenant-scoped collections
+  expected to reach 100,000 rows, use keyset/cursor pagination with the exact stable sort and a unique tiebreaker,
+  or document an explicit hard result cap and a measured SLO that justifies retaining `OFFSET`.
+- Treat exact `COUNT` as an independent potentially O(N) workload. Decide whether the product truly needs an
+  exact total, and do not add a separate count round trip by default. If rows and totals must be mutually
+  consistent, use one SQL statement or an explicit consistent read snapshot; separate statements under default
+  `READ COMMITTED` do not guarantee the same snapshot.
+- Leading-wildcard search does not become efficient through an ordinary B-tree. Exact machine identifiers need
+  an exact-match path; fuzzy human text needs a suitable search projection/index or a bounded candidate set.
+- A fixed UI/API fetch cap must never silently represent the complete collection. Any collection that can exceed
+  the cap requires server-side pagination/search and visible continuation behavior.
+
+### Required query-shape checks
+
+- Do not assume optional-parameter `OR` predicates, JOIN conditions, or SQL textual order will short-circuit work.
+  A gated `LATERAL` subquery must place the gate inside the subquery (or produce an equivalent one-time executor
+  filter), and `EXPLAIN ANALYZE` must confirm that the inner node has zero loops when the feature/filter is absent.
+- Translation and official-content probes must only execute when the requested projection or filter needs them.
+  Confirm this with actual loop and buffer counts rather than relying on the join's `ON` condition.
+- Review every plan for the real driving relation, stable ordering, row-estimate errors, nested per-row probes,
+  heap fetches, sorts, spills/temp files, and hidden result caps. Verify that counts and list predicates express
+  the same visibility rules.
+- Every new index must correspond to the exact join, predicate, or ordering it serves. Record the supporting plan
+  and consider write amplification and storage cost; an unused or speculative index is not an accepted fix.
+
+### Required performance evidence
+
+- Before completion, run `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)` for the unfiltered case, a selective filter, the
+  worst/high-match filter, the first page, and the deepest supported page or cursor path. Include materially
+  different actor/tenant distributions and user/official translation mixes when those branches exist.
+- Use at least 100,000 rows for a relationship expected to reach that scale. If the approved roadmap targets
+  1,000,000 rows, the release gate must include a 1,000,000-row run. Record dataset shape, PostgreSQL version and
+  relevant settings, warm/cold-cache caveats, plan evidence, and timings in the feature roadmap or migration
+  progress document. Local timings prove query shape only and must not be presented as production SLOs.
+- Functional integration tests must cover pagination stability and count/list semantics, but they do not replace
+  plan review. Keep unresolved asymptotic risks as numbered review items with an owner phase and objective closure
+  criteria; do not mark a phase complete while those criteria remain unmet.
+
+### Lessons that must guide future designs
+
+- SQL semantic correctness does not prove executor efficiency; executor loops, buffers, and scale behavior are
+  part of the design contract.
+- A feature can be functionally paginated and filtered while remaining asymptotically unsuitable because of deep
+  `OFFSET`, exact counts, computed filters, or per-row enrichment.
+- UI collection limits and backend pagination are one scalability contract; a hardcoded first-N client workflow
+  is a data-loss defect once the collection can exceed N.
+- Performance evidence is an implementation and release gate, not a post-implementation optimization task.
+
 ## Mandatory i18n preflight
 
 BrickBuilder uses an approved end-to-end multilingual architecture. Before changing any UI, API, background task, validation result, persisted content, configuration label, or export, read:

@@ -80,6 +80,8 @@
   "component_repo.group_name_duplicate": "同一上级分组下已存在同名分组。",
   "component_repo.group_name_invalid": "分组名称不能为空且不能超过 {{maximumLength}} 个字符。",
   "component_repo.component_not_managed": "你当前无权管理此组件。",
+  "component_repo.star_own_component_forbidden": "不能收藏自己上传的组件。",
+  "component_repo.star_component_unavailable": "该组件当前不可收藏。",
   "component_repo.subscription_own_component_forbidden": "不能订阅自己上传的组件。",
   "component_repo.subscription_component_unavailable": "该组件当前不可订阅。",
   "component_repo.library_item_not_found": "未找到 {{itemType}} 条目 {{itemId}}。",

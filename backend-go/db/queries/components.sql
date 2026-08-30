@@ -28,10 +28,13 @@ SELECT c.id, c.owner_id, c.content_kind,
        (c.content_kind = 'official' AND c.content_locale <> sqlc.arg(locale)
         AND translation.id IS NULL)::boolean AS translation_missing,
        EXISTS (
-           SELECT 1 FROM component_repo.component_subscriptions subscription
-           WHERE subscription.owner_id = sqlc.arg(actor_id)
-             AND subscription.component_id = c.id
-       ) AS subscribed
+           SELECT 1 FROM component_repo.component_stars star
+           WHERE star.actor_id = sqlc.arg(actor_id)
+             AND star.component_id = c.id
+       ) AS starred_by_actor,
+       (SELECT count(*)::bigint
+        FROM component_repo.component_stars aggregate_star
+        WHERE aggregate_star.component_id = c.id)::bigint AS star_count
 FROM component_repo.components c
 LEFT JOIN LATERAL (
     SELECT version.logical_width_stud, version.logical_depth_stud,
@@ -50,16 +53,18 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
     FROM component_repo.component_translations t
-    WHERE t.component_id = c.id
+    WHERE c.content_kind = 'official'
+      AND t.component_id = c.id
       AND t.locale = sqlc.arg(locale)
       AND t.translation_status = 'reviewed'
     LIMIT 1
-) translation ON c.content_kind = 'official'
+) translation ON true
 WHERE c.id = sqlc.arg(component_id)
   AND c.deleted_at IS NULL
   AND (c.owner_id = sqlc.arg(actor_id) OR c.status = 'active');
 
 -- name: ListVisibleComponents :many
+WITH page AS MATERIALIZED (
 SELECT c.id, c.owner_id, c.content_kind,
        (CASE WHEN translation.id IS NULL THEN c.content_locale ELSE translation.locale END)::text AS selected_content_locale,
        (CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END)::text AS selected_name,
@@ -76,10 +81,10 @@ SELECT c.id, c.owner_id, c.content_kind,
        (c.content_kind = 'official' AND c.content_locale <> sqlc.arg(locale)
         AND translation.id IS NULL)::boolean AS translation_missing,
        EXISTS (
-           SELECT 1 FROM component_repo.component_subscriptions subscription
-           WHERE subscription.owner_id = sqlc.arg(actor_id)
-             AND subscription.component_id = c.id
-       ) AS subscribed
+           SELECT 1 FROM component_repo.component_stars star
+           WHERE star.actor_id = sqlc.arg(actor_id)
+             AND star.component_id = c.id
+       ) AS starred_by_actor
 FROM component_repo.components c
 LEFT JOIN LATERAL (
     SELECT version.logical_width_stud, version.logical_depth_stud,
@@ -98,11 +103,12 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
     FROM component_repo.component_translations t
-    WHERE t.component_id = c.id
+    WHERE c.content_kind = 'official'
+      AND t.component_id = c.id
       AND t.locale = sqlc.arg(locale)
       AND t.translation_status = 'reviewed'
     LIMIT 1
-) translation ON c.content_kind = 'official'
+) translation ON true
 WHERE c.deleted_at IS NULL
   AND (c.owner_id = sqlc.arg(actor_id) OR c.status = 'active')
   AND EXISTS (
@@ -121,9 +127,62 @@ WHERE c.deleted_at IS NULL
       sqlc.arg(search_query)::text = ''
       OR CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
          ILIKE '%' || sqlc.arg(search_query) || '%'
+      OR c.id::text ILIKE '%' || sqlc.arg(search_query) || '%'
   )
 ORDER BY c.updated_at DESC, c.id
-LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset);
+LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset)
+), page_star_counts AS (
+    -- 列表先分页再聚合当前页 Star，避免关系规模增长后出现逐行 COUNT 放大。
+    SELECT aggregate_star.component_id, count(*)::bigint AS star_count
+    FROM component_repo.component_stars aggregate_star
+    JOIN page ON page.id = aggregate_star.component_id
+    GROUP BY aggregate_star.component_id
+)
+SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
+       page.selected_name, page.selected_description, page.has_description,
+       page.selected_tags, page.category, page.status, page.current_version_id,
+       page.logical_width_stud, page.logical_depth_stud, page.logical_height_plate,
+       page.metadata, page.created_by, page.created_at, page.updated_at,
+       page.owned_by_actor, page.translation_missing, page.starred_by_actor,
+       COALESCE(page_star_counts.star_count, 0)::bigint AS star_count
+FROM page
+LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
+ORDER BY page.updated_at DESC, page.id;
+
+-- name: CountVisibleComponents :one
+-- 公开目录总数必须复用列表的可见性和过滤条件，避免分页元数据泄露不可见 Component。
+SELECT count(*)::bigint
+FROM component_repo.components c
+LEFT JOIN LATERAL (
+    SELECT t.id, t.name
+    FROM component_repo.component_translations t
+    WHERE c.content_kind = 'official'
+      AND sqlc.arg(search_query)::text <> ''
+      AND t.component_id = c.id
+      AND t.locale = sqlc.arg(locale)
+      AND t.translation_status = 'reviewed'
+    LIMIT 1
+) translation ON true
+WHERE c.deleted_at IS NULL
+  AND (c.owner_id = sqlc.arg(actor_id) OR c.status = 'active')
+  AND EXISTS (
+      SELECT 1
+      FROM component_repo.component_versions version
+      WHERE version.component_id = c.id
+        AND version.deleted_at IS NULL
+        AND (
+            c.owner_id = sqlc.arg(actor_id)
+            OR (c.status = 'active' AND version.status <> 'draft')
+        )
+  )
+  AND (sqlc.arg(status_filter)::text = '' OR c.status = sqlc.arg(status_filter))
+  AND (sqlc.arg(category_filter)::text = '' OR c.category = sqlc.arg(category_filter))
+  AND (
+      sqlc.arg(search_query)::text = ''
+      OR CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
+         ILIKE '%' || sqlc.arg(search_query) || '%'
+      OR c.id::text ILIKE '%' || sqlc.arg(search_query) || '%'
+  );
 
 -- name: UpdateOwnedComponent :one
 UPDATE component_repo.components

@@ -60,7 +60,8 @@ The authenticated Component Repo API under `/api/v1` currently exposes:
 /component-versions/:versionId
 /component-groups
 /component-groups/:groupId/components
-/components/:componentId/subscription
+/component-stars
+/components/:componentId/star
 /component-imports/upload-sessions
 /component-imports/upload-sessions/:sessionId/complete
 /component-imports/:importId

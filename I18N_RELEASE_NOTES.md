@@ -2,6 +2,33 @@
 
 资源版本只追加、不复用。前端资源内容由 SHA-256 锁定，服务端导出版本写入每个正式产物。
 
+## frontend-2026.08.30.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：1005
+- 内容哈希：`9bf13c034632618130ce2b73addc8c9c77bdb67f032cef38c487e8f8acf55a9f`
+- Component Repo 区分“我的组件”与“我的收藏”，收藏页新增分类/逻辑尺寸筛选、收藏时间列，以及“从未收藏 / 筛选无结果 / 关系存在但目标不可见”三类空状态。
+- 用户输入的名称、Component ID、分类和尺寸条件保持原文；`sort=starred_at_desc`、`starredAt`、`relationshipTotal` 与 Star 计数继续作为稳定机器数据，不翻译。
+
+## frontend-2026.08.29.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：998
+- 内容哈希：`241a429203a5b8f2f7f050cf4de198a50f2d7ead71a540d0aaaec4168a98fcb5`
+- Component Repo 新增 Star 收藏列表、列表与详情页收藏/取消收藏、收藏数、社区目录和空状态文案；Star 使用新的结构化错误，旧 Subscription 错误资源仅在遗留 Python 源码删除前保留兼容。
+- `actor_id/component_id/starred_at/source`、`starredByActor/starCount`、Component ID 与 API error code 保持稳定机器数据；Component 名称仍按内容来源规则展示。
+
+## frontend-2026.08.27.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：984
+- 内容哈希：`7dafd9b3a0bae49ec864c40be0280ab4e7453b465fbd3e79e10274d7e68e924a`
+- Component 详情页新增相邻版本三维并行对比、同步视角、差异图例、变化统计、聚焦与关闭操作文案。
+- Version/Instance/Part ID、`change kind`、矩阵、颜色码、数量和 Diff 算法版本保持稳定机器数据；只有页面说明与图例名称本地化。
+
 ## frontend-2026.08.25.1
 
 - 生产语言：`zh-CN`、`en-US`

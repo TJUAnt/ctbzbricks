@@ -225,6 +225,102 @@ func (q *Queries) GetOwnedVersionCandidateSource(ctx context.Context, arg GetOwn
 	return i, err
 }
 
+const getOwnedVersionDiffBase = `-- name: GetOwnedVersionDiffBase :one
+SELECT version.id,
+       version.structure_hash,
+       version.geometry_hash,
+       snapshot.document
+FROM component_repo.component_versions version
+JOIN component_repo.components component
+  ON component.id = version.component_id
+ AND component.owner_id = $1
+ AND component.deleted_at IS NULL
+JOIN component_repo.scene_snapshots snapshot
+  ON snapshot.id = version.scene_snapshot_id
+WHERE version.id = $2
+  AND version.component_id = $3
+`
+
+type GetOwnedVersionDiffBaseParams struct {
+	ActorID     pgtype.UUID
+	VersionID   pgtype.UUID
+	ComponentID pgtype.UUID
+}
+
+type GetOwnedVersionDiffBaseRow struct {
+	ID            pgtype.UUID
+	StructureHash string
+	GeometryHash  string
+	Document      []byte
+}
+
+// base_version_id 必须指向同一 Component；软删除只隐藏产品入口，历史 lineage 仍读取其不可变快照。
+func (q *Queries) GetOwnedVersionDiffBase(ctx context.Context, arg GetOwnedVersionDiffBaseParams) (GetOwnedVersionDiffBaseRow, error) {
+	row := q.db.QueryRow(ctx, getOwnedVersionDiffBase, arg.ActorID, arg.VersionID, arg.ComponentID)
+	var i GetOwnedVersionDiffBaseRow
+	err := row.Scan(
+		&i.ID,
+		&i.StructureHash,
+		&i.GeometryHash,
+		&i.Document,
+	)
+	return i, err
+}
+
+const getOwnedVersionDiffHead = `-- name: GetOwnedVersionDiffHead :one
+SELECT version.id,
+       version.component_id,
+       version.structure_hash,
+       version.geometry_hash,
+       snapshot.document,
+       import_job.base_version_id
+FROM component_repo.component_versions version
+JOIN component_repo.components component
+  ON component.id = version.component_id
+ AND component.owner_id = $1
+ AND component.deleted_at IS NULL
+JOIN component_repo.scene_snapshots snapshot
+  ON snapshot.id = version.scene_snapshot_id
+LEFT JOIN component_repo.candidates candidate
+  ON candidate.id = version.component_candidate_id
+ AND candidate.scene_snapshot_id = version.scene_snapshot_id
+LEFT JOIN component_repo.imports import_job
+  ON import_job.id = candidate.import_id
+ AND import_job.owner_id = component.owner_id
+ AND import_job.target_component_id = version.component_id
+WHERE version.id = $2
+  AND version.deleted_at IS NULL
+`
+
+type GetOwnedVersionDiffHeadParams struct {
+	ActorID   pgtype.UUID
+	VersionID pgtype.UUID
+}
+
+type GetOwnedVersionDiffHeadRow struct {
+	ID            pgtype.UUID
+	ComponentID   pgtype.UUID
+	StructureHash string
+	GeometryHash  string
+	Document      []byte
+	BaseVersionID pgtype.UUID
+}
+
+// Diff 只读取 owner 的不可变版本快照；父版本只能来自该版本 Candidate 所属 Import 的 base_version_id。
+func (q *Queries) GetOwnedVersionDiffHead(ctx context.Context, arg GetOwnedVersionDiffHeadParams) (GetOwnedVersionDiffHeadRow, error) {
+	row := q.db.QueryRow(ctx, getOwnedVersionDiffHead, arg.ActorID, arg.VersionID)
+	var i GetOwnedVersionDiffHeadRow
+	err := row.Scan(
+		&i.ID,
+		&i.ComponentID,
+		&i.StructureHash,
+		&i.GeometryHash,
+		&i.Document,
+		&i.BaseVersionID,
+	)
+	return i, err
+}
+
 const getVisibleComponentVersion = `-- name: GetVisibleComponentVersion :one
 SELECT v.id, v.component_id, v.component_candidate_id, v.version_label, v.revision,
        v.status, v.source_artifact_id, v.exchange_artifact_id, v.scene_snapshot_id,

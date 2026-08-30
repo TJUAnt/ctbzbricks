@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  Star,
   Trash2,
   Upload,
   X,
@@ -34,10 +35,14 @@ import {
   listComponentGroupComponents,
   listComponentGroupIds,
   listComponentGroups,
+  listComponentStars,
+  listComponents,
   listComponentVersions,
   moveComponentGroup,
   removeComponentFromGroup,
   searchComponentGroupComponents,
+  starComponent,
+  unstarComponent,
   updateComponentGroup,
   type ComponentGroupResponse,
   type ComponentGroupTreeResponse,
@@ -54,10 +59,12 @@ type ComponentRepoListState = {
   page: number;
   totalPages: number;
   statusCounts: Record<string, number>;
+  relationshipTotal: number;
 };
 
 type UploadState = 'idle' | 'uploading' | 'error';
 type LibraryFilter = 'all' | 'draft' | 'published';
+type LibraryView = 'library' | 'starred' | 'community';
 
 const componentSearchPageSize = 20;
 const componentSearchDebounceMs = 300;
@@ -67,6 +74,7 @@ type LibraryItem = {
   name: string;
   status: string;
   createdAt: string;
+  starredAt?: string;
   data: ComponentResponse;
 };
 
@@ -83,10 +91,13 @@ export function ComponentRepoPage() {
     page: 1,
     totalPages: 0,
     statusCounts: {},
+    relationshipTotal: 0,
   });
   const [queries, setQueries] = React.useState<string[]>([]);
   const [queryDraft, setQueryDraft] = React.useState('');
   const [filter, setFilter] = React.useState<LibraryFilter>('all');
+  const [category, setCategory] = React.useState('');
+  const [libraryView, setLibraryView] = React.useState<LibraryView>('library');
   const [page, setPage] = React.useState(1);
   const [refreshRevision, setRefreshRevision] = React.useState(0);
   const [isUploadOpen, setIsUploadOpen] = React.useState(false);
@@ -107,6 +118,7 @@ export function ComponentRepoPage() {
   } | null>(null);
   const [membershipComponent, setMembershipComponent] = React.useState<ComponentResponse | null>(null);
   const [membershipGroup, setMembershipGroup] = React.useState<ComponentGroupResponse | null>(null);
+  const [starMutations, setStarMutations] = React.useState<Set<string>>(new Set());
 
   const loadLibrary = React.useCallback(async (preferredGroupId?: string | null) => {
     const requestId = ++groupRequestIdRef.current;
@@ -154,16 +166,39 @@ export function ComponentRepoPage() {
   }, [loadLibrary]);
 
   React.useEffect(() => {
-    if (!selectedGroupId) return undefined;
+    if (libraryView === 'library' && !selectedGroupId) return undefined;
     const requestId = ++searchRequestIdRef.current;
     const timeoutId = window.setTimeout(() => {
       setState((current) => ({ ...current, status: 'loading', error: null }));
-      void searchComponentGroupComponents(selectedGroupId, {
-        queries,
-        statuses: statusesForFilter(filter),
-        page,
-        pageSize: componentSearchPageSize,
-      })
+      const request = libraryView === 'starred'
+        ? listComponentStars({
+          page,
+          pageSize: componentSearchPageSize,
+          query: queries.join(' '),
+          category,
+          sort: 'starred_at_desc',
+        }).then((result) => ({
+          ...result,
+          statusCounts: { active: result.total },
+        }))
+        : libraryView === 'community'
+          ? listComponents({
+            page,
+            pageSize: componentSearchPageSize,
+            query: queries.join(' '),
+            status: 'active',
+          }).then((result) => ({
+            ...result,
+            statusCounts: { active: result.total, draft: 0 },
+            relationshipTotal: 0,
+          }))
+          : searchComponentGroupComponents(selectedGroupId!, {
+          queries,
+          statuses: statusesForFilter(filter),
+          page,
+          pageSize: componentSearchPageSize,
+          }).then((result) => ({ ...result, relationshipTotal: 0 }));
+      void request
         .then((result) => {
           if (requestId !== searchRequestIdRef.current) return;
           setState({
@@ -174,6 +209,7 @@ export function ComponentRepoPage() {
             page: result.page,
             totalPages: result.totalPages,
             statusCounts: result.statusCounts,
+            relationshipTotal: result.relationshipTotal,
           });
         })
         .catch((error: Error) => {
@@ -189,17 +225,17 @@ export function ComponentRepoPage() {
       window.clearTimeout(timeoutId);
       searchRequestIdRef.current += 1;
     };
-  }, [contentLocale, filter, page, queries, refreshRevision, selectedGroupId]);
+  }, [category, contentLocale, filter, libraryView, page, queries, refreshRevision, selectedGroupId]);
 
   const items = React.useMemo(
     () => buildLibraryItems(state.components),
     [state.components],
   );
   const stats = React.useMemo(() => ({
-    total: sumStatusCounts(state.statusCounts),
+    total: state.total,
     draft: sumStatuses(state.statusCounts, ['draft']),
     published: sumStatuses(state.statusCounts, ['active']),
-  }), [state.statusCounts]);
+  }), [state.statusCounts, state.total]);
   const selectedGroup = groupTree
     ? [groupTree.root, ...groupTree.groups].find((group) => group.id === selectedGroupId)
       ?? groupTree.root
@@ -207,6 +243,49 @@ export function ComponentRepoPage() {
   const selectedGroupName = selectedGroup?.groupType === 'root'
     ? tr('componentRepo:groupRootName')
     : selectedGroup?.name ?? tr('componentRepo:groupRootName');
+
+  const toggleStar = async (component: ComponentResponse) => {
+    if (component.ownedByActor || starMutations.has(component.id)) return;
+    const nextStarred = !component.starredByActor;
+    const shouldMoveToPreviousPage = libraryView === 'starred'
+      && !nextStarred
+      && state.components.length === 1
+      && page > 1;
+    setActionError(null);
+    setActionNotice(null);
+    setStarMutations((current) => new Set(current).add(component.id));
+    setState((current) => ({
+      ...current,
+      components: current.components
+        .map((item) => item.id === component.id ? {
+          ...item,
+          starredByActor: nextStarred,
+          starCount: Math.max(0, item.starCount + (nextStarred ? 1 : -1)),
+        } : item)
+        .filter((item) => libraryView !== 'starred' || item.starredByActor),
+      total: libraryView === 'starred' && !nextStarred ? Math.max(0, current.total - 1) : current.total,
+      relationshipTotal: libraryView === 'starred' && !nextStarred
+        ? Math.max(0, current.relationshipTotal - 1)
+        : current.relationshipTotal,
+    }));
+    try {
+      if (nextStarred) await starComponent(component.id);
+      else await unstarComponent(component.id);
+      setActionNotice(tr(nextStarred ? 'componentRepo:componentStarred' : 'componentRepo:componentUnstarred'));
+      if (shouldMoveToPreviousPage) setPage((current) => Math.max(1, current - 1));
+      setRefreshRevision((current) => current + 1);
+      void loadLibrary();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : appConfig.texts.loadFailed);
+      setRefreshRevision((current) => current + 1);
+    } finally {
+      setStarMutations((current) => {
+        const next = new Set(current);
+        next.delete(component.id);
+        return next;
+      });
+    }
+  };
 
   const removeGroup = async (group: ComponentGroupResponse) => {
     if (!window.confirm(tr('componentRepo:deleteGroupConfirmation', { name: group.name ?? '' }))) return;
@@ -256,14 +335,46 @@ export function ComponentRepoPage() {
           </div>
         </div>
         <nav aria-label={tr('componentRepo:componentLibrarySections')} className="component-library-tabs">
-          <button className="component-library-tab component-library-tab-active" type="button">
+          <button
+            aria-pressed={libraryView === 'library'}
+            className={`component-library-tab ${libraryView === 'library' ? 'component-library-tab-active' : ''}`}
+            onClick={() => {
+              setLibraryView('library');
+              setFilter('all');
+              setCategory('');
+              setPage(1);
+            }}
+            type="button"
+          >
             <FolderOpen aria-hidden="true" />
             {tr('componentRepo:myComponentLibrary')}
           </button>
-          <button aria-disabled="true" className="component-library-tab component-library-tab-disabled" type="button">
+          <button
+            aria-pressed={libraryView === 'starred'}
+            className={`component-library-tab ${libraryView === 'starred' ? 'component-library-tab-active' : ''}`}
+            onClick={() => {
+              setLibraryView('starred');
+              setFilter('all');
+              setPage(1);
+            }}
+            type="button"
+          >
+            <Star aria-hidden="true" />
+            {tr('componentRepo:myStarredComponents')}
+          </button>
+          <button
+            aria-pressed={libraryView === 'community'}
+            className={`component-library-tab ${libraryView === 'community' ? 'component-library-tab-active' : ''}`}
+            onClick={() => {
+              setLibraryView('community');
+              setFilter('all');
+              setCategory('');
+              setPage(1);
+            }}
+            type="button"
+          >
             <Sparkles aria-hidden="true" />
             {tr('componentRepo:communityLibrary')}
-            <span>{tr('componentRepo:comingSoon')}</span>
           </button>
         </nav>
       </header>
@@ -278,10 +389,20 @@ export function ComponentRepoPage() {
         <header className="component-library-panel-header">
           <div>
             <div className="component-library-title-row">
-              <h2>{selectedGroupName}</h2>
+              <h2>{libraryView === 'starred'
+                ? tr('componentRepo:myStarredComponents')
+                : libraryView === 'community'
+                  ? tr('componentRepo:communityLibrary')
+                  : selectedGroupName}</h2>
               <span>{stats.total}</span>
             </div>
-            <p>{tr(selectedGroup?.groupType === 'custom' ? 'componentRepo:customGroupDescription' : 'componentRepo:rootGroupDescription')}</p>
+            <p>{tr(libraryView === 'starred'
+              ? 'componentRepo:starredComponentsDescription'
+              : libraryView === 'community'
+                ? 'componentRepo:communityLibraryDescription'
+              : selectedGroup?.groupType === 'custom'
+                ? 'componentRepo:customGroupDescription'
+                : 'componentRepo:rootGroupDescription')}</p>
           </div>
           <div className="component-library-panel-actions">
             <button onClick={() => navigate(routeFor('componentRepoImportHistory'))} type="button">
@@ -295,8 +416,8 @@ export function ComponentRepoPage() {
           </div>
         </header>
 
-        <div className="component-library-workspace">
-          <ComponentGroupSidebar
+        <div className={`component-library-workspace ${libraryView !== 'library' ? 'component-library-workspace-starred' : ''}`}>
+          {libraryView === 'library' ? <ComponentGroupSidebar
             onCreate={(parentGroupId) => setGroupEditor({ mode: 'create', parentGroupId })}
             onDelete={(group) => void removeGroup(group)}
             onEdit={(group) => setGroupEditor({ mode: 'edit', group, parentGroupId: group.parentGroupId ?? groupTree?.root.id ?? '' })}
@@ -305,7 +426,7 @@ export function ComponentRepoPage() {
             onSelect={selectGroup}
             selectedGroupId={selectedGroupId}
             tree={groupTree}
-          />
+          /> : null}
           <div className="component-library-main">
         <div className="component-library-toolbar">
           <form
@@ -314,10 +435,12 @@ export function ComponentRepoPage() {
               event.preventDefault();
               const nextQuery = queryDraft.trim();
               if (!nextQuery) return;
-              // 搜索条件只有在用户确认后才追加到 API 查询；复合条件按 AND 执行，重复条件不重复添加。
-              setQueries((current) => current.some(
-                (condition) => condition.toLocaleLowerCase() === nextQuery.toLocaleLowerCase(),
-              ) ? current : [...current, nextQuery]);
+              // 个人分组支持多个 AND 条件；公开目录与收藏 API 是单查询契约，因此新条件替换旧条件。
+              setQueries((current) => libraryView !== 'library'
+                ? [nextQuery]
+                : current.some(
+                  (condition) => condition.toLocaleLowerCase() === nextQuery.toLocaleLowerCase(),
+                ) ? current : [...current, nextQuery]);
               setQueryDraft('');
               setPage(1);
             }}
@@ -327,7 +450,9 @@ export function ComponentRepoPage() {
               <input
                 aria-label={tr('componentRepo:searchComponents')}
                 onChange={(event) => setQueryDraft(event.target.value)}
-                placeholder={tr('componentRepo:searchComponentNameOrId')}
+                placeholder={tr(libraryView === 'community'
+                  ? 'componentRepo:searchComponentNameOrId'
+                  : 'componentRepo:searchComponentNameIdOrSize')}
                 value={queryDraft}
               />
             </label>
@@ -352,7 +477,20 @@ export function ComponentRepoPage() {
               </span>
             ))}
           </form>
-          <div className="component-library-filters" role="group" aria-label={tr('componentRepo:filterByStatus')}>
+          {libraryView === 'starred' ? <label className="component-library-category-filter">
+            <span>{tr('componentRepo:categoryFilter')}</span>
+            <input
+              aria-label={tr('componentRepo:categoryFilter')}
+              maxLength={128}
+              onChange={(event) => {
+                setCategory(event.target.value);
+                setPage(1);
+              }}
+              placeholder={tr('componentRepo:allCategories')}
+              value={category}
+            />
+          </label> : null}
+          {libraryView === 'library' ? <div className="component-library-filters" role="group" aria-label={tr('componentRepo:filterByStatus')}>
             {([
               ['all', 'componentRepo:all'],
               ['draft', 'componentRepo:draft'],
@@ -370,7 +508,7 @@ export function ComponentRepoPage() {
                 {trDynamic(label)}
               </button>
             ))}
-          </div>
+          </div> : null}
           <button aria-label={tr('componentRepo:refreshComponentList')} className="component-library-refresh" onClick={refreshLibrary} type="button">
             <RefreshCw aria-hidden="true" className={state.status === 'loading' ? 'component-library-spin' : undefined} />
           </button>
@@ -385,7 +523,7 @@ export function ComponentRepoPage() {
             <span role="columnheader">{tr('componentRepo:component')}</span>
             <span role="columnheader">{tr('componentRepo:occupiedSize')}</span>
             <span role="columnheader">{tr('componentRepo:status')}</span>
-            <span role="columnheader">{tr('componentRepo:uploadedAt')}</span>
+            <span role="columnheader">{tr(libraryView === 'starred' ? 'componentRepo:starredAt' : 'componentRepo:uploadedAt')}</span>
             <span role="columnheader">{tr('componentRepo:actions')}</span>
           </div>
           {items.map((item) => (
@@ -401,15 +539,27 @@ export function ComponentRepoPage() {
               </div>
               <ComponentLogicalSize size={item.data.logicalSize} />
               <div role="cell"><StatusPill status={item.status} /></div>
-              <span className="component-library-date" role="cell">{formatDate(item.createdAt)}</span>
+              <span className="component-library-date" role="cell">{formatDate(libraryView === 'starred' && item.starredAt ? item.starredAt : item.createdAt)}</span>
               <div className="component-library-row-action" role="cell">
                 <div className="component-library-component-actions">
                   <Link to={routeFor('componentRepoDetail').replace(':componentId', encodeURIComponent(item.id))}>
                     {tr('componentRepo:details')}<ChevronRight aria-hidden="true" />
                   </Link>
-                  <button onClick={() => setMembershipComponent(item.data)} type="button">
+                  {!item.data.ownedByActor ? <button
+                    aria-pressed={item.data.starredByActor}
+                    disabled={starMutations.has(item.id)}
+                    onClick={() => void toggleStar(item.data)}
+                    title={tr(item.data.starredByActor ? 'componentRepo:unstarComponent' : 'componentRepo:starComponent')}
+                    type="button"
+                  >
+                    {starMutations.has(item.id) ? <LoaderCircle className="component-library-spin" /> : <Star aria-hidden="true" fill={item.data.starredByActor ? 'currentColor' : 'none'} />}
+                    {formatNumber(item.data.starCount)}
+                  </button> : <span className="component-library-star-count" title={tr('componentRepo:starCount')}>
+                    <Star aria-hidden="true" />{formatNumber(item.data.starCount)}
+                  </span>}
+                  {item.data.ownedByActor || item.data.starredByActor || (libraryView === 'library' && selectedGroup?.groupType === 'custom') ? <button onClick={() => setMembershipComponent(item.data)} type="button">
                     <Layers3 aria-hidden="true" />{tr('componentRepo:manageGroups')}
-                  </button>
+                  </button> : null}
                   <button aria-expanded={selectedComponent?.id === item.id} onClick={() => void toggleVersions(item.data)} type="button">
                     {tr('componentRepo:viewVersions')}<ChevronDown aria-hidden="true" />
                   </button>
@@ -440,9 +590,25 @@ export function ComponentRepoPage() {
         {state.status !== 'loading' && items.length === 0 ? (
           <div className="component-library-empty">
             <span><Search aria-hidden="true" /></span>
-            <strong>{tr(stats.total === 0 ? 'componentRepo:noComponentsUploaded' : 'componentRepo:noMatchingComponents')}</strong>
-            <p>{tr(stats.total === 0 ? 'componentRepo:uploadYourFirstComponentToStartBuildingYourLibrary' : 'componentRepo:tryChangingTheSearchTermOrStatusFilter')}</p>
-            {stats.total === 0 ? <button onClick={() => setIsUploadOpen(true)} type="button">{tr('componentRepo:uploadComponent')}</button> : null}
+            <strong>{tr(libraryView === 'starred'
+              ? queries.length > 0 || category.trim() !== ''
+                ? 'componentRepo:noMatchingComponents'
+                : state.relationshipTotal > 0
+                  ? 'componentRepo:starredComponentsUnavailable'
+                  : 'componentRepo:noStarredComponents'
+              : stats.total === 0
+                ? 'componentRepo:noComponentsUploaded'
+                : 'componentRepo:noMatchingComponents')}</strong>
+            <p>{tr(libraryView === 'starred'
+              ? queries.length > 0 || category.trim() !== ''
+                ? 'componentRepo:tryChangingStarFilters'
+                : state.relationshipTotal > 0
+                  ? 'componentRepo:starredComponentsUnavailableDescription'
+                  : 'componentRepo:browseComponentsToStar'
+              : stats.total === 0
+                ? 'componentRepo:uploadYourFirstComponentToStartBuildingYourLibrary'
+                : 'componentRepo:tryChangingTheSearchTermOrStatusFilter')}</p>
+            {libraryView === 'library' && stats.total === 0 ? <button onClick={() => setIsUploadOpen(true)} type="button">{tr('componentRepo:uploadComponent')}</button> : null}
           </div>
         ) : null}
         {state.totalPages > 1 ? (
@@ -921,11 +1087,16 @@ function GroupComponentMembershipDialog({
   React.useEffect(() => {
     Promise.all([
       listComponentGroupComponents(rootGroup.id),
+      listComponentStars({ page: 1, pageSize: 100, sort: 'starred_at_desc' }),
       listComponentGroupComponents(group.id),
     ])
-      .then(([managedComponents, groupComponents]) => {
+      .then(([ownedComponents, starredComponents, groupComponents]) => {
         const next = new Set(groupComponents.map((component) => component.id));
-        setComponents(managedComponents);
+        // 当前分组成员必须参与候选并可被移除，即使它已取消收藏；其余候选来自自有与当前收藏。
+        const managedById = new Map<string, ComponentResponse>();
+        [...ownedComponents, ...starredComponents.items, ...groupComponents]
+          .forEach((component) => managedById.set(component.id, component));
+        setComponents([...managedById.values()]);
         setInitialIds(next);
         setSelectedIds(next);
         setLoading(false);
@@ -1236,6 +1407,7 @@ function buildLibraryItems(components: ComponentResponse[]): LibraryItem[] {
     name: item.name,
     status: item.status,
     createdAt: item.createdAt,
+    starredAt: item.starredAt,
     data: item,
   }));
 }
@@ -1249,10 +1421,6 @@ function statusesForFilter(filter: LibraryFilter): string[] | null {
 
 function sumStatuses(counts: Record<string, number>, statuses: string[]): number {
   return statuses.reduce((total, status) => total + (counts[status] ?? 0), 0);
-}
-
-function sumStatusCounts(counts: Record<string, number>): number {
-  return Object.values(counts).reduce((total, count) => total + count, 0);
 }
 
 function isComponentFile(name: string): boolean { return /\.(io|ldr|mpd)$/i.test(name); }

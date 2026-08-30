@@ -1,6 +1,6 @@
 # 多语言领域字段分类
 
-> 更新日期：2026-08-23
+> 更新日期：2026-08-27
 > 适用里程碑：M4～M5
 
 | 实体 / 字段 | 分类 | 存储与展示规则 |
@@ -8,7 +8,7 @@
 | 状态、类型、ID、LDraw 编号、尺寸、算法 | 机器数据 | 保存稳定值，不翻译 |
 | `Component.name/description/tags`（`content_kind=user`） | 用户内容 | 原文保存并记录 `content_locale`，不自动翻译、不回退 |
 | `ComponentGroup.name`（`group_type=custom`） | 用户内容 | 按用户原文保存并记录 `content_locale`；根节点不保存名称，由前端语义键本地化 |
-| `ComponentGroup.id/owner_id/parent_group_id/group_type/sort_order`、分组关系与订阅关系 | 机器数据 | 保持稳定且不翻译 |
+| `ComponentGroup.id/owner_id/parent_group_id/group_type/sort_order`、分组关系与 Star 关系 | 机器数据 | `actor_id/component_id/starred_at/source`、`starredAt/starCount/relationshipTotal` 和 `sort=starred_at_desc` 保持稳定且不翻译；分类与尺寸筛选值按用户原文传输 |
 | `PixelArtProject.name` | 用户内容 | 原文保存并返回 `contentLocale` |
 | `ModelAsset.name/source_name` | 用户内容 | 原文保存并返回 `contentLocale` |
 | `Component`（`content_kind=official`） | 官方内容 | 源内容保存在主表，翻译保存在 `component_translations` |
@@ -19,6 +19,7 @@
 | 自动外部接口 ID、连接点类型、识别状态、识别规则版本 | 机器数据 | 由组件分析算法确定并随版本冻结，不提供用户创建或编辑，不翻译 |
 | 组件预览零件 `availability`、可计算数量和缺失几何/mesh 状态 | 机器数据 | API 返回稳定状态值；缺失零件不参与尺寸、连接识别或 GLB，界面状态标签通过语义键本地化 |
 | `ComponentVersion.preview_artifact_id/preview_status/preview_generator_version` 与 GLB 完整性字段 | 机器数据 | 使用版本 ID 直接定位派生 GLB；状态、生成器版本、artifact ID 和 SHA-256 不翻译。零件清单名称仍由独立 locale-aware API 选择 reviewed 翻译，不写入 GLB 定位数据 |
+| Component Version Diff 的版本/实例/Part ID、`change kind`、矩阵、颜色码、数量与算法版本 | 机器数据 | API 返回稳定值并由双栏 3D 查看器定位节点；字段值不翻译。页面标题、操作、变化类型图例和空/错误状态使用 typed semantic key 本地化 |
 | `Component/ComponentVersion.deleted_at/deleted_by`、版本发布/删除权限原因 | 机器数据 | 用于发布、逻辑删除、审计和权限判断，保持稳定且不翻译；操作界面中的组件名仍按用户或官方内容规则展示 |
 | `Component.ownedByActor` | 机器数据 / 当前请求授权投影 | Go API 根据已鉴权 actor 与数据库 owner 计算，只控制当前页面管理操作，不保存、不翻译，也不能替代 mutation 的服务端 owner 校验 |
 | `ComponentImport`、上传会话及其解析元数据 | 内部来源与机器数据 | 上传确认后冻结 `contentLocale/timezone`，API 以 `202` 结束写交互，并由持久任务在请求外执行 verify、解析/BOM 和 GLB 物化。`processing/ready/failed`、ID、状态、哈希与元数据键保持稳定且不翻译；界面处理状态使用 typed semantic key，失败使用 `code + params`。临时上传清理不得删除已成为不可变版本来源的 Artifact。 |

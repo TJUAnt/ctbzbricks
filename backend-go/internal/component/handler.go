@@ -24,8 +24,10 @@ func NewHandler(service *Service, logger *slog.Logger) *Handler {
 	return &Handler{service: service, logger: logger}
 }
 
+// Register 在已认证的 /api/v1 路由组注册 Component Repo 同步 API；耗时计算仍由持久任务承担。
 func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/components", h.listComponents)
+	group.GET("/component-stars", h.listStars)
 	group.POST("/components", h.createComponent)
 	group.GET("/components/:componentId", h.getComponent)
 	group.PATCH("/components/:componentId", h.updateComponent)
@@ -34,6 +36,7 @@ func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/components/:componentId/versions", h.listVersions)
 	group.POST("/components/:componentId/versions", h.createVersion)
 	group.GET("/component-versions/:versionId", h.getVersion)
+	group.GET("/component-versions/:versionId/diff", h.getVersionDiff)
 	group.PATCH("/component-versions/:versionId", h.updateVersion)
 	group.DELETE("/component-versions/:versionId", h.deleteVersion)
 	group.POST("/component-versions/:versionId/publish", h.publishVersion)
@@ -52,8 +55,26 @@ func (h *Handler) Register(group *gin.RouterGroup) {
 	group.DELETE("/component-groups/:groupId/components/:componentId", h.removeGroupMember)
 	group.GET("/components/:componentId/groups", h.listComponentGroupIDs)
 
-	group.PUT("/components/:componentId/subscription", h.subscribe)
-	group.DELETE("/components/:componentId/subscription", h.unsubscribe)
+	group.PUT("/components/:componentId/star", h.star)
+	group.DELETE("/components/:componentId/star", h.unstar)
+}
+
+// listStars 返回 actor 当前仍可访问的收藏；sort 目前只允许既定的收藏时间倒序契约。
+func (h *Handler) listStars(c *gin.Context) {
+	actor, _ := actorFromContext(c)
+	page, err := pageFromQuery(c)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	result, err := h.service.ListStars(c.Request.Context(), actor.ID, StarListRequest{
+		PageRequest: page,
+		Locale:      c.Query("locale"),
+		Query:       c.Query("query"),
+		Category:    c.Query("category"),
+		Sort:        c.Query("sort"),
+	})
+	h.writeJSON(c, http.StatusOK, result, err)
 }
 
 func (h *Handler) listComponents(c *gin.Context) {
@@ -132,6 +153,13 @@ func (h *Handler) createVersion(c *gin.Context) {
 func (h *Handler) getVersion(c *gin.Context) {
 	actor, _ := actorFromContext(c)
 	result, err := h.service.GetVersion(c.Request.Context(), actor.ID, c.Param("versionId"))
+	h.writeJSON(c, http.StatusOK, result, err)
+}
+
+// getVersionDiff 返回 owner 版本相对导入基准版本的有界、同步、只读结构差异。
+func (h *Handler) getVersionDiff(c *gin.Context) {
+	actor, _ := actorFromContext(c)
+	result, err := h.service.GetVersionDiff(c.Request.Context(), actor.ID, c.Param("versionId"))
 	h.writeJSON(c, http.StatusOK, result, err)
 }
 
@@ -269,15 +297,17 @@ func (h *Handler) removeGroupMember(c *gin.Context) {
 	h.writeNoContent(c, err)
 }
 
-func (h *Handler) subscribe(c *gin.Context) {
+// star 幂等创建收藏关系；真正的可见性和 own-component 约束由 Service 再次校验。
+func (h *Handler) star(c *gin.Context) {
 	actor, _ := actorFromContext(c)
-	result, err := h.service.Subscribe(c.Request.Context(), actor.ID, c.Param("componentId"))
+	result, err := h.service.Star(c.Request.Context(), actor.ID, c.Param("componentId"))
 	h.writeJSON(c, http.StatusOK, result, err)
 }
 
-func (h *Handler) unsubscribe(c *gin.Context) {
+// unstar 幂等删除 actor 自己的收藏，不改变 Component 或 Group membership。
+func (h *Handler) unstar(c *gin.Context) {
 	actor, _ := actorFromContext(c)
-	h.writeNoContent(c, h.service.Unsubscribe(c.Request.Context(), actor.ID, c.Param("componentId")))
+	h.writeNoContent(c, h.service.Unstar(c.Request.Context(), actor.ID, c.Param("componentId")))
 }
 
 func (h *Handler) writeJSON(c *gin.Context, status int, value any, err error) {

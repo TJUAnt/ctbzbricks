@@ -14,7 +14,17 @@ const (
 	maxExpandedSubmodelInstances = 1_000_000
 )
 
-var errInvalidScene = errors.New("invalid component scene")
+var (
+	errInvalidScene = errors.New("invalid component scene")
+	// ErrExpansionLimit 表示实例展开超过调用方声明的资源边界。
+	ErrExpansionLimit = errors.New("component scene expansion limit exceeded")
+)
+
+// ExpansionLimits 为同步调用方设置 Part 与子模型实例的硬上限，防止先分配完整场景再做事后校验。
+type ExpansionLimits struct {
+	MaxPartInstances     int
+	MaxSubmodelInstances int
+}
 
 // Position 表示 SceneSnapshot 中未经单位换算的 LDraw 坐标。
 type Position struct {
@@ -85,15 +95,34 @@ func IdentityTransform() Transform {
 // ExpandJSON 解析 SceneSnapshot document，并按显式 rootInstances 展开真实 Part 实例。
 // 旧快照没有 rootInstances 时，仅将 rootModelId 适配为一个单位变换入口；不会猜测未引用模型为 root。
 func ExpandJSON(raw json.RawMessage) (Expansion, error) {
+	return ExpandJSONWithLimits(raw, ExpansionLimits{
+		MaxPartInstances:     maxExpandedPartInstances,
+		MaxSubmodelInstances: maxExpandedSubmodelInstances,
+	})
+}
+
+// ExpandJSONWithLimits 解析 SceneSnapshot document，并在展开过程中执行硬上限，而不是展开后再截断。
+func ExpandJSONWithLimits(raw json.RawMessage, limits ExpansionLimits) (Expansion, error) {
 	var document Document
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return Expansion{}, errInvalidScene
 	}
-	return Expand(document)
+	return ExpandWithLimits(document, limits)
 }
 
 // Expand 按实例而不是模型定义展开场景。同一模型的重复引用必须重复计数，循环检测只作用于当前递归路径。
 func Expand(document Document) (Expansion, error) {
+	return ExpandWithLimits(document, ExpansionLimits{
+		MaxPartInstances:     maxExpandedPartInstances,
+		MaxSubmodelInstances: maxExpandedSubmodelInstances,
+	})
+}
+
+// ExpandWithLimits 按实例展开场景并强制调用方资源上限；零值或负值上限视为非法输入。
+func ExpandWithLimits(document Document, limits ExpansionLimits) (Expansion, error) {
+	if limits.MaxPartInstances <= 0 || limits.MaxSubmodelInstances <= 0 {
+		return Expansion{}, errInvalidScene
+	}
 	if len(document.Models) == 0 {
 		return Expansion{}, errInvalidScene
 	}
@@ -159,8 +188,8 @@ func Expand(document Document) (Expansion, error) {
 					return errInvalidScene
 				}
 				result.SubmodelInstanceCount++
-				if result.SubmodelInstanceCount > maxExpandedSubmodelInstances {
-					return errInvalidScene
+				if result.SubmodelInstanceCount > limits.MaxSubmodelInstances {
+					return ErrExpansionLimit
 				}
 				if err := expandModel(targetModelID, world, instancePath, depth+1); err != nil {
 					return err
@@ -175,8 +204,8 @@ func Expand(document Document) (Expansion, error) {
 					return errInvalidScene
 				}
 				worldInstanceIDs[worldInstanceID] = true
-				if len(result.Parts) >= maxExpandedPartInstances {
-					return errInvalidScene
+				if len(result.Parts) >= limits.MaxPartInstances {
+					return ErrExpansionLimit
 				}
 				colorCode := strings.TrimSpace(reference.ColorCode)
 				if colorCode == "" {
