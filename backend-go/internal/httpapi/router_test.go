@@ -59,6 +59,17 @@ func TestReadyHealthDoesNotExposeDatabaseError(t *testing.T) {
 	}
 }
 
+func TestMetricsRouteExposesBoundedComponentDomainEventCounter(t *testing.T) {
+	router := testRouter(t, stubPinger{})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(),
+		`component_domain_event_total{event_type="component.version.published.v1",result="committed"} 0`) {
+		t.Fatalf("metrics response = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestPanicReturnsInternalErrorWithoutPanicText(t *testing.T) {
 	router := testRouter(t, stubPinger{})
 	router.GET("/panic", func(*gin.Context) { panic("secret panic detail") })

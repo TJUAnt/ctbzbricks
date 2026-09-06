@@ -2,6 +2,24 @@
 
 资源版本只追加、不复用。前端资源内容由 SHA-256 锁定，服务端导出版本写入每个正式产物。
 
+## frontend-2026.09.04.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：1039
+- 内容哈希：`25ef31679402e7c0aaafae4d3d25607f9a96286bd864ec1ed9b086d999a6379d`
+- Component Repo 新增独立“我的订阅”页面，包含名称/ID 与分类筛选、Watch 级别、最近公开发布、订阅时间、游标续页、取消订阅和空状态文案。
+- `releases_only`、Component/Version ID、cursor、时间戳与分类查询仍是稳定机器或用户输入数据；页面只本地化系统标签，并保留服务端选择后的 Component 原文或 reviewed translation。
+
+## frontend-2026.08.31.1
+
+- 生产语言：`zh-CN`、`en-US`
+- namespace：10
+- 每种语言 key：1015
+- 内容哈希：`738bd687f4132a8334b2c35e6f126efd4a5576624f96e8c8e4594f63fda81e0f`
+- Component 详情新增与 Star 独立的 Watch/Unwatch 操作、订阅状态、成功反馈和结构化错误文案；MVP 级别说明固定为“新版本发布时通知”。
+- `releases_only`、Watch period ID、`started_seq/ended_seq`、关系时间、Component ID、不透明 cursor 和 API error code 保持稳定机器数据；Watch 不翻译用户 Component 内容，也不授予额外权限。
+
 ## frontend-2026.08.30.1
 
 - 生产语言：`zh-CN`、`en-US`

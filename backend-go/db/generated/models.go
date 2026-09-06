@@ -91,6 +91,24 @@ type ComponentRepoComponent struct {
 	UpdatedAt          pgtype.Timestamptz
 	DeletedAt          pgtype.Timestamptz
 	DeletedBy          pgtype.UUID
+	// 当前公开版本轴无关逻辑尺寸的最小值
+	CurrentLogicalSizeA pgtype.Numeric
+	// 当前公开版本轴无关逻辑尺寸的中间值
+	CurrentLogicalSizeB pgtype.Numeric
+	// 当前公开版本轴无关逻辑尺寸的最大值
+	CurrentLogicalSizeC pgtype.Numeric
+}
+
+type ComponentRepoComponentDomainEvent struct {
+	ID                 pgtype.UUID
+	EventType          string
+	ComponentID        pgtype.UUID
+	ComponentVersionID pgtype.UUID
+	ActorID            pgtype.UUID
+	EventSeq           int64
+	Payload            []byte
+	OccurredAt         pgtype.Timestamptz
+	CreatedAt          pgtype.Timestamptz
 }
 
 type ComponentRepoComponentGroup struct {
@@ -172,6 +190,18 @@ type ComponentRepoComponentVersion struct {
 	LogicalDepthStud        pgtype.Numeric
 	LogicalHeightPlate      pgtype.Numeric
 	PreviewBoundsComplete   *bool
+}
+
+type ComponentRepoComponentWatchPeriod struct {
+	ID          int64
+	ActorID     pgtype.UUID
+	ComponentID pgtype.UUID
+	WatchLevel  string
+	StartedSeq  int64
+	EndedSeq    *int64
+	WatchedAt   pgtype.Timestamptz
+	UnwatchedAt pgtype.Timestamptz
+	EndedReason *string
 }
 
 type ComponentRepoConnectorAnalysis struct {

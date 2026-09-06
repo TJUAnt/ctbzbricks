@@ -1420,19 +1420,48 @@ func (q *Queries) MarkVersionPreviewFailed(ctx context.Context, arg MarkVersionP
 }
 
 const markVersionPreviewReady = `-- name: MarkVersionPreviewReady :exec
-UPDATE component_repo.component_versions
-SET preview_artifact_id = $1, preview_status = 'ready',
-    preview_generator_version = $2,
-    preview_failure_code = NULL, preview_failure_params = NULL,
-    preview_bbox_min = $3,
-    preview_bbox_max = $4,
-    logical_width_stud = $5,
-    logical_depth_stud = $6,
-    logical_height_plate = $7,
-    preview_bounds_complete = $8
-WHERE id = $9
-  AND preview_task_id = $10
-  AND preview_generation = $11
+WITH updated_version AS (
+    UPDATE component_repo.component_versions version_record
+    SET preview_artifact_id = $1, preview_status = 'ready',
+        preview_generator_version = $2,
+        preview_failure_code = NULL, preview_failure_params = NULL,
+        preview_bbox_min = $3,
+        preview_bbox_max = $4,
+        logical_width_stud = $5,
+        logical_depth_stud = $6,
+        logical_height_plate = $7,
+        preview_bounds_complete = $8
+    WHERE version_record.id = $9
+      AND version_record.preview_task_id = $10
+      AND version_record.preview_generation = $11
+    RETURNING version_record.id, version_record.component_id,
+              version_record.logical_width_stud, version_record.logical_depth_stud,
+              version_record.logical_height_plate
+), projection_source AS (
+    SELECT version.id AS version_id, version.component_id,
+           COALESCE(version.logical_width_stud, component.logical_width_stud) AS size_x,
+           COALESCE(version.logical_depth_stud, component.logical_depth_stud) AS size_y,
+           COALESCE(version.logical_height_plate, component.logical_height_plate) AS size_z
+    FROM updated_version version
+    JOIN component_repo.components component
+      ON component.id = version.component_id
+     AND component.current_version_id = version.id
+), normalized AS (
+    SELECT version_id, component_id,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN LEAST(size_x, size_y, size_z) END AS size_a,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN size_x + size_y + size_z - LEAST(size_x, size_y, size_z) - GREATEST(size_x, size_y, size_z) END AS size_b,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN GREATEST(size_x, size_y, size_z) END AS size_c
+    FROM projection_source
+)
+UPDATE component_repo.components component
+SET current_logical_size_a = normalized.size_a,
+    current_logical_size_b = normalized.size_b,
+    current_logical_size_c = normalized.size_c
+FROM normalized
+WHERE component.id = normalized.component_id
 `
 
 type MarkVersionPreviewReadyParams struct {
@@ -1449,6 +1478,7 @@ type MarkVersionPreviewReadyParams struct {
 	PreviewGeneration     int32
 }
 
+// Preview 可能晚于 Version 发布完成；写入当前 Version Box 时必须在同一语句刷新 Component 尺寸投影。
 func (q *Queries) MarkVersionPreviewReady(ctx context.Context, arg MarkVersionPreviewReadyParams) error {
 	_, err := q.db.Exec(ctx, markVersionPreviewReady,
 		arg.ArtifactID,

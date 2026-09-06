@@ -1,5 +1,4 @@
 """FastAPI application entrypoint."""
-from concurrent.futures import ThreadPoolExecutor
 import logging
 from threading import Lock
 
@@ -12,7 +11,6 @@ from src.api.errors import ERROR_RESPONSES, install_error_handlers
 from src.api.routes.auth import create_auth_router
 from src.api.routes.dem_lego_design import create_dem_lego_design_router
 from src.api.routes.domain_content import create_domain_content_router
-from src.api.routes.component_repo import create_component_repo_router
 from src.api.routes.fitting_candidate_recall import (
     create_fitting_candidate_recall_router,
 )
@@ -233,14 +231,6 @@ def create_app() -> FastAPI:
     app.state.model_fitting_config = model_fitting_config
     app.state.fitting_candidate_recall_config = fitting_candidate_recall_config
     app.state.component_repo_config = component_repo_config
-    app.state.component_import_executor = ThreadPoolExecutor(
-        max_workers=int(
-            component_repo_config["imports"].get("background_worker_count", 2)
-        ),
-        thread_name_prefix="component-import",
-    )
-    app.state.component_import_futures = {}
-    app.state.component_import_futures_lock = Lock()
     app.state.lego_design_jobs = {}
     app.state.lego_design_jobs_lock = Lock()
     app.state.terrain_jobs = {}
@@ -272,10 +262,6 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": config["app"]["health_status"]}
 
-    @app.on_event("shutdown")
-    def shutdown_component_import_executor() -> None:
-        app.state.component_import_executor.shutdown(wait=False, cancel_futures=False)
-
     app.include_router(create_auth_router())
     app.include_router(create_part_search_router(config))
     app.include_router(create_terrain_router(config, terrain_config))
@@ -299,7 +285,6 @@ def create_app() -> FastAPI:
         )
     )
     app.include_router(create_model_fitting_router(model_fitting_config))
-    app.include_router(create_component_repo_router(component_repo_config))
     app.include_router(create_domain_content_router(component_repo_config))
     return app
 

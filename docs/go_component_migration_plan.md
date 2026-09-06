@@ -1,7 +1,7 @@
 # Component Repo Go 迁移路线与实施计划
 
-> 状态：G0～G7 completed；G8 in progress / Component Repo Go-only runtime established
-> 更新日期：2026-08-24
+> 状态：G0～G8 completed / Component Repo Go-only runtime established
+> 更新日期：2026-09-05
 > 原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)
 > 进度：[go_migration_progress.md](./go_migration_progress.md)
 > API 契约：[api.md](./api.md)
@@ -91,6 +91,7 @@ component_translations
 component_groups
 component_group_memberships
 component_stars
+component_watch_periods
 ```
 
 导入与资产：
@@ -155,7 +156,7 @@ GET    /api/v1/component-versions/:versionId/parts
 GET    /api/v1/component-versions/:versionId/source
 ```
 
-### 5.2 分组与 Star
+### 5.2 分组、Star 与 Watch
 
 ```text
 GET    /api/v1/component-groups
@@ -171,7 +172,15 @@ DELETE /api/v1/component-groups/:groupId/components/:componentId
 GET    /api/v1/component-stars
 PUT    /api/v1/components/:componentId/star
 DELETE /api/v1/components/:componentId/star
+
+GET    /api/v1/component-watches
+PUT    /api/v1/components/:componentId/watch
+DELETE /api/v1/components/:componentId/watch
 ```
+
+Component DELETE 是当前 Component 级归档/删除入口：业务状态与关系清理任务必须原子提交。HTTP Handler 不得按
+watcher/stargazer 数量同步遍历；列表依赖 Component 可见性立即隐藏条目，Go Worker 以有界 keyset 批次关闭
+Watch 历史区间并物理删除无审计含义的 Star 关系。
 
 ### 5.3 导入、候选和任务
 
@@ -437,7 +446,8 @@ Import DTO 已提供 `processingStatus` 与 `previewTaskId`；本计划不要求
 - Candidate 与详情页的 BOM 标注 geometry 为 `failed/missing` 的 Part；默认整体 GLB 可为有明确
   omissions 的 partial preview，Connector 数据仍由用户开关按需读取；
 - Nginx 只转发组件 API 到 Gin；
-- 删除 FastAPI Component Repo 路由、schema 和不再使用的服务；
+- [x] 删除 FastAPI Component Repo public router、专用 schema/DTO 和 Component translation public endpoint；
+  fitting/维护工具仍复用的纯算法与数据模块不属于公共运行时入口；
 - [x] 将 `component.relations.detect` 迁移为 Go Worker handler，以冻结 input hash、结构化结果和
   PostgreSQL 不变量做验收；
 - [x] 删除 Component Repo Python Worker 入口、adapter 与仅服务这些入口的代码；
@@ -460,10 +470,10 @@ Import DTO 已提供 `processingStatus` 与 `previewTaskId`；本计划不要求
 G0 -> G1 -> G2 -> G3 -> G4 -> G5 -> G6 -> G7 -> G8
 ```
 
-G0～G7 已完成，当前不再按早期“先实施 G1”的建议执行。G8 的现行顺序是：保持 `/api/v1` 与
-Go Worker Go-only 主链稳定，完成剩余真实浏览器/RLS 验收，删除仍挂载但前端已不依赖的 FastAPI
-Component Repo 公共 router，最后收口部署、指标和告警。GLB 视觉精度与压缩作为版本化生成器后续
-工作，不阻塞当前上传、BOM 和 partial preview 主链。
+G0～G8 已完成。Component Repo 的 `/api/v1`、Go Worker、真实 Auth/Storage RLS、双语言前端和 Python
+public router 退出均已通过发布门禁；恢复点已在隔离 PostgreSQL 17 实际恢复，并完成 Goose
+`18 -> 17 -> 18` 与故障注入回滚。后续工作进入 Star/Watch 自身路线，不再作为 G8 迁移尾项。
+GLB 视觉精度与压缩继续通过独立 generator version 演进，不恢复 Python runtime。
 
 ## 9. 验证矩阵
 
@@ -485,6 +495,5 @@ Component Repo 公共 router，最后收口部署、指标和告警。GLB 视觉
 
 1. 保持上传 `202 -> Import processing page -> Worker continuation -> ready` 主链稳定；
 2. 保持 BOM 完整、逐 Part geometry 状态和 partial GLB omissions 可诊断；
-3. 完成 G8 剩余真实授权/双语言/维护矩阵；
-4. 删除旧 FastAPI Component Repo 公共 router 和只服务旧接口的代码；
-5. 以独立 generator version 推进 GLB 视觉精度与压缩，不恢复 Python runtime。
+3. 按 Star/Watch 路线关闭各自未完成项，不重新打开 G8 Python 边界；
+4. 以独立 generator version 推进 GLB 视觉精度与压缩，不恢复 Python runtime。

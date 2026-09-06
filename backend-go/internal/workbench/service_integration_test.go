@@ -262,6 +262,15 @@ func TestG7WorkbenchContract(t *testing.T) {
 	if len(bboxMin) != 3 || len(bboxMax) != 3 || widthStud != 1.5 || depthStud != 0 || heightPlate != 1.25 || boundsComplete {
 		t.Fatalf("persisted preview bounds = min=%v max=%v size=%v/%v/%v complete=%v", bboxMin, bboxMax, widthStud, depthStud, heightPlate, boundsComplete)
 	}
+	var projectedSizeA, projectedSizeB, projectedSizeC float64
+	if err := pool.QueryRow(ctx, `
+		SELECT current_logical_size_a, current_logical_size_b, current_logical_size_c
+		FROM component_repo.components WHERE id=$1`, testUUID(t, "77000000-0000-0000-0000-000000000001")).Scan(
+		&projectedSizeA, &projectedSizeB, &projectedSizeC,
+	); err != nil || projectedSizeA != 0 || projectedSizeB != 1.25 || projectedSizeC != 1.5 {
+		t.Fatalf("late Preview normalized Component size = %v/%v/%v error=%v",
+			projectedSizeA, projectedSizeB, projectedSizeC, err)
+	}
 	componentWithSize, err := componentService.GetComponent(ctx, other, "77000000-0000-0000-0000-000000000001", "zh-CN")
 	if err != nil || componentWithSize.LogicalSize == nil || componentWithSize.LogicalSize.WidthStud != 1.5 ||
 		componentWithSize.LogicalSize.DepthStud != 0 || componentWithSize.LogicalSize.HeightPlate != 1.25 {

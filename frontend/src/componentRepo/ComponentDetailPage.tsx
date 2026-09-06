@@ -2,6 +2,7 @@ import React from 'react';
 import { localizeStructuredMessage } from '../api/client';
 import {
   AlertTriangle,
+  Bell,
   Boxes,
   Braces,
   Crosshair,
@@ -22,7 +23,7 @@ import {
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import appConfig from '../app/appConfig';
 import { useAuth } from '../auth/AuthContext';
-import { useAppTranslation, useDynamicTranslation, type TranslationKey } from '../i18n';
+import { resolvedLocale, useAppTranslation, useDynamicTranslation, type TranslationKey } from '../i18n';
 import { ComponentScene, type ComponentSceneConnector } from '../parts/PartViewerPage';
 import {
   deleteComponent,
@@ -39,7 +40,9 @@ import {
   publishVersion,
   starComponent,
   unstarComponent,
+  unwatchComponent,
   validateCandidate,
+  watchComponent,
   type ComponentConnectorAnalysisResponse,
   type ComponentConnectorResponse,
   type ComponentGroupTreeResponse,
@@ -132,6 +135,7 @@ const diffChangeLabelKeys: Record<ComponentVersionDiffChangeKind, TranslationKey
 export function ComponentDetailPage() {
   const tr = useAppTranslation();
   const trDynamic = useDynamicTranslation();
+  const contentLocale = resolvedLocale();
   const { isConfigured: isAuthConfigured, isLoading: isAuthLoading, user } = useAuth();
   const navigate = useNavigate();
   const params = useParams();
@@ -143,6 +147,7 @@ export function ComponentDetailPage() {
   const [publishing, setPublishing] = React.useState(false);
   const [validating, setValidating] = React.useState(false);
   const [starring, setStarring] = React.useState(false);
+  const [watchMutating, setWatchMutating] = React.useState(false);
   const [confirmingDeleteComponent, setConfirmingDeleteComponent] = React.useState(false);
   const [deletingComponent, setDeletingComponent] = React.useState(false);
   const [activeConnectorPartId, setActiveConnectorPartId] = React.useState<string | null>(null);
@@ -198,6 +203,7 @@ export function ComponentDetailPage() {
   }, [componentId]);
 
   React.useEffect(() => {
+    // 详情错误由 API 在请求时按 locale 翻译；语言切换后必须重取，避免跨 owner 404 等旧译文滞留。
     let active = true;
     const load = async () => {
       setState((current) => ({
@@ -332,7 +338,7 @@ export function ComponentDetailPage() {
     return () => {
       active = false;
     };
-  }, [componentId, refreshToken]);
+  }, [componentId, contentLocale, refreshToken]);
 
   const partSummaries = React.useMemo(
     () => (state.partDetails?.parts ?? []).map((part) => ({
@@ -413,6 +419,7 @@ export function ComponentDetailPage() {
       && componentOwnershipResolved
       && !componentOwnedByActor,
   );
+  const canWatchComponent = canStarComponent;
   // Version Diff 是 owner-only 只读能力；前端只并行读取两个已有 GLB，不触发 Preview 物化。
   const compareVersion = async (version: ComponentVersionResponse) => {
     const requestID = diffRequestRef.current + 1;
@@ -556,6 +563,45 @@ export function ComponentDetailPage() {
       setStarring(false);
     }
   };
+  // Watch 是独立偏好：乐观更新只改变 watch 投影，失败时重新读取服务端权威状态。
+  const toggleWatch = async () => {
+    if (!state.component || !canWatchComponent || watchMutating) return;
+    const componentID = state.component.id;
+    const wasWatching = Boolean(state.component.watch?.watching);
+    setWatchMutating(true);
+    setActionError(null);
+    setActionNotice(null);
+    setState((current) => current.component ? {
+      ...current,
+      component: {
+        ...current.component,
+        watch: wasWatching
+          ? { watching: false, level: null, watchedAt: null }
+          : { watching: true, level: 'releases_only', watchedAt: null },
+      },
+    } : current);
+    try {
+      if (wasWatching) {
+        await unwatchComponent(componentID);
+        setActionNotice(tr('componentRepo:componentUnwatched'));
+      } else {
+        const watch = await watchComponent(componentID);
+        setState((current) => current.component ? {
+          ...current,
+          component: {
+            ...current.component,
+            watch: { watching: true, level: watch.level, watchedAt: watch.watchedAt },
+          },
+        } : current);
+        setActionNotice(tr('componentRepo:componentWatched'));
+      }
+    } catch (watchError) {
+      setActionError(watchError instanceof Error ? watchError.message : tr('errors:common.unknown'));
+      setRefreshToken((current) => current + 1);
+    } finally {
+      setWatchMutating(false);
+    }
+  };
   const diffBaseVersion = diffView.diff?.baseVersionId
     ? state.versions.find((version) => version.id === diffView.diff?.baseVersionId) ?? null
     : null;
@@ -594,6 +640,22 @@ export function ComponentDetailPage() {
             <span className="component-detail-star-count" title={tr('componentRepo:starCount')}>
               <Star aria-hidden="true" />{state.component.starCount}
             </span>
+          ) : null}
+          {canWatchComponent && state.component ? (
+            <button
+              aria-label={tr(state.component.watch?.watching ? 'componentRepo:unwatchComponent' : 'componentRepo:watchComponent')}
+              aria-pressed={Boolean(state.component.watch?.watching)}
+              className="component-detail-star-button"
+              disabled={watchMutating}
+              onClick={() => void toggleWatch()}
+              title={tr(state.component.watch?.watching ? 'componentRepo:unwatchComponent' : 'componentRepo:watchComponent')}
+              type="button"
+            >
+              {watchMutating
+                ? <LoaderCircle aria-hidden="true" className="component-library-spin" />
+                : <Bell aria-hidden="true" fill={state.component.watch?.watching ? 'currentColor' : 'none'} />}
+              {tr(state.component.watch?.watching ? 'componentRepo:watching' : 'componentRepo:watch')}
+            </button>
           ) : null}
           {canDeleteComponent ? (
             <button

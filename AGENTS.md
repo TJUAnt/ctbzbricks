@@ -101,6 +101,18 @@ sufficient evidence that the design is ready.
   is a data-loss defect once the collection can exceed N.
 - Performance evidence is an implementation and release gate, not a post-implementation optimization task.
 
+### Current product capacity and interaction decisions
+
+- Current capacity planning uses at most 1,000 users, at most 1,000 Star relationships per actor, and at most
+  1,000 active Watch relationships per actor. Closed Watch periods are append-only history and are assessed
+  separately; the active-Watch estimate must not be misrepresented as a lifetime-history cap.
+- These figures are the approved planning envelope, not an implicit API rejection threshold. Do not introduce a
+  new hard limit or error contract unless the product explicitly approves that behavior. Reopen the scale review
+  before the envelope is raised or observed data approaches it.
+- Do not implement a performance remediation that materially changes an existing user interaction unless the
+  user explicitly approves that product change. Record the item as deferred, validate the retained interaction
+  against the approved capacity envelope, and keep an objective reopen condition.
+
 ## Mandatory i18n preflight
 
 BrickBuilder uses an approved end-to-end multilingual architecture. Before changing any UI, API, background task, validation result, persisted content, configuration label, or export, read:

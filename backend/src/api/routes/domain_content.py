@@ -4,8 +4,6 @@ from fastapi import APIRouter, Depends, Request
 
 from src.api.errors import domain_error_from_exception
 from src.api.schemas.domain_content import (
-    ComponentTranslationRequest,
-    ComponentTranslationResponse,
     PartTranslationResponse,
     TranslationContentRequest,
     TranslationMetricsResponse,
@@ -20,45 +18,12 @@ from src.auth.current_user import (
 from src.i18n.domain_content import translation_metrics
 from src.i18n.observability import record_i18n_event, runtime_i18n_metrics
 from src.services.domain_content_service import (
-    upsert_component_translation,
     upsert_part_translation,
 )
 
 
 def create_domain_content_router(config: dict) -> APIRouter:
     router = APIRouter()
-
-    @router.put(
-        config["routes"]["component_translation"],
-        response_model=ComponentTranslationResponse,
-    )
-    def put_component_translation(
-        component_id: str,
-        locale: str,
-        payload: ComponentTranslationRequest,
-        request: Request,
-        current_user: CurrentUser | None = Depends(optional_current_user),
-    ) -> dict:
-        require_component_repo_auth_if_configured(current_user)
-        actor = audit_identity(config, current_user)
-        try:
-            return upsert_component_translation(
-                request.app.state.db_engine,
-                component_id,
-                locale,
-                payload.name,
-                payload.description,
-                payload.tags,
-                payload.translationStatus,
-                actor,
-            )
-        except ValueError as error:
-            raise domain_error_from_exception(
-                error,
-                "component_repo.translation_update_failed",
-                params={"componentId": component_id, "locale": locale},
-                http_status=400,
-            ) from error
 
     @router.put(
         config["routes"]["part_translation"],

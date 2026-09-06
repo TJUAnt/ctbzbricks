@@ -18,6 +18,7 @@ func componentFromVisible(row db.GetVisibleComponentRow) Component {
 		CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID), Metadata: validJSON(row.Metadata),
 		LogicalSize:  logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
 		OwnedByActor: row.OwnedByActor, StarredByActor: row.StarredByActor, StarCount: row.StarCount,
+		Watch:              watchState(row.WatchingByActor, row.WatchLevel, row.WatchedAt),
 		TranslationMissing: row.TranslationMissing,
 		CreatedAt:          row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
@@ -32,6 +33,7 @@ func componentFromList(row db.ListVisibleComponentsRow) Component {
 		CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID), Metadata: validJSON(row.Metadata),
 		LogicalSize:  logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
 		OwnedByActor: row.OwnedByActor, StarredByActor: row.StarredByActor, StarCount: row.StarCount,
+		Watch:              watchState(row.WatchingByActor, row.WatchLevel, row.WatchedAt),
 		TranslationMissing: row.TranslationMissing,
 		CreatedAt:          row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
@@ -151,6 +153,10 @@ func nullableTime(value pgtype.Timestamptz) *time.Time {
 	}
 	result := value.Time
 	return &result
+}
+
+func watchState(watching bool, level *string, watchedAt pgtype.Timestamptz) *WatchState {
+	return &WatchState{Watching: watching, Level: level, WatchedAt: nullableTime(watchedAt)}
 }
 
 func optionalSelected(value string, present bool) *string {

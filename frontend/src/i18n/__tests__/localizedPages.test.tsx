@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { ComponentRepoPage } from '../../componentRepo/ComponentRepoPage';
+import { ComponentWatchListPage } from '../../componentRepo/ComponentWatchListPage';
 import { LegoDesignPage } from '../../legoDesign/LegoDesignPage';
 import { LegoTerrainBuilderPage } from '../../legoTerrain/LegoTerrainBuilderPage';
 import { PartSearchPage } from '../../parts/PartSearchPage';
@@ -21,6 +22,7 @@ const pages = [
   { component: <LegoTerrainBuilderPage />, english: 'Terrain to LEGO Heightmap', chinese: '地形转 LEGO 高度图' },
   { component: <LegoDesignPage />, english: 'LEGO Design', chinese: 'LEGO 设计图' },
   { component: <ComponentRepoPage />, english: 'Component Library', chinese: '组件仓库' },
+  { component: <ComponentWatchListPage />, english: 'My Subscriptions', chinese: '我的订阅' },
   { component: <PartSearchPage />, english: 'Part search', chinese: '零件搜索' },
   { component: <PartViewerPage />, english: '3D Part Viewer', chinese: '零件 3D 查看器' },
 ];

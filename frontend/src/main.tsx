@@ -31,6 +31,7 @@ import { ComponentImportHistoryPage } from './componentRepo/ComponentImportHisto
 import { ComponentImportStatusPage } from './componentRepo/ComponentImportStatusPage';
 import { ComponentRepoPage } from './componentRepo/ComponentRepoPage';
 import { ComponentDetailPage } from './componentRepo/ComponentDetailPage';
+import { ComponentWatchListPage } from './componentRepo/ComponentWatchListPage';
 import { LegoDesignPage } from './legoDesign/LegoDesignPage';
 import { LegoTerrainBuilderPage } from './legoTerrain/LegoTerrainBuilderPage';
 import { DirectModelImportPage } from './modelImport/DirectModelImportPage';
@@ -362,6 +363,10 @@ function WorkbenchRoutes({
       <Route
         element={<ComponentCandidateWorkbenchPage />}
         path={routePathFor(appConfig.pages.componentRepoCandidate as PageKey)}
+      />
+      <Route
+        element={<ComponentWatchListPage />}
+        path={routePathFor(appConfig.pages.componentRepoWatches as PageKey)}
       />
       <Route
         element={<ComponentDetailPage />}

@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/artifact"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/component"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/config"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/database"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/ingestion"
@@ -70,6 +71,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	defer logger.Info("Worker stopped", "workerId", workerID)
 	var maintenance worker.UploadMaintenance
 	handlers := map[string]task.Handler{}
+	// Component 关系清理不依赖对象存储；即使 Storage 被禁用，也必须消费删除事务原子创建的持久任务。
+	handlers[task.RelationshipCleanupType] = component.NewRelationshipCleanupTaskHandler(pool)
 	objectStore := storage.New(cfg.Storage)
 	if cfg.Storage.Provider != "disabled" {
 		artifactService := artifact.NewService(pool, objectStore, cfg.Storage).WithImportConfig(cfg.Import)

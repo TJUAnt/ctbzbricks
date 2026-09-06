@@ -24,6 +24,10 @@ func TestMigrationFilesystemContainsBaseline(t *testing.T) {
 		"00007_logical_task_jobs.sql",
 		"00008_part_preview.sql",
 		"00014_component_stars.sql",
+		"00015_component_watches.sql",
+		"00016_component_domain_events.sql",
+		"00017_component_relationship_lifecycle.sql",
+		"00018_component_current_logical_size.sql",
 	} {
 		if !slices.Contains(names, expected) {
 			t.Fatalf("migration %q is not embedded: %v", expected, names)

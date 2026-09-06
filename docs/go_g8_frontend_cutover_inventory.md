@@ -160,9 +160,28 @@ BOM、源文件下载、draft 删除、分组库查询/管理、Draft Version �
 - owner/cross-owner 404、Task owner 隔离和取消；
 - `zh-CN`、`en-US` 下错误、任务进度、状态和用户内容边界。
 
-浏览器或前端网络测试必须证明 Component Repo 流程只请求 `/api/v1`；随后才允许从 FastAPI
-application 删除 `create_component_repo_router` 注册和仅服务旧公共 API 的 schema/service。
-Parser 与 Relation Worker 均已迁移到 Go；原 Python relation Worker/adapter/launcher 已删除。
+2026-09-05 的真实浏览器网络记录已证明未登录 Component 列表与 Watch 页面只请求 `/api/v1`，并分别返回
+结构化 `auth.authentication_required`；失效 bearer 返回 `auth.session_invalid`。随后已从 FastAPI
+application 删除 `create_component_repo_router` 注册、Component Repo 专用 public router/DTO/API tests，
+并删除 Python Component translation public endpoint。防回归 contract test 禁止重新声明旧
+`/api/components*`、`/api/component-*` 路径。Parser 与 Relation Worker 均已迁移到 Go；原 Python
+relation Worker/adapter/launcher 已删除。
+
+同次浏览器验收发现列表与 Watch 页面在错误态切换语言时保留旧译文；两页现以规范化 locale 作为重新取数
+依赖，真实 Chrome 已确认 `请登录后继续。` / `Please sign in to continue.` 双向切换正确。未新增资源键，
+机器 code/params 不翻译。
+
+真实 Supabase 预检还发现 Alembic `20260816_0023` 的 Preview helper 引用了已由 Goose v14 删除的
+`component_repo.component_subscriptions`。`20260905_0025` 已在 PostgreSQL 17.6 项目执行：Preview SELECT
+现只接受 owner 或 `active` Component 的非 Draft Version，Star/Watch 不扩大权限；revision、policy 与函数
+定义复核通过。真实用户 JWT 登录后，硬刷新会话、owner Draft/Version/BOM/Preview、owner source 签名下载、
+Watch 空列表、跨 owner Component/Version 404 以及三类页面的 `zh-CN/en-US` 切换均已通过；API 日志只出现
+`/api/v1` Component Repo 路由。随后使用两个真实、短生命周期 Supabase Auth 身份和 disposable active
+Component 完成网络门禁：non-owner Preview 返回 `200` 且正文 SHA-256 一致；任意 key、过期 session key
+均被 Storage provider 拒绝，精确 pending key 控制请求成功。Supabase Storage 的外层状态为 `400`，正文
+`statusCode=403` / `Unauthorized` 才是 RLS 拒绝语义，因此文档不再把 provider 外层状态误写为 `403`。
+临时 Auth、Storage object、viewer session/关系和 active 测试 Component 均已清零；Component 来源链按现行
+删除/保留策略成为 archived 历史，没有关闭 trigger 或破坏 immutable 数据。
 
 ## 6. 推荐执行顺序
 
@@ -170,11 +189,12 @@ Parser 与 Relation Worker 均已迁移到 Go；原 Python relation Worker/adapt
 G8.1 盘点（已完成）
   -> G8.2 Go 合约收口（已完成）
   -> G8.3 前端 adapter + 页面异步流程切换（已完成）
-  -> G8.4 双语言浏览器/HTTP/PostgreSQL 验收（核心上传/BOM/partial GLB 已验证，其余矩阵继续）
-  -> G8.5 删除旧 FastAPI Component Repo 公共 API
+  -> G8.4 双语言浏览器/HTTP/PostgreSQL 验收（已完成）
+  -> G8.5 删除旧 FastAPI Component Repo 公共 API（已完成）
   -> G8.6 `component.relations.detect` Go Worker 迁移与 Python Worker 删除（已完成）
-  -> G8.7 Nginx、启动脚本和文档收口
+  -> G8.7 Nginx、启动脚本、恢复/指标和文档收口（已完成）
 ```
 
-当前剩余主项是完成 G8.4 尚未覆盖的授权/双语言/维护场景，并删除旧 FastAPI Component Repo 公共
-router。不得因为 legacy router 尚在仓库中，就让新前端或新功能重新依赖它。
+G8 已关闭。旧 Python public router 已删除；不得让新前端、新功能或其他 Python 业务域重新声明其路径或
+承接 Component Repo task。后续 Star/Watch/Preview 演进继续遵守 `/api/v1`、Go Worker 和现有 Storage
+授权边界。

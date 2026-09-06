@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   AlertCircle,
+  Bell,
   Boxes,
   CheckCircle2,
   ChevronDown,
@@ -158,12 +159,13 @@ export function ComponentRepoPage() {
   }, []);
 
   React.useEffect(() => {
+    // 重新请求可确保已进入错误态的结构化错误随当前语言重新渲染，避免把切换前的译文固化在页面中。
     void loadLibrary();
     return () => {
       groupRequestIdRef.current += 1;
       searchRequestIdRef.current += 1;
     };
-  }, [loadLibrary]);
+  }, [contentLocale, loadLibrary]);
 
   React.useEffect(() => {
     if (libraryView === 'library' && !selectedGroupId) return undefined;
@@ -362,6 +364,10 @@ export function ComponentRepoPage() {
             <Star aria-hidden="true" />
             {tr('componentRepo:myStarredComponents')}
           </button>
+          <Link className="component-library-tab" to={routeFor('componentRepoWatches')}>
+            <Bell aria-hidden="true" />
+            {tr('componentRepo:mySubscriptions')}
+          </Link>
           <button
             aria-pressed={libraryView === 'community'}
             className={`component-library-tab ${libraryView === 'community' ? 'component-library-tab-active' : ''}`}

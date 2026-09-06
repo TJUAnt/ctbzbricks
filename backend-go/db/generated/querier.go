@@ -11,6 +11,10 @@ import (
 )
 
 type Querier interface {
+	// Publish 使用同一 Component 的独占事务锁；必须在锁内分配 event_seq，固定 Watch period 的事件时点边界。
+	AcquireExclusiveComponentActivityLock(ctx context.Context, lockKey int64) error
+	// Watch/Unwatch 使用同一 Component 的共享事务锁；Publish 与 Component 删除使用独占锁冻结各自顺序边界。
+	AcquireSharedComponentActivityLock(ctx context.Context, lockKey int64) error
 	AddComponentGroupMembership(ctx context.Context, arg AddComponentGroupMembershipParams) (pgtype.UUID, error)
 	// 验证不再是发布门禁；Draft/Published 都保留最近一次报告，失败报告也必须可在详情页追溯。
 	AttachLatestValidationReport(ctx context.Context, arg AttachLatestValidationReportParams) error
@@ -18,6 +22,10 @@ type Querier interface {
 	CancelQueuedTask(ctx context.Context, arg CancelQueuedTaskParams) (ComponentRepoTask, error)
 	ClaimAvailableTask(ctx context.Context, arg ClaimAvailableTaskParams) (ComponentRepoTask, error)
 	ClaimOutboxEvent(ctx context.Context, arg ClaimOutboxEventParams) (ComponentRepoOutboxEvent, error)
+	// 用户主动 Unwatch 仅关闭仍处于 active 生命周期的 Component；结束序号与时间在同一条语句中只写一次。
+	CloseActiveComponentWatchPeriod(ctx context.Context, arg CloseActiveComponentWatchPeriodParams) (int64, error)
+	// Worker 按 Component active 索引和 actor 闭区间游标分批关闭周期；游标避免每批从索引起点重复跳过已关闭项。
+	CloseActiveComponentWatchesForLifecycleBatch(ctx context.Context, arg CloseActiveComponentWatchesForLifecycleBatchParams) ([]pgtype.UUID, error)
 	CompleteTask(ctx context.Context, arg CompleteTaskParams) (ComponentRepoTask, error)
 	CompleteUploadSession(ctx context.Context, arg CompleteUploadSessionParams) (ComponentRepoUploadSession, error)
 	ComponentGroupDepth(ctx context.Context, arg ComponentGroupDepthParams) (int32, error)
@@ -32,17 +40,23 @@ type Querier interface {
 	// 零件搜索只读取指定的不可变 Part Library；名称/编号关键词按“至少命中一个”组合，
 	// 尺寸片段也按候选集合组合，但关键词集合与尺寸集合之间必须同时满足。
 	CountSearchableParts(ctx context.Context, arg CountSearchablePartsParams) (int64, error)
-	// 收藏尺寸过滤与分组搜索共享“忽略 Box 轴方向”的升序归一化规则。
+	// 先物化 actor 的有界权威关系集，再逐候选探测 Component 与可公开 Version；避免空/稀疏 actor 先构建全库哈希。
 	CountStarredComponents(ctx context.Context, arg CountStarredComponentsParams) (CountStarredComponentsRow, error)
 	// 公开目录总数必须复用列表的可见性和过滤条件，避免分页元数据泄露不可见 Component。
 	CountVisibleComponents(ctx context.Context, arg CountVisibleComponentsParams) (int64, error)
+	// 没有 active period 时追加新周期；并发重复 PUT 命中部分唯一索引时不更新任何既有行，由 Service 重试读取。
+	CreateActiveComponentWatchPeriod(ctx context.Context, arg CreateActiveComponentWatchPeriodParams) (CreateActiveComponentWatchPeriodRow, error)
 	CreateAssemblyRelation(ctx context.Context, arg CreateAssemblyRelationParams) (CreateAssemblyRelationRow, error)
 	CreateCandidateForParse(ctx context.Context, arg CreateCandidateForParseParams) error
-	CreateComponent(ctx context.Context, arg CreateComponentParams) (ComponentRepoComponent, error)
+	CreateComponent(ctx context.Context, arg CreateComponentParams) (CreateComponentRow, error)
 	CreateComponentGroup(ctx context.Context, arg CreateComponentGroupParams) (ComponentRepoComponentGroup, error)
 	CreateComponentImport(ctx context.Context, arg CreateComponentImportParams) (ComponentRepoImport, error)
+	// Component 删除事务只分配一次公共边界并把它冻结进持久任务；回滚产生的 sequence 空洞没有业务含义。
+	CreateComponentRelationshipEndBoundary(ctx context.Context) (CreateComponentRelationshipEndBoundaryRow, error)
 	CreateComponentStar(ctx context.Context, arg CreateComponentStarParams) (ComponentRepoComponentStar, error)
 	CreateComponentVersion(ctx context.Context, arg CreateComponentVersionParams) (ComponentRepoComponentVersion, error)
+	// Version 首次发布和唯一事件同事务提交；payload v1 保持空对象，避免复制用户文案或最终译文。
+	CreateComponentVersionPublishedEvent(ctx context.Context, arg CreateComponentVersionPublishedEventParams) (int64, error)
 	CreateDerivedExchangeArtifact(ctx context.Context, arg CreateDerivedExchangeArtifactParams) error
 	CreateImportComponentForParse(ctx context.Context, arg CreateImportComponentForParseParams) error
 	CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) (int64, error)
@@ -57,6 +71,8 @@ type Querier interface {
 	CreateValidationReport(ctx context.Context, arg CreateValidationReportParams) (CreateValidationReportRow, error)
 	DatabasePing(ctx context.Context) (int64, error)
 	DeleteComponentStar(ctx context.Context, arg DeleteComponentStarParams) (pgtype.UUID, error)
+	// Star 是当前收藏状态而不是审计账本；Worker 按 Component 索引和 actor 游标分批物理删除，重试天然幂等。
+	DeleteComponentStarsForLifecycleBatch(ctx context.Context, arg DeleteComponentStarsForLifecycleBatchParams) ([]pgtype.UUID, error)
 	DeleteConfirmedConnectorInterfaces(ctx context.Context, arg DeleteConfirmedConnectorInterfacesParams) error
 	DeleteOwnedComponentGroup(ctx context.Context, arg DeleteOwnedComponentGroupParams) (pgtype.UUID, error)
 	DeprecateOtherPublishedVersions(ctx context.Context, arg DeprecateOtherPublishedVersionsParams) error
@@ -73,6 +89,8 @@ type Querier interface {
 	GetAssemblyRelationBySource(ctx context.Context, relationCandidateID pgtype.UUID) (GetAssemblyRelationBySourceRow, error)
 	// 收藏资格检查只读取授权所需的最小投影；已有关系一并返回，以便幂等请求跳过写入和聚合计数。
 	GetComponentStarTarget(ctx context.Context, arg GetComponentStarTargetParams) (GetComponentStarTargetRow, error)
+	// Watch 资格检查只读取目标可用性与当前 actor 的关系；不加载 Component 详情、翻译或聚合。
+	GetComponentWatchTarget(ctx context.Context, arg GetComponentWatchTargetParams) (GetComponentWatchTargetRow, error)
 	GetDraftVersionLabelForBase(ctx context.Context, arg GetDraftVersionLabelForBaseParams) (string, error)
 	GetExistingCandidateVersionForImport(ctx context.Context, arg GetExistingCandidateVersionForImportParams) (GetExistingCandidateVersionForImportRow, error)
 	GetImportParseInput(ctx context.Context, arg GetImportParseInputParams) (GetImportParseInputRow, error)
@@ -106,6 +124,9 @@ type Querier interface {
 	GetVisibleVersionPreview(ctx context.Context, arg GetVisibleVersionPreviewParams) (GetVisibleVersionPreviewRow, error)
 	GetVisibleVersionSourceArtifact(ctx context.Context, arg GetVisibleVersionSourceArtifactParams) (ComponentRepoArtifact, error)
 	HeartbeatTask(ctx context.Context, arg HeartbeatTaskParams) (pgtype.Timestamptz, error)
+	// actor 关系索引先限定有界候选；筛选后固定一页，再读取 Component 展示和当前发布版本。
+	// 搜索翻译仅在 search_query 非空时探测，普通列表不会在分页前逐行读取翻译。
+	ListActiveComponentWatches(ctx context.Context, arg ListActiveComponentWatchesParams) ([]ListActiveComponentWatchesRow, error)
 	ListComponentGroupDescendantIDs(ctx context.Context, arg ListComponentGroupDescendantIDsParams) ([]pgtype.UUID, error)
 	ListComponentGroupMembers(ctx context.Context, arg ListComponentGroupMembersParams) ([]ListComponentGroupMembersRow, error)
 	ListExpiredUploadSessions(ctx context.Context, arg ListExpiredUploadSessionsParams) ([]ComponentRepoUploadSession, error)
@@ -122,7 +143,7 @@ type Querier interface {
 	ListPreparedPartPreviewPrebuildCandidates(ctx context.Context, arg ListPreparedPartPreviewPrebuildCandidatesParams) ([]ListPreparedPartPreviewPrebuildCandidatesRow, error)
 	ListPreviewBoundsBackfillCandidates(ctx context.Context, arg ListPreviewBoundsBackfillCandidatesParams) ([]ListPreviewBoundsBackfillCandidatesRow, error)
 	ListReadyPartGeometryForPreview(ctx context.Context, arg ListReadyPartGeometryForPreviewParams) ([]ListReadyPartGeometryForPreviewRow, error)
-	// 收藏列表只投影仍公开可见的 Component；关系本身保留，以便未来重新激活后恢复个人收藏。
+	// 收藏列表只投影仍公开可见的 Component；归档/删除提交后立即隐藏，v17 Worker 最终物理删除关系且不恢复。
 	ListStarredComponents(ctx context.Context, arg ListStarredComponentsParams) ([]ListStarredComponentsRow, error)
 	ListUploadSessionFiles(ctx context.Context, sessionID pgtype.UUID) ([]ComponentRepoUploadSessionFile, error)
 	ListVisibleComponentVersions(ctx context.Context, arg ListVisibleComponentVersionsParams) ([]ComponentRepoComponentVersion, error)
@@ -147,6 +168,7 @@ type Querier interface {
 	MarkUploadSessionFileUploaded(ctx context.Context, arg MarkUploadSessionFileUploadedParams) (ComponentRepoUploadSessionFile, error)
 	MarkUploadSessionFileVerified(ctx context.Context, artifactID pgtype.UUID) error
 	MarkVersionPreviewFailed(ctx context.Context, arg MarkVersionPreviewFailedParams) error
+	// Preview 可能晚于 Version 发布完成；写入当前 Version Box 时必须在同一语句刷新 Component 尺寸投影。
 	MarkVersionPreviewReady(ctx context.Context, arg MarkVersionPreviewReadyParams) error
 	MarkVersionPreviewRunning(ctx context.Context, arg MarkVersionPreviewRunningParams) error
 	MoveOwnedComponentGroup(ctx context.Context, arg MoveOwnedComponentGroupParams) (ComponentRepoComponentGroup, error)
@@ -165,6 +187,7 @@ type Querier interface {
 	// 当前 generator 的 ready Artifact 作为可选只读投影返回，Search 不创建任务，也不读取对象正文。
 	SearchParts(ctx context.Context, arg SearchPartsParams) ([]SearchPartsRow, error)
 	SetCandidateRelationDetectionTask(ctx context.Context, arg SetCandidateRelationDetectionTaskParams) error
+	// 发布事务切换 current Version 时同步维护规范化尺寸，避免 Star 筛选读取 Version 后逐行计算。
 	SetComponentCurrentVersion(ctx context.Context, arg SetComponentCurrentVersionParams) error
 	SetPartPreviewTask(ctx context.Context, arg SetPartPreviewTaskParams) error
 	SetVersionPreviewTask(ctx context.Context, arg SetVersionPreviewTaskParams) error
@@ -172,7 +195,7 @@ type Querier interface {
 	SoftDeleteOwnedDraftVersion(ctx context.Context, arg SoftDeleteOwnedDraftVersionParams) (pgtype.UUID, error)
 	TransitionOwnedComponentVersion(ctx context.Context, arg TransitionOwnedComponentVersionParams) (pgtype.UUID, error)
 	UpdateCandidateAndDraftInterfaceSignature(ctx context.Context, arg UpdateCandidateAndDraftInterfaceSignatureParams) error
-	UpdateOwnedComponent(ctx context.Context, arg UpdateOwnedComponentParams) (ComponentRepoComponent, error)
+	UpdateOwnedComponent(ctx context.Context, arg UpdateOwnedComponentParams) (UpdateOwnedComponentRow, error)
 	UpdateOwnedComponentGroup(ctx context.Context, arg UpdateOwnedComponentGroupParams) (ComponentRepoComponentGroup, error)
 	UpdateOwnedDraftComponentVersion(ctx context.Context, arg UpdateOwnedDraftComponentVersionParams) (ComponentRepoComponentVersion, error)
 	UpdateTaskProgress(ctx context.Context, arg UpdateTaskProgressParams) (ComponentRepoTask, error)

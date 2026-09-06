@@ -4,4 +4,8 @@ Goose exclusively owns every object in the PostgreSQL `component_repo` schema. A
 
 Migration files are also the schema input for sqlc. Do not maintain a second scaffold schema, edit generated sqlc files, or run migrations implicitly from API/Worker startup.
 
+Current repository schema head is v18 (`component_current_logical_size`; Watch preference history begins in v15,
+publish events in v16, and relationship lifecycle cleanup in v17). A successful isolated migration does not imply
+that a real Supabase database has been upgraded; verify and record the target database Goose version separately.
+
 `reset` and the Down section of the baseline drop the complete `component_repo` schema. Run them only after confirming the exact development or temporary database target.

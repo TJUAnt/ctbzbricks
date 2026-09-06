@@ -49,7 +49,12 @@ The API exposes:
 ```text
 GET /health/live
 GET /health/ready
+GET /metrics
 ```
+
+`/metrics` 输出 Prometheus 文本格式的低基数机器指标，包括发布事件结果与固定 action/result 的 Watch mutation
+计数，不要求业务 Bearer token；生产反向代理或网络策略必须
+只允许监控系统访问。指标不包含 actor、Component ID、用户内容、Storage 定位符或凭据。
 
 The authenticated Component Repo API under `/api/v1` currently exposes:
 
@@ -104,6 +109,8 @@ go run ./cmd/worker
 The Go Worker claims `component.import.parse` after its Artifact verification dependencies have succeeded, reads verified source objects with the server-only Storage credential, and commits SceneSnapshot, BOM, structured parse issues, Candidate, and draft ComponentVersion before the shared task runner marks the task succeeded. Snapshot schema `component-repo-v2` stores explicit ordered `rootInstances`; the shared Go scene expander computes BOM, summary, validation, relations, and Component GLB from actual root/submodel instances rather than model definitions. Studio `.io` imports materialize a verified derived LDraw Artifact with explicit `derived_from_artifact_id` lineage. Parser version, snapshot schema, part-library version, locale, and timezone are frozen when upload completion creates the Import. The Worker stores stable codes/params only; it does not store translated messages, raw exception text, SQL, stack traces, or service credentials in public task/import fields.
 
 `WORKER_TASK_TYPES` can restrict a maintenance Worker to a comma-separated capability list. A restricted Worker only claims those durable task types and does not run generic upload maintenance; this is used by the Part prebuild script/runtime so queued Import tasks remain untouched. The provided prebuild launcher also uses one PostgreSQL session and a five-minute lease because small Supabase session pools and remote batch preparation must not cause lease churn.
+
+Component soft deletion atomically enqueues `component.relationships.cleanup`. The Component becomes invisible immediately; a Go Worker then closes active Watch periods with the transaction-frozen lifecycle boundary and physically deletes Star rows in 5,000-row actor-keyset batches. This task does not require object storage and is registered even when `STORAGE_PROVIDER=disabled`.
 
 Relation detection runs in the independent Go Worker together with validation and preview materialization. It reads connector definitions from the Candidate's frozen Part Library version, verifies the connector source hash and parser version included in the task input hash, and atomically materializes relation candidates, connector analysis, and external interfaces.
 

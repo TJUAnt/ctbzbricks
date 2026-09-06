@@ -11,9 +11,15 @@ import (
 	"sync"
 	"testing"
 
+	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentactivity"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentwatch"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/observability"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/scene"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,7 +38,8 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	defer pool.Close()
 	resetComponentRepo(t, pool)
 
-	service := NewService(pool)
+	metrics := observability.NewRegistry()
+	service := NewService(pool).WithMetrics(metrics)
 	actorA := mustUUID(t, "20000000-0000-0000-0000-000000000001")
 	actorB := mustUUID(t, "20000000-0000-0000-0000-000000000002")
 
@@ -134,9 +141,79 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	if _, err := service.Star(ctx, actorB, created.ID); errorCode(err) != "component_repo.component_not_found" {
 		t.Fatalf("draft-only component star code = %q, error = %v", errorCode(err), err)
 	}
-	published, err := service.PublishVersion(ctx, actorA, version.ID)
-	if err != nil || published.Status != "published" || published.PublishedAt == nil {
-		t.Fatalf("publish version: %+v, %v", published, err)
+	testPublishedEventRollback(t, service.pool, actorA, mustUUID(t, created.ID), mustUUID(t, version.ID))
+	type publishResult struct {
+		version ComponentVersion
+		err     error
+	}
+	publishResults := make(chan publishResult, 2)
+	publishStart := make(chan struct{})
+	for range 2 {
+		go func() {
+			<-publishStart
+			published, publishErr := service.PublishVersion(ctx, actorA, version.ID)
+			publishResults <- publishResult{version: published, err: publishErr}
+		}()
+	}
+	close(publishStart)
+	var published ComponentVersion
+	publishSuccesses, publishConflicts := 0, 0
+	for range 2 {
+		result := <-publishResults
+		switch {
+		case result.err == nil:
+			publishSuccesses++
+			published = result.version
+		case errorCode(result.err) == "request.conflict":
+			publishConflicts++
+		default:
+			t.Fatalf("concurrent publish error: %v", result.err)
+		}
+	}
+	if publishSuccesses != 1 || publishConflicts != 1 || published.Status != "published" || published.PublishedAt == nil {
+		t.Fatalf("concurrent publish results: successes=%d conflicts=%d version=%+v", publishSuccesses, publishConflicts, published)
+	}
+	if committed, _ := metrics.ComponentDomainEventCounts(); committed != 1 {
+		t.Fatalf("committed domain event metric = %d, want 1", committed)
+	}
+	var projectedSizeA, projectedSizeB, projectedSizeC float64
+	if err := pool.QueryRow(ctx, `
+		SELECT current_logical_size_a, current_logical_size_b, current_logical_size_c
+		FROM component_repo.components WHERE id=$1`, mustUUID(t, created.ID)).Scan(
+		&projectedSizeA, &projectedSizeB, &projectedSizeC,
+	); err != nil || projectedSizeA != 1 || projectedSizeB != 2 || projectedSizeC != 3 {
+		t.Fatalf("published Component normalized size projection = %v/%v/%v, error=%v",
+			projectedSizeA, projectedSizeB, projectedSizeC, err)
+	}
+	var eventType string
+	var eventComponentID, eventVersionID, eventActorID pgtype.UUID
+	var eventSeq int64
+	var eventPayload []byte
+	if err := pool.QueryRow(ctx, `
+		SELECT event_type, component_id, component_version_id, actor_id, event_seq, payload
+		FROM component_repo.component_domain_events
+		WHERE component_version_id = $1`, mustUUID(t, version.ID)).Scan(
+		&eventType, &eventComponentID, &eventVersionID, &eventActorID, &eventSeq, &eventPayload,
+	); err != nil {
+		t.Fatalf("read version published event: %v", err)
+	}
+	if eventType != "component.version.published.v1" || !uuidutil.Equal(eventComponentID, mustUUID(t, created.ID)) ||
+		!uuidutil.Equal(eventVersionID, mustUUID(t, version.ID)) || !uuidutil.Equal(eventActorID, actorA) ||
+		eventSeq <= 0 || string(eventPayload) != "{}" {
+		t.Fatalf("unexpected version published event: type=%q component=%s version=%s actor=%s seq=%d payload=%s",
+			eventType, uuidutil.String(eventComponentID), uuidutil.String(eventVersionID), uuidutil.String(eventActorID), eventSeq, eventPayload)
+	}
+	if _, err := service.PublishVersion(ctx, actorA, version.ID); errorCode(err) != "request.conflict" {
+		t.Fatalf("repeated publish code = %q, error = %v", errorCode(err), err)
+	}
+	if committed, _ := metrics.ComponentDomainEventCounts(); committed != 1 {
+		t.Fatalf("repeated publish changed committed metric to %d", committed)
+	}
+	var eventCount int64
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM component_repo.component_domain_events
+		WHERE component_version_id = $1`, mustUUID(t, version.ID)).Scan(&eventCount); err != nil || eventCount != 1 {
+		t.Fatalf("repeated publish event count = %d, error = %v", eventCount, err)
 	}
 	visible, err := service.GetComponent(ctx, actorB, created.ID, "en-US")
 	if err != nil || visible.Status != "active" || visible.CurrentVersionID == nil || *visible.CurrentVersionID != version.ID || visible.OwnedByActor {
@@ -178,11 +255,87 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	}
 
 	testOfficialTranslationSelection(t, service, pool, actorA)
-	testGroupsMembershipsAndStars(t, service, actorA, actorB, created.ID)
+	testGroupsMembershipsAndStars(t, service, actorA, actorB, created.ID, headVersion.ID)
 	testStablePagination(t, service, actorA)
+
+	// Component DELETE 是软删除生命周期终点：Star 直接移除，active Watch 使用一个共同边界关闭并保留历史。
+	actorC := mustUUID(t, "20000000-0000-0000-0000-000000000003")
+	watchService := componentwatch.NewService(pool)
+	for _, watcher := range []pgtype.UUID{actorB, actorC} {
+		if _, err := service.Star(ctx, watcher, created.ID); err != nil {
+			t.Fatalf("seed lifecycle Star for %s: %v", uuidutil.String(watcher), err)
+		}
+		if _, err := watchService.Watch(ctx, watcher, created.ID, componentwatch.ReleasesOnlyLevel); err != nil {
+			t.Fatalf("seed lifecycle Watch for %s: %v", uuidutil.String(watcher), err)
+		}
+	}
 
 	if err := service.DeleteComponent(ctx, actorA, created.ID); err != nil {
 		t.Fatalf("owner should be able to delete published component: %v", err)
+	}
+	// 关系物理清理由同事务创建的持久任务完成；在 Worker 执行前，两个列表已因 Component 不可见而移除条目。
+	pendingStars, err := service.ListStars(ctx, actorB, StarListRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US",
+	})
+	if err != nil || len(pendingStars.Items) != 0 {
+		t.Fatalf("deleted Component remained visible while cleanup pending: %+v, %v", pendingStars, err)
+	}
+	pendingWatches, err := watchService.List(ctx, actorC, componentwatch.ListRequest{Locale: "en-US", Limit: 20})
+	if err != nil || len(pendingWatches.Items) != 0 {
+		t.Fatalf("deleted Component remained in Watch list while cleanup pending: %+v, %v", pendingWatches, err)
+	}
+	var cleanupTaskID pgtype.UUID
+	var cleanupPayload []byte
+	if err := pool.QueryRow(ctx, `
+		SELECT id, payload
+		FROM component_repo.tasks
+		WHERE task_type=$1 AND owner_id=$2`, task.RelationshipCleanupType, actorA).Scan(
+		&cleanupTaskID, &cleanupPayload,
+	); err != nil {
+		t.Fatalf("read relationship cleanup task: %v", err)
+	}
+	cleanupResult, err := NewRelationshipCleanupTaskHandler(pool).Handle(ctx, task.ClaimedTask{
+		ID: cleanupTaskID, OwnerID: actorA, TaskType: task.RelationshipCleanupType, Payload: cleanupPayload,
+	})
+	if err != nil || len(cleanupResult.Payload) == 0 {
+		t.Fatalf("run relationship cleanup task: result=%s error=%v", cleanupResult.Payload, err)
+	}
+	// Worker lease 超时后可能重放同一任务；第二次执行必须是成功的空操作，且不能改写 Watch 历史边界。
+	repeatedCleanup, err := NewRelationshipCleanupTaskHandler(pool).Handle(ctx, task.ClaimedTask{
+		ID: cleanupTaskID, OwnerID: actorA, TaskType: task.RelationshipCleanupType, Payload: cleanupPayload,
+	})
+	if err != nil || string(repeatedCleanup.Payload) != `{"closedWatches":0,"componentId":"`+created.ID+`","deletedStars":0}` {
+		t.Fatalf("repeat relationship cleanup task: result=%s error=%v", repeatedCleanup.Payload, err)
+	}
+	var remainingStars, activeWatches, lifecycleClosed, lifecycleBoundaries int64
+	var lifecycleStart, lifecycleEnd int64
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM component_repo.component_stars star WHERE star.component_id=$1),
+			count(*) FILTER (WHERE watch.ended_seq IS NULL),
+			count(*) FILTER (WHERE watch.ended_reason='component_deleted'),
+			count(DISTINCT watch.ended_seq) FILTER (WHERE watch.ended_reason='component_deleted'),
+			max(watch.started_seq) FILTER (WHERE watch.ended_reason='component_deleted'),
+			min(watch.ended_seq) FILTER (WHERE watch.ended_reason='component_deleted')
+		FROM component_repo.component_watch_periods watch
+		WHERE watch.component_id=$1`, mustUUID(t, created.ID)).Scan(
+		&remainingStars, &activeWatches, &lifecycleClosed, &lifecycleBoundaries, &lifecycleStart, &lifecycleEnd,
+	); err != nil {
+		t.Fatalf("read deleted Component relationships: %v", err)
+	}
+	if remainingStars != 0 || activeWatches != 0 || lifecycleClosed != 2 || lifecycleBoundaries != 1 || lifecycleEnd <= lifecycleStart {
+		t.Fatalf("deleted Component relationship cleanup: stars=%d active=%d closed=%d boundaries=%d start=%d end=%d",
+			remainingStars, activeWatches, lifecycleClosed, lifecycleBoundaries, lifecycleStart, lifecycleEnd)
+	}
+	deletedStars, err := service.ListStars(ctx, actorB, StarListRequest{
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US",
+	})
+	if err != nil || deletedStars.RelationshipTotal != 0 || len(deletedStars.Items) != 0 {
+		t.Fatalf("deleted Component remained in Star list: %+v, %v", deletedStars, err)
+	}
+	deletedWatches, err := watchService.List(ctx, actorC, componentwatch.ListRequest{Locale: "en-US", Limit: 20})
+	if err != nil || len(deletedWatches.Items) != 0 {
+		t.Fatalf("deleted Component remained in Watch list: %+v, %v", deletedWatches, err)
 	}
 	if _, err := service.GetComponent(ctx, actorA, created.ID, "zh-CN"); errorCode(err) != "component_repo.component_not_found" {
 		t.Fatalf("deleted component owner read code = %q, error = %v", errorCode(err), err)
@@ -231,7 +384,7 @@ func testOfficialTranslationSelection(t *testing.T, service *Service, pool *pgxp
 	}
 }
 
-func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actorB pgtype.UUID, componentID string) {
+func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actorB pgtype.UUID, componentID, publishVersionID string) {
 	t.Helper()
 	ctx := context.Background()
 	groups, err := service.ListGroups(ctx, actorA)
@@ -400,6 +553,149 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 	if err != nil || !starredComponent.StarredByActor || starredComponent.StarCount != 1 {
 		t.Fatalf("starred component projection: %+v, %v", starredComponent, err)
 	}
+	watchMetrics := observability.NewRegistry()
+	watchService := componentwatch.NewService(service.pool).WithMetrics(watchMetrics)
+	testComponentActivityLockProtocol(t, service.pool, mustUUID(t, componentID))
+	if _, err := watchService.Watch(ctx, actorA, componentID, componentwatch.ReleasesOnlyLevel); errorCode(err) != "component_repo.watch_own_component_forbidden" {
+		t.Fatalf("own watch code = %q, error = %v", errorCode(err), err)
+	}
+	watch, err := watchService.Watch(ctx, actorB, componentID, componentwatch.ReleasesOnlyLevel)
+	if err != nil || !watch.Watching || watch.WatchedAt.IsZero() {
+		t.Fatalf("watch active component: %+v, %v", watch, err)
+	}
+	repeatedWatch, err := watchService.Watch(ctx, actorB, componentID, componentwatch.ReleasesOnlyLevel)
+	if err != nil || !repeatedWatch.WatchedAt.Equal(watch.WatchedAt) {
+		t.Fatalf("repeated watch must preserve original timestamp: %+v, %v", repeatedWatch, err)
+	}
+	var firstPeriodID, firstStartedSeq int64
+	if err := service.pool.QueryRow(ctx, `
+		SELECT id, started_seq
+		FROM component_repo.component_watch_periods
+		WHERE actor_id=$1 AND component_id=$2 AND ended_seq IS NULL`, actorB, mustUUID(t, componentID)).Scan(
+		&firstPeriodID, &firstStartedSeq,
+	); err != nil {
+		t.Fatalf("read first active watch period: %v", err)
+	}
+	if _, err := watchService.Watch(ctx, actorB, componentID, "all_public_activity"); errorCode(err) != "component_repo.watch_level_unsupported" {
+		t.Fatalf("unsupported watch level code = %q, error = %v", errorCode(err), err)
+	}
+	// 保持本用例后续 Star 尺寸筛选的既有 current-version fixture，只改变发布边界本身。
+	if _, err := service.pool.Exec(ctx, `
+		UPDATE component_repo.component_versions
+		SET preview_bbox_min=ARRAY[0,0,0]::float8[], preview_bbox_max=ARRAY[40,24,20]::float8[],
+		    logical_width_stud=2, logical_depth_stud=1, logical_height_plate=3,
+		    preview_bounds_complete=true
+		WHERE id=$1`, mustUUID(t, publishVersionID)); err != nil {
+		t.Fatalf("seed watched publish logical size: %v", err)
+	}
+	if published, err := service.PublishVersion(ctx, actorA, publishVersionID); err != nil || published.Status != "published" {
+		t.Fatalf("publish watched Component version: %+v, %v", published, err)
+	}
+	var watchedEventSeq int64
+	if err := service.pool.QueryRow(ctx, `
+		SELECT event_seq
+		FROM component_repo.component_domain_events
+		WHERE component_version_id=$1`, mustUUID(t, publishVersionID)).Scan(&watchedEventSeq); err != nil || watchedEventSeq <= firstStartedSeq {
+		t.Fatalf("watched publish boundary: watchStart=%d event=%d error=%v", firstStartedSeq, watchedEventSeq, err)
+	}
+	if committed, _ := service.metrics.ComponentDomainEventCounts(); committed != 2 {
+		t.Fatalf("watched publish committed metric = %d, want 2", committed)
+	}
+	watchedComponent, err := service.GetComponent(ctx, actorB, componentID, "en-US")
+	if err != nil || watchedComponent.Watch == nil || !watchedComponent.Watch.Watching ||
+		watchedComponent.Watch.Level == nil || *watchedComponent.Watch.Level != componentwatch.ReleasesOnlyLevel {
+		t.Fatalf("component watch projection: %+v, %v", watchedComponent.Watch, err)
+	}
+	watches, err := watchService.List(ctx, actorB, componentwatch.ListRequest{Locale: "en-US", Limit: 20})
+	if err != nil || len(watches.Items) != 1 || watches.Items[0].ComponentID != componentID || watches.NextCursor != nil {
+		t.Fatalf("watch list: %+v, %v", watches, err)
+	}
+	if err := watchService.Unwatch(ctx, actorB, componentID); err != nil {
+		t.Fatalf("unwatch: %v", err)
+	}
+	var firstEndedSeq int64
+	var firstUnwatchedAt pgtype.Timestamptz
+	var firstEndedReason string
+	if err := service.pool.QueryRow(ctx, `
+		SELECT ended_seq, unwatched_at, ended_reason
+		FROM component_repo.component_watch_periods
+		WHERE id=$1`, firstPeriodID).Scan(&firstEndedSeq, &firstUnwatchedAt, &firstEndedReason); err != nil {
+		t.Fatalf("read closed watch period: %v", err)
+	}
+	if firstEndedSeq <= watchedEventSeq || !firstUnwatchedAt.Valid || firstEndedReason != "user_unwatched" {
+		t.Fatalf("invalid closed watch period: start=%d event=%d end=%d unwatched=%+v reason=%q",
+			firstStartedSeq, watchedEventSeq, firstEndedSeq, firstUnwatchedAt, firstEndedReason)
+	}
+	if err := watchService.Unwatch(ctx, actorB, componentID); err != nil {
+		t.Fatalf("idempotent unwatch: %v", err)
+	}
+	var repeatedEndedSeq int64
+	var repeatedUnwatchedAt pgtype.Timestamptz
+	if err := service.pool.QueryRow(ctx, `
+		SELECT ended_seq, unwatched_at
+		FROM component_repo.component_watch_periods
+		WHERE id=$1`, firstPeriodID).Scan(&repeatedEndedSeq, &repeatedUnwatchedAt); err != nil ||
+		repeatedEndedSeq != firstEndedSeq || !repeatedUnwatchedAt.Time.Equal(firstUnwatchedAt.Time) {
+		t.Fatalf("repeated unwatch changed closed period: end=%d at=%+v error=%v", repeatedEndedSeq, repeatedUnwatchedAt, err)
+	}
+	unwatchedComponent, err := service.GetComponent(ctx, actorB, componentID, "en-US")
+	if err != nil || unwatchedComponent.Watch == nil || unwatchedComponent.Watch.Watching ||
+		unwatchedComponent.Watch.Level != nil || unwatchedComponent.Watch.WatchedAt != nil {
+		t.Fatalf("unwatched component projection: %+v, %v", unwatchedComponent.Watch, err)
+	}
+	emptyWatches, err := watchService.List(ctx, actorB, componentwatch.ListRequest{Locale: "en-US", Limit: 20})
+	if err != nil || len(emptyWatches.Items) != 0 {
+		t.Fatalf("unwatched list: %+v, %v", emptyWatches, err)
+	}
+	// 两个并发 Rewatch 必须共同创建并返回一个新 active period，不能覆盖旧周期或追加两个 active 行。
+	rewatchResults := make(chan componentwatch.Watch, 2)
+	rewatchErrors := make(chan error, 2)
+	var rewatchWait sync.WaitGroup
+	for range 2 {
+		rewatchWait.Add(1)
+		go func() {
+			defer rewatchWait.Done()
+			result, watchErr := watchService.Watch(ctx, actorB, componentID, componentwatch.ReleasesOnlyLevel)
+			rewatchResults <- result
+			rewatchErrors <- watchErr
+		}()
+	}
+	rewatchWait.Wait()
+	close(rewatchResults)
+	close(rewatchErrors)
+	for watchErr := range rewatchErrors {
+		if watchErr != nil {
+			t.Fatalf("concurrent rewatch inactive relation: %v", watchErr)
+		}
+	}
+	var rewatchTimestamp pgtype.Timestamptz
+	for result := range rewatchResults {
+		if !result.Watching || result.WatchedAt.IsZero() {
+			t.Fatalf("invalid concurrent rewatch result: %+v", result)
+		}
+		if rewatchTimestamp.Valid && !rewatchTimestamp.Time.Equal(result.WatchedAt) {
+			t.Fatalf("concurrent rewatch returned different periods: %s != %s", rewatchTimestamp.Time, result.WatchedAt)
+		}
+		rewatchTimestamp = pgtype.Timestamptz{Time: result.WatchedAt, Valid: true}
+	}
+	var periodCount, activePeriodCount int
+	var secondStartedSeq int64
+	if err := service.pool.QueryRow(ctx, `
+		SELECT count(*)::int,
+		       count(*) FILTER (WHERE ended_seq IS NULL)::int,
+		       max(started_seq) FILTER (WHERE ended_seq IS NULL)
+		FROM component_repo.component_watch_periods
+		WHERE actor_id=$1 AND component_id=$2`, actorB, mustUUID(t, componentID)).Scan(
+		&periodCount, &activePeriodCount, &secondStartedSeq,
+	); err != nil || periodCount != 2 || activePeriodCount != 1 || secondStartedSeq <= firstEndedSeq {
+		t.Fatalf("rewatch periods: total=%d active=%d secondStart=%d firstEnd=%d error=%v",
+			periodCount, activePeriodCount, secondStartedSeq, firstEndedSeq, err)
+	}
+	watchSucceeded, watchFailed, unwatchSucceeded, unwatchFailed := watchMetrics.ComponentWatchMutationCounts()
+	if watchSucceeded != 4 || watchFailed != 2 || unwatchSucceeded != 2 || unwatchFailed != 0 {
+		t.Fatalf("watch mutation metrics = %d %d %d %d", watchSucceeded, watchFailed, unwatchSucceeded, unwatchFailed)
+	}
+	testWatchKeysetPagination(t, service, actorA, actorB)
 	stars, err := service.ListStars(ctx, actorB, StarListRequest{
 		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US",
 	})
@@ -458,6 +754,193 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 	})
 	if err != nil || actorBRoot.Total != 0 || len(actorBRoot.Items) != 0 {
 		t.Fatalf("unstarred component removed from personal root: %+v, %v", actorBRoot, err)
+	}
+}
+
+func testComponentActivityLockProtocol(t *testing.T, pool *pgxpool.Pool, componentID pgtype.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	sharedTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin shared activity lock transaction: %v", err)
+	}
+	defer sharedTx.Rollback(ctx)
+	lockKey := componentactivity.LockKey(componentID)
+	if err := db.New(sharedTx).AcquireSharedComponentActivityLock(ctx, lockKey); err != nil {
+		t.Fatalf("acquire shared Component activity lock: %v", err)
+	}
+	exclusiveTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin exclusive activity lock transaction: %v", err)
+	}
+	defer exclusiveTx.Rollback(ctx)
+	var acquired bool
+	if err := exclusiveTx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, lockKey).Scan(&acquired); err != nil {
+		t.Fatalf("try exclusive Component activity lock: %v", err)
+	}
+	if acquired {
+		t.Fatal("exclusive Publish boundary bypassed active shared Watch lock")
+	}
+	if err := sharedTx.Rollback(ctx); err != nil {
+		t.Fatalf("release shared Component activity lock: %v", err)
+	}
+	if err := exclusiveTx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, lockKey).Scan(&acquired); err != nil {
+		t.Fatalf("retry exclusive Component activity lock: %v", err)
+	}
+	if !acquired {
+		t.Fatal("exclusive Publish boundary remained blocked after shared Watch transaction ended")
+	}
+}
+
+func testPublishedEventRollback(t *testing.T, pool *pgxpool.Pool, actor, componentID, versionID pgtype.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		t.Fatalf("begin publish rollback transaction: %v", err)
+	}
+	q := db.New(tx)
+	locked, err := q.LockOwnedComponentVersion(ctx, db.LockOwnedComponentVersionParams{VersionID: versionID, ActorID: actor})
+	if err != nil {
+		t.Fatalf("lock rollback fixture version: %v", err)
+	}
+	if err := q.AcquireExclusiveComponentActivityLock(ctx, componentactivity.LockKey(locked.ComponentID)); err != nil {
+		t.Fatalf("lock rollback fixture activity: %v", err)
+	}
+	if err := q.DeprecateOtherPublishedVersions(ctx, db.DeprecateOtherPublishedVersionsParams{ComponentID: componentID, VersionID: versionID}); err != nil {
+		t.Fatalf("deprecate rollback fixture versions: %v", err)
+	}
+	if _, err := q.PublishComponentVersion(ctx, versionID); err != nil {
+		t.Fatalf("publish rollback fixture version: %v", err)
+	}
+	if err := q.SetComponentCurrentVersion(ctx, db.SetComponentCurrentVersionParams{VersionID: versionID, ComponentID: componentID, ActorID: actor}); err != nil {
+		t.Fatalf("set rollback fixture current version: %v", err)
+	}
+	if _, err := q.CreateComponentVersionPublishedEvent(ctx, db.CreateComponentVersionPublishedEventParams{
+		ID: mustUUID(t, "20000000-0000-0000-0000-000000000041"), ComponentID: componentID,
+		ComponentVersionID: versionID, ActorID: actor,
+	}); err != nil {
+		t.Fatalf("insert rollback fixture event: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback publish transaction: %v", err)
+	}
+	var status string
+	var currentVersionID pgtype.UUID
+	var eventCount int64
+	if err := pool.QueryRow(ctx, `
+		SELECT version.status, component.current_version_id,
+		       (SELECT count(*) FROM component_repo.component_domain_events event
+		        WHERE event.component_version_id = version.id)
+		FROM component_repo.component_versions version
+		JOIN component_repo.components component ON component.id = version.component_id
+		WHERE version.id = $1`, versionID).Scan(&status, &currentVersionID, &eventCount); err != nil {
+		t.Fatalf("read rolled-back publish state: %v", err)
+	}
+	if status != "draft" || currentVersionID.Valid || eventCount != 0 {
+		t.Fatalf("rolled-back publish leaked state: status=%q current=%s events=%d", status, uuidutil.String(currentVersionID), eventCount)
+	}
+}
+
+func testWatchKeysetPagination(t *testing.T, service *Service, creator, actor pgtype.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	// official fixture 不需要复制 user Component 的 Import/Candidate 所有权链；这里只验证关系分页不变量。
+	_, err := service.pool.Exec(ctx, `
+		INSERT INTO component_repo.components
+			(id, content_kind, content_locale, name, category, status, created_by)
+		VALUES
+			('21000000-0000-0000-0000-000000000001', 'official', 'en-US', 'Watch page one', 'building', 'active', $1),
+			('21000000-0000-0000-0000-000000000002', 'official', 'en-US', 'Watch page two', 'vehicle', 'active', $1)`, creator)
+	if err != nil {
+		t.Fatalf("seed watch pagination components: %v", err)
+	}
+	_, err = service.pool.Exec(ctx, `
+		INSERT INTO component_repo.component_versions
+			(id, component_id, version_label, revision, status, source_artifact_id, scene_snapshot_id,
+			 parser_version, interface_signature, structure_hash, geometry_hash, preview_status, created_by, published_at)
+		SELECT fixture.version_id, fixture.component_id, '1.0.0', 1, 'published',
+		       source.source_artifact_id, source.scene_snapshot_id, source.parser_version,
+		       source.interface_signature, source.structure_hash, source.geometry_hash,
+		       'pending', $1, now()
+		FROM (VALUES
+			('21000000-0000-0000-0000-000000000011'::uuid, '21000000-0000-0000-0000-000000000001'::uuid),
+			('21000000-0000-0000-0000-000000000012'::uuid, '21000000-0000-0000-0000-000000000002'::uuid)
+		) AS fixture(version_id, component_id)
+		CROSS JOIN LATERAL (
+			SELECT source_artifact_id, scene_snapshot_id, parser_version,
+			       interface_signature, structure_hash, geometry_hash
+			FROM component_repo.component_versions
+			WHERE status = 'published'
+			LIMIT 1
+		) source`, creator)
+	if err != nil {
+		t.Fatalf("seed watch pagination versions: %v", err)
+	}
+	_, err = service.pool.Exec(ctx, `
+		INSERT INTO component_repo.component_translations
+			(component_id, locale, name, translation_status, reviewed_by, reviewed_at)
+		VALUES
+			('21000000-0000-0000-0000-000000000002', 'zh-CN', '订阅分页车辆', 'reviewed', $1, now())`, creator)
+	if err != nil {
+		t.Fatalf("seed watch pagination translation: %v", err)
+	}
+	_, err = service.pool.Exec(ctx, `
+		UPDATE component_repo.components component
+		SET current_version_id = fixture.version_id
+		FROM (VALUES
+			('21000000-0000-0000-0000-000000000001'::uuid, '21000000-0000-0000-0000-000000000011'::uuid),
+			('21000000-0000-0000-0000-000000000002'::uuid, '21000000-0000-0000-0000-000000000012'::uuid)
+		) AS fixture(component_id, version_id)
+		WHERE component.id = fixture.component_id`)
+	if err != nil {
+		t.Fatalf("link watch pagination current versions: %v", err)
+	}
+	watchService := componentwatch.NewService(service.pool)
+	for _, componentID := range []string{
+		"21000000-0000-0000-0000-000000000001",
+		"21000000-0000-0000-0000-000000000002",
+	} {
+		if _, err := watchService.Watch(ctx, actor, componentID, componentwatch.ReleasesOnlyLevel); err != nil {
+			t.Fatalf("watch pagination fixture %s: %v", componentID, err)
+		}
+	}
+	// 相同 watched_at 强制游标必须使用 component_id 唯一 tiebreaker，不能只依赖时间。
+	if _, err := service.pool.Exec(ctx, `
+		UPDATE component_repo.component_watch_periods
+		SET watched_at = '2026-08-31 12:00:00+00'
+		WHERE actor_id = $1 AND ended_seq IS NULL`, actor); err != nil {
+		t.Fatalf("align watch timestamps: %v", err)
+	}
+	first, err := watchService.List(ctx, actor, componentwatch.ListRequest{Locale: "en-US", Limit: 2})
+	if err != nil || len(first.Items) != 2 || first.NextCursor == nil {
+		t.Fatalf("first watch cursor page: %+v, %v", first, err)
+	}
+	second, err := watchService.List(ctx, actor, componentwatch.ListRequest{Locale: "en-US", Limit: 2, Cursor: *first.NextCursor})
+	if err != nil || len(second.Items) != 1 || second.NextCursor != nil {
+		t.Fatalf("second watch cursor page: %+v, %v", second, err)
+	}
+	seen := map[string]bool{}
+	for _, item := range append(first.Items, second.Items...) {
+		if seen[item.ComponentID] {
+			t.Fatalf("watch cursor returned duplicate component %s", item.ComponentID)
+		}
+		seen[item.ComponentID] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("watch cursor components = %v", seen)
+	}
+	filtered, err := watchService.List(ctx, actor, componentwatch.ListRequest{
+		Locale: "en-US", Limit: 20, Query: "page one", Category: "building",
+	})
+	if err != nil || len(filtered.Items) != 1 || filtered.Items[0].ComponentID != "21000000-0000-0000-0000-000000000001" {
+		t.Fatalf("filtered watch list: %+v, %v", filtered, err)
+	}
+	translated, err := watchService.List(ctx, actor, componentwatch.ListRequest{
+		Locale: "zh-CN", Limit: 20, Query: "分页车辆", Category: "vehicle",
+	})
+	if err != nil || len(translated.Items) != 1 || translated.Items[0].Name != "订阅分页车辆" {
+		t.Fatalf("translated watch search: %+v, %v", translated, err)
 	}
 }
 

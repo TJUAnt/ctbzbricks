@@ -1,7 +1,7 @@
 # Component Repo Go API
 
 > 状态：Current implementation contract；目标漂移均显式标注为尚未实现
-> 更新日期：2026-08-30
+> 更新日期：2026-09-05
 > 范围：`backend-go` 当前注册的认证与 Component Repo HTTP API；不包含旧 FastAPI 路由
 > 长期原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)
 > 任务协议：[go_task_protocol.md](./go_task_protocol.md)
@@ -15,7 +15,8 @@ Worker handler 仍是运行时行为的最终依据。接口发生行为变化�
 
 ### 1.1 路由、认证与 actor
 
-- 健康检查位于 `/health/*`，不要求认证。
+- 健康检查位于 `/health/*`，Prometheus 文本指标位于 `/metrics`；二者不要求业务用户认证，生产入口必须把
+  `/metrics` 限制在内部监控网络。
 - Component Repo 业务接口统一位于 `/api/v1`，全部要求
   `Authorization: Bearer <access-token>`。
 - 前端调用认证 `/api/v1` 路由时统一通过 authenticated API client 注入当前 Supabase access token；
@@ -58,7 +59,7 @@ panic recovery。
 ### 1.3 可见性与写入边界
 
 - 用户自己的 Component、Draft、Import、Candidate、Task、Group 和 Artifact 由 owner 边界保护。
-- 非 owner 只可读取 `active` Component 及其非 draft Version；Star 只表示个人收藏，不授予读取或修改权限。
+- 非 owner 只可读取 `active` Component 及其非 draft Version；Star 只表示个人收藏，Watch 只表示更新订阅，二者均不授予读取或修改权限。
 - 官方 Component/Part 只选择目标 locale 下 `reviewed` 的翻译；缺失时返回源内容并标记
   `translationMissing` 或 `translationStatus=fallback/missing`。
 - Component、Version、Group 等多步 mutation 使用 PostgreSQL transaction；需要并发保护的流程使用
@@ -96,6 +97,7 @@ Execution。
 | `component.preview.materialize` | Go Worker | Go Worker |
 | `component.part_preview.materialize` | Go Worker | Go Worker |
 | `component.part_preview.prebuild` | Go Worker | Go Worker |
+| `component.relationships.cleanup` | Go Worker | Go Worker |
 
 Component Repo 的上述任务全部由 Go Worker 执行；不得新增 Component Repo Python task type。
 
@@ -109,22 +111,23 @@ Component Repo 的上述任务全部由 Go Worker 执行；不得新增 Componen
 session；网络或 provider 暂不可用只隐藏未经确认的用户信息并保留本地 session，下一次刷新可重试。
 同一页面初始化/认证事件对相同 access token 去重，不为每个业务请求重复确认。
 
-## 2. 健康检查
+## 2. 健康检查与指标
 
 | 方法与路径 | 功能 | 成功响应 | 执行逻辑 |
 |---|---|---|---|
 | `GET /health/live` | 进程存活检查 | `200 {status:"ok",traceId}` | 不访问数据库或 Storage，只证明 Gin 进程能够响应。 |
 | `GET /health/ready` | 依赖就绪检查 | `200 {status:"ready",checks:{database:"ok"},traceId}` | 在独立超时内 Ping PostgreSQL；失败返回 `503` 和机器状态 `database=unavailable`，不暴露连接错误。 |
+| `GET /metrics` | Prometheus 0.0.4 文本指标 | `200 text/plain` | 当前输出固定低基数 `component_domain_event_total{event_type,result}` 和 `component_watch_mutation_total{action,result}`。Watch action 只允许 `watch/unwatch`，result 只允许 `succeeded/failed`；幂等空操作属于 succeeded。两类指标均不接受请求值、actor、Component ID、错误正文或用户内容。计数属于单个 API 进程，跨实例聚合与重启连续性由监控系统负责。 |
 
 ## 3. Component
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
-| `GET /api/v1/components` | Query：`page/pageSize/locale/query/category/status`；`200 {items,page,pageSize,total,totalPages}` | 查询 actor 可见的公开/自有 Component 目录。 | 过滤未删除记录，并要求至少存在一个未删除 Version；owner 可见自己的记录，其他用户只见 `active` 且存在非 draft Version 的记录；按 reviewed translation 选择展示内容，返回 `ownedByActor/starredByActor/starCount`，按 `updatedAt DESC,id` 稳定排序。`query` 同时匹配展示名称和 Component ID。查询先固定当前页，再按页内 Component ID 一次聚合 Star 数，不逐行执行收藏计数。`total/totalPages` 复用与列表相同的授权和过滤条件。`logicalSize` 投影当前发布 Version 的 Preview Box；尚未发布、`currentVersionId` 为空时投影最新 Draft，旧 `components.logical_*` 仅为历史兼容回退。公开 `status` 筛选只允许 `draft/active`；`archived` 是 soft delete 内部状态，不属于正常组件列表。 |
+| `GET /api/v1/components` | Query：`page/pageSize/locale/query/category/status`；`200 {items,page,pageSize,total,totalPages}` | 查询 actor 可见的公开/自有 Component 目录。 | 过滤未删除记录，并要求至少存在一个未删除 Version；owner 可见自己的记录，其他用户只见 `active` 且存在非 draft Version 的记录；按 reviewed translation 选择展示内容，返回 `ownedByActor/starredByActor/starCount/watch`，按 `updatedAt DESC,id` 稳定排序。Watch 只在当前页按 `(actor_id,component_id)` 索引投影，不公开计数。`query` 同时匹配展示名称和 Component ID。查询先固定当前页，再按页内 Component ID 一次聚合 Star 数，不逐行执行收藏计数。`total/totalPages` 复用与列表相同的授权和过滤条件。`logicalSize` 投影当前发布 Version 的 Preview Box；尚未发布、`currentVersionId` 为空时投影最新 Draft，旧 `components.logical_*` 仅为历史兼容回退。公开 `status` 筛选只允许 `draft/active`；`archived` 是 soft delete 内部状态，不属于正常组件列表。 |
 | `POST /api/v1/components` | Body：`name,description?,tags,category?,contentLocale`；`201 Component` | 创建用户 Component 元数据。 | 校验名称、tag 数量和 locale；生成 UUID，在事务中写入 owner/creator；初始 Component 尚无结构版本，因此创建后可按 ID 读取，但在产生首个 Version 前不会进入 Component 列表投影。 |
-| `GET /api/v1/components/:componentId` | Query：`locale`；`200 Component` | 读取单个可见 Component。 | 校验 UUID，通过 actor/active 可见性查询；返回 `ownedByActor/starredByActor/starCount`，其中所有权是稳定管理权限投影，前端不得依赖浏览器缓存用户对象自行推断；官方内容只选 reviewed translation，否则返回源内容及缺失标记。Preview stale/failed 不改变 Component 可见性、所有权或删除权限。 |
+| `GET /api/v1/components/:componentId` | Query：`locale`；`200 Component` | 读取单个可见 Component。 | 校验 UUID，通过 actor/active 可见性查询；返回 `ownedByActor/starredByActor/starCount/watch`，其中所有权是稳定管理权限投影，前端不得依赖浏览器缓存用户对象自行推断；`watch={watching,level,watchedAt}` 只描述当前 actor 的 active 订阅。官方内容只选 reviewed translation，否则返回源内容及缺失标记。Preview stale/failed 不改变 Component 可见性、所有权或删除权限。 |
 | `PATCH /api/v1/components/:componentId` | Partial Body：`name,description,tags,category,contentLocale`；`200 Component` | 修改 owner 的 Component 展示元数据。 | 至少提交一个字段；`description/category` 可显式传 `null` 清空；只更新 owner、未删除的用户 Component，并返回更新后的可见投影。 |
-| `DELETE /api/v1/components/:componentId` | 无 Body；`204` | 删除用户 Component 的当前产品入口。 | 执行 soft delete：写 `status=archived`、`deleted_at/deleted_by`；不物理删除 Version、Import、Artifact、Task 或 Storage object。仅 owner 的 `content_kind=user` 可执行。 |
+| `DELETE /api/v1/components/:componentId` | 无 Body；`204` | 删除用户 Component 的当前产品入口。 | serializable transaction 先取得 Component activity 独占锁，再写 `status=archived`、`deleted_at/deleted_by`，冻结统一 Watch 结束序号/时间，并原子创建 `component.relationships.cleanup` 持久任务。提交后 Star/Watch 列表立即因 Component 不可见而移除条目；Go Worker 以 5,000 条短事务和 actor keyset 分批关闭 active Watch、物理删除 Star。Version、Import、Artifact、普通历史 Task 和 Storage object 不删除。仅 owner 的 `content_kind=user` 可执行。 |
 
 ## 4. Component Version
 
@@ -136,7 +139,7 @@ session；网络或 provider 暂不可用只隐藏未经确认的用户信息并
 | `GET /api/v1/component-versions/:versionId/diff` | `200 VersionDiff` | 计算 owner 当前版本相对本次导入基准版本的 BOM 与实例级结构差异。 | 只认 `Version -> Candidate -> Import.base_version_id` 的声明 lineage，不按创建时间猜父版本；首个版本与空树比较。读取两侧不可变 SceneSnapshot，在 Go `componentdiff` 内同步但严格有界地展开全部 root，返回 BOM 变化、确定匹配的实例变化和歧义组；不读取 GLB/Storage、不写数据库、不创建 Task。任一侧最多 50,000 个展开实例，明细最多 10,000 条，超限使用既有 `request.validation_failed`。即使 Version 已公开，本接口当前仍只允许 Component owner。 |
 | `PATCH /api/v1/component-versions/:versionId` | Partial Body：`version,revision,releaseNote,releaseNoteLocale`；`200 ComponentVersion` | 修改 owner Draft Version 的展示元数据。 | 只允许未删除 draft；release note 与 locale 必须同时设置或同时清空；结构、hash、Artifact 和 Part Library 不可通过本接口修改。 |
 | `DELETE /api/v1/component-versions/:versionId` | `204` | 删除未发布的 Draft Version。 | 只对 owner 用户 Component 的非 current draft 写 `deleted_at/deleted_by`；不删除已发布/废弃/归档版本。 |
-| `POST /api/v1/component-versions/:versionId/publish` | 无 Body；`200 ComponentVersion` | 直接发布 owner 的 Draft。 | serializable transaction 锁定 owner Version，deprecated 其他 published Version、发布目标 Version，并设置 Component current version。ValidationReport 是可选质量信息，不参与 API 或数据库发布门禁。 |
+| `POST /api/v1/component-versions/:versionId/publish` | 无 Body；`200 ComponentVersion` | 直接发布 owner 的 Draft。 | serializable transaction 锁定 owner Version，并取得同 Component 的 exclusive activity lock；随后 deprecated 其他 published Version、发布目标、设置 current version，同时刷新当前公开 Version 的轴无关规范化尺寸投影，并追加唯一 `component.version.published.v1` 领域事件。状态、尺寸投影与事件原子提交，重复/并发 publish 最多产生一个事件。ValidationReport 是可选质量信息，不参与发布门禁。 |
 | `POST /api/v1/component-versions/:versionId/deprecate` | 无 Body；`200 ComponentVersion` | 将 published Version 标记为 deprecated。 | 仅 owner；只允许 `published -> deprecated`，非法状态返回 conflict。 |
 | `POST /api/v1/component-versions/:versionId/archive` | 无 Body；`200 ComponentVersion` | 归档 published/deprecated Version。 | 仅 owner；允许 `published -> archived` 或 `deprecated -> archived`，不修改版本的不可变结构字段。 |
 
@@ -196,7 +199,7 @@ go run ./cmd/component-diff --before base-document.json --after head-document.js
 
 省略 `--before` 时与空树比较；文件内容必须是 `scene_snapshots.document` JSON，而不是完整数据库行或 GLB。
 
-## 5. Component Group 与 Star
+## 5. Component Group、Star 与 Watch
 
 ### 5.1 Group
 
@@ -218,12 +221,55 @@ go run ./cmd/component-diff --before base-document.json --after head-document.js
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
-| `GET /api/v1/component-stars` | Query：`page/pageSize/locale/query/category/sort`；`sort` 只允许 `starred_at_desc`；`200 {items,total,page,pageSize,totalPages,relationshipTotal}` | 读取当前 actor 的个人收藏。 | 按 `starredAt DESC,componentId` 稳定排序；`query` 匹配展示名称/Component ID，完整 `axb/axbxc` 复用 Group 的轴无关 logical-size 开区间规则，`category` 精确匹配。只投影当前 `active` 且存在非 draft Version 的 Component；软删除或暂时不可见时保留关系但隐藏结果。`total` 是当前过滤后的可见数，`relationshipTotal` 只返回 actor 的关系总数以区分空状态，不暴露不可见 Component 内容。计数在一条 SQL 中返回两个值；列表先分页再一次聚合页内 `starCount`，不公开收藏者列表。 |
-| `PUT /api/v1/components/:componentId/star` | `200 {componentId,starredAt}` | 收藏可见的非本人 Component。 | 使用轻量目标查询读取 Component 删除/可见性、owner、状态、非 draft Version 存在性和已有关系；不读取完整详情或收藏总数。首次创建要求目标未删除、非本人、`active` 且存在非 draft Version；已有关系直接返回原 `starredAt` 并跳过写入，并发首次收藏仍由 `(actor_id,component_id)` 唯一键收敛；不产生 Watch 通知。 |
+| `GET /api/v1/component-stars` | Query：`page/pageSize/locale/query/category/sort`；`sort` 只允许 `starred_at_desc`；`200 {items,total,page,pageSize,totalPages,relationshipTotal}` | 读取当前 actor 的个人收藏。 | 先按 `actor_id` 物化当前用户的权威 Star 候选，再按候选索引探测 Component 与非 Draft Version；按 `starredAt DESC,componentId` 稳定排序。`query` 匹配展示名称/Component ID，完整 `axb/axbxc` 复用 Group 的轴无关 logical-size 开区间规则，`category` 精确匹配。尺寸候选直接读取 `components.current_logical_size_a/b/c`：该投影由发布事务和当前 Version Preview 完成事务维护，查询不再逐关系读取 Version 并执行 `LEAST/GREATEST`。只投影当前 `active` 且存在非 draft Version 的 Component；Component 删除提交后结果立即隐藏，持久 Worker 随后物理删除 Star。清理完成前 `relationshipTotal` 可能短暂包含已隐藏的待清理关系；`total` 始终是当前过滤后的可见数。计数在一条 SQL 中返回两个值；列表先分页再一次聚合页内 `starCount`，不公开收藏者列表。 |
+| `PUT /api/v1/components/:componentId/star` | `200 {componentId,starredAt}` | 收藏可见的非本人 Component。 | 使用轻量目标查询读取 Component 删除/可见性、owner、状态、非 draft Version 存在性和已有关系；不读取完整详情或收藏总数。首次创建要求目标未删除、非本人、`active` 且存在非 draft Version；已有关系直接返回原 `starredAt` 并跳过写入，并发首次收藏仍由 `(actor_id,component_id)` 唯一键收敛。创建事务取得 Component activity 共享锁，删除边界提交后不能再新增或恢复该关系；不产生 Watch 通知。 |
 | `DELETE /api/v1/components/:componentId/star` | `204` | 取消收藏。 | actor-scoped 删除 Star；Component 后续不可见或关系不存在时也按成功处理。 |
 
 Goose `00014_component_stars.sql` 将旧 `component_subscriptions` 一次迁移为 `component_stars`，迁移来源写入
 `source=subscription_migration`；新用户操作写入 `source=user_action`。迁移完成后不存在双写或旧 Subscription API。
+
+### 5.3 Watch
+
+Watch 与 Star 使用独立表、API 和产品语义。WATCH-1 保存订阅偏好；WATCH-2 已让 Version 首次发布同步写入
+不可变领域事件。当前仍不在 Handler 中遍历 watcher，也不创建 recipient、通知或 Feed；这些副作用只能由
+后续 WATCH-3 的持久 fan-out Worker 实现。
+
+| 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
+|---|---|---|---|
+| `PUT /api/v1/components/:componentId/watch` | Body：`{level:"releases_only"}`；`200 {componentId,watching,level,watchedAt}` | 显式订阅公开非本人 Component 的新版本更新。 | serializable transaction 使用轻量目标投影检查未删除、非本人、`active` 和存在非 draft Version；存在 active period 时重复 PUT 直接返回且不修改开始边界，关闭后重新 Watch 会向 `component_watch_periods` 追加新 period。并发创建由 active partial unique 收敛，只保存偏好，不创建 Star、事件或通知。 |
+| `DELETE /api/v1/components/:componentId/watch` | `204` | 取消当前 actor 的更新订阅。 | actor-scoped 单条 UPDATE 使用共享数据库 sequence 分配 `ended_seq`，并写 `unwatched_at/ended_reason=user_unwatched`；只允许关闭仍处于 active Component 生命周期的当前 period 一次。目标已不可见或关系不存在时仍幂等成功，但不会抢写删除事务已冻结的生命周期边界；不删除或重新打开历史 period，不改变 Star、Group、Fork 或资源权限。 |
+| `GET /api/v1/component-watches` | Query：`locale/limit/cursor/query/category`；`query` 最长 200、`category` 最长 128；`200 {items,nextCursor}` | 读取 actor 当前仍公开可见的 active Watch。 | 从 `component_watch_periods` active-time 部分索引驱动，以 `watched_at DESC,component_id DESC` 做 row-value keyset；名称/ID leading-wildcard 搜索及 category 精确匹配只运行在当前 actor 的有界 active 候选集。搜索启用时才探测候选 reviewed translation，筛选后先固定 `limit+1` 页面，再读取展示翻译和 current published Version；不返回 exact count、watcher 身份或 watchCount。cursor 只可在相同筛选条件下继续使用。 |
+
+当前 Web 契约采用数据库操作顺序的 last-write-wins：active period 存在时 PUT 是重复 Watch；没有 active period
+时 PUT 是首次 Watch 或 Rewatch。API 尚未接收 `mutationId`，因此跨越一次 DELETE 后才抵达的旧 PUT 会按新的
+Rewatch 处理；引入离线队列或自动网络重放前必须先冻结强意图幂等协议。
+
+Watch/Unwatch transaction 使用 Component UUID 稳定派生 key 的 PostgreSQL shared advisory xact lock。共享锁
+不串行化同一 Component 的多个 watcher；Publish transaction 复用同一 key 获取 exclusive advisory xact lock，
+并通过领域事件 INSERT 在锁内分配 `event_seq`。这样发布边界会等待已在途的偏好事务提交或回滚，后续 Watch
+也不会越过事件边界，Worker 无需在发布事务中枚举 recipient。
+
+Component 删除复用同一 exclusive activity lock。删除事务只做有界的状态写入、公共结束边界分配和持久任务
+入队，不在 HTTP Handler 中遍历关系。清理任务将 active period 写为同一 `ended_seq/unwatched_at`，并记录稳定
+机器值 `ended_reason=component_deleted`；已关闭的用户退订周期保持不变。Star 没有审计历史语义，因此分批物理
+删除。该任务只负责关系生命周期收敛，不生成发布事件、recipient snapshot、通知或 Feed。
+
+所有 closed Watch period 当前永久保留，不设 TTL 或按 actor 裁剪。达到 1,000,000 条只触发容量重评；在
+WATCH-3 定义并验证 fan-out completion watermark 或 recipient snapshot 之前，任何维护流程不得删除或合并历史区间。
+
+`component_domain_events` 是独立的 Component 领域事实表，不复用 Task 执行协议的 `outbox_events`。v1 payload
+固定为空 JSON object，Component/Version/actor/event sequence 由结构化列保存；不复制 Release Note、Component
+名称、Artifact 路径或最终译文。数据库约束拒绝非 owner actor、非 published/mismatched Version、重复 Version 事件以及任何
+UPDATE/DELETE。当前没有领域事件查询 API、exact count、分页或 fan-out 索引。
+v16 不回填迁移前已发布的 Version；只有迁移后首次成功发生的 Draft -> Published 状态迁移会产生事件。
+
+`component_domain_event_total` 在发布事务最终返回后记录一次逻辑结果：确认提交后增加 `committed`；已经进入
+事件 INSERT 阶段但最终未提交时增加 `failed`。serializable transaction 的内部重试不会重复计数；不可见、
+非 owner、非 Draft 或重复 publish 等在事件写入前结束的请求不计入领域事件结果。
+
+稳定错误：`component_repo.watch_own_component_forbidden`、
+`component_repo.watch_component_unavailable`、`component_repo.watch_level_unsupported`。普通 UUID/limit/cursor
+错误继续使用 `request.validation_failed`；不可见目标使用 `component_repo.component_not_found`。
 
 ## 6. 上传、Artifact 与源文件
 
@@ -264,6 +310,16 @@ BOM/GLB，也不等待 Worker 完成。
 字段。Supabase `storage.objects` INSERT policy 调用 `can_upload_component_session_file(name)`，只有同时
 满足 provider/bucket、精确 key、file pending、session pending、owner=`auth.uid()` 且未过期才允许写入。
 authenticated 客户端无 Artifact DELETE policy；失败补偿和过期对象清理由 Worker 的服务端凭据执行。
+真实 Supabase Storage 对 INSERT RLS 拒绝的 HTTP 外层状态是 `400`，响应正文中的 provider
+`statusCode=403` / `Unauthorized` 才表达授权失败；它不是 Go API 的参数校验 `400`。验收必须同时断言
+provider 授权语义，不能只把外层状态码写死成 `403`。精确 pending key 的控制请求应成功写入。
+
+Preview 正文的 `storage.objects` SELECT policy 调用
+`can_read_component_preview_artifact(name)`。Go Component Repo 只允许 owner，或 `active` Component 的非
+Draft Version 读取已验证、未删除的 derived Artifact；Star 与 Watch 都不是授权关系。Alembic
+`20260905_0025` 删除了 helper 对已由 Goose v14 移除的 `component_repo.component_subscriptions` 引用，
+同时取消 legacy subscription 对 Preview 的额外授权。`storage` schema policy 继续由 Alembic 管理，Goose
+不得重复定义。
 
 `sourceFile/exchangeFile` 结构：
 
@@ -376,7 +432,7 @@ parser v1 / snapshot v1 已有记录保持不可变，不在 GET 中静默改写
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
 | `GET /api/v1/component-versions/:versionId/preview` | `200 Preview` | 只读查询 Version Preview 状态和短期 URL。 | 查询 actor 可见 Version；generator 版本过期时返回 `status=stale`；只有 ready、generator 当前且 Artifact 存在时才通过用户 token 签名 URL。GET 不创建任务、不写 Artifact。 |
-| `POST /api/v1/component-versions/:versionId/preview/materialize` | `202 AcceptedTask` | 显式重建或恢复 ComponentVersion 整体 GLB。 | 仅 owner Version；若 ready cache object 存在，直接返回既有 succeeded task；pending/running 复用任务；failed、generator stale 或 Storage object 丢失时增加 generation 并 force new。input hash 绑定 Version、SceneSnapshot、structure/geometry、冻结 Part Library/source hash 和 generator version，由 Go Worker 生成 GLB。Worker 对递归展开后的全部 Root、全部实际渲染实例逐顶点应用 world matrix，合并 LDraw 世界坐标 AABB，并在 Artifact upsert 与 Version ready 的同一事务中写 `preview_bbox_*`、stud/plate 逻辑尺寸及完整性。冻结库中 `geometry_status` 非 ready 或没有 geometry 的 Part 被跳过，任务结果和 Artifact metadata 记录稳定排序的 `omittedPartRefs` 与 `complete=false`；此时 Box 描述实际 GLB，`preview_bounds_complete=false`，BOM 不删减。全部实例均无可用几何时仍允许生成空场景 GLB，但 Version Box 保持空值。已标记 ready 的本地 source 缺失、哈希漂移或递归解析失败仍使任务失败。普通上传主链不由浏览器调用本接口；首个任务由 Parse Worker 事务性串联。 |
+| `POST /api/v1/component-versions/:versionId/preview/materialize` | `202 AcceptedTask` | 显式重建或恢复 ComponentVersion 整体 GLB。 | 仅 owner Version；若 ready cache object 存在，直接返回既有 succeeded task；pending/running 复用任务；failed、generator stale 或 Storage object 丢失时增加 generation 并 force new。input hash 绑定 Version、SceneSnapshot、structure/geometry、冻结 Part Library/source hash 和 generator version，由 Go Worker 生成 GLB。Worker 对递归展开后的全部 Root、全部实际渲染实例逐顶点应用 world matrix，合并 LDraw 世界坐标 AABB，并在 Artifact upsert 与 Version ready 的同一事务中写 `preview_bbox_*`、stud/plate 逻辑尺寸及完整性；若该 Version 已是 Component 当前版本，同一 SQL 同步刷新 Component 的轴无关规范化尺寸投影。冻结库中 `geometry_status` 非 ready 或没有 geometry 的 Part 被跳过，任务结果和 Artifact metadata 记录稳定排序的 `omittedPartRefs` 与 `complete=false`；此时 Box 描述实际 GLB，`preview_bounds_complete=false`，BOM 不删减。全部实例均无可用几何时仍允许生成空场景 GLB，但 Version Box 和对应 Component 尺寸投影保持空值。已标记 ready 的本地 source 缺失、哈希漂移或递归解析失败仍使任务失败。普通上传主链不由浏览器调用本接口；首个任务由 Parse Worker 事务性串联。 |
 
 ### 11.1 Preview Box 与历史回填
 
@@ -477,7 +533,8 @@ GET Candidate / Draft Version
 
 ## 14. 当前明确未提供的接口
 
-- 不提供旧 `/api` FastAPI 兼容路由、代理或双写。
+- 不提供旧 `/api` FastAPI 兼容路由、代理或双写；旧 Python Component Repo public router、专用 DTO 与
+  Component translation public endpoint 已于 2026-09-05 删除。其他 Python 业务域不得重新承接这些路径。
 - 不提供同步 multipart Component 导入；上传必须走直传 session。
 - 不提供 Candidate Preview；Import 已物化 Draft Version，Preview 以 Version 为地址。
 - 不提供 GET 隐式 materialize。

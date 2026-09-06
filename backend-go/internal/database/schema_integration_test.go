@@ -26,9 +26,9 @@ func TestComponentRepoBaselineContract(t *testing.T) {
 	defer conn.Close(ctx)
 
 	expectedTables := []string{
-		"artifacts", "assembly_relation_connector_occupancies", "assembly_relations", "candidates", "component_group_memberships",
-		"component_groups", "component_stars", "component_translations",
-		"component_versions", "components", "connector_analyses",
+		"artifacts", "assembly_relation_connector_occupancies", "assembly_relations", "candidates", "component_domain_events",
+		"component_group_memberships", "component_groups", "component_stars", "component_translations",
+		"component_versions", "component_watch_periods", "components", "connector_analyses",
 		"connector_analysis_blockers", "connector_analysis_items",
 		"connector_analysis_path_nodes", "connector_analysis_relations", "imports",
 		"interfaces", "outbox_events", "part_collider_definitions", "part_connector_definitions", "part_external_ids",
@@ -50,6 +50,16 @@ func TestComponentRepoBaselineContract(t *testing.T) {
 	}
 	if !slices.Equal(tables, expectedTables) {
 		t.Fatalf("unexpected component_repo tables\nwant: %v\n got: %v", expectedTables, tables)
+	}
+	var activitySequenceCache int64
+	if err := conn.QueryRow(ctx, `
+		SELECT cache_size
+		FROM pg_catalog.pg_sequences
+		WHERE schemaname='component_repo' AND sequencename='component_activity_sequence'`).Scan(&activitySequenceCache); err != nil {
+		t.Fatalf("read Component activity sequence: %v", err)
+	}
+	if activitySequenceCache != 1 {
+		t.Fatalf("Component activity sequence cache = %d, want 1", activitySequenceCache)
 	}
 
 	var rlsDisabled []string
@@ -94,6 +104,107 @@ func TestComponentRepoBaselineContract(t *testing.T) {
 	testPublishedVersionImmutability(t, conn)
 	testSourceArtifactImmutability(t, conn)
 	testTaskStateMachine(t, conn)
+	testComponentWatchPeriodState(t, conn)
+	testComponentCurrentLogicalSizeProjection(t, conn)
+}
+
+func testComponentCurrentLogicalSizeProjection(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+	// 规范化尺寸必须全空或完整升序，防止筛选读取到部分写入或未规范化的投影。
+	assertSQLState(t, conn, `
+		INSERT INTO component_repo.components
+			(id, owner_id, content_kind, content_locale, name, created_by,
+			 current_logical_size_a, current_logical_size_b)
+		VALUES
+			('14000000-0000-0000-0000-000000000001',
+			 '14000000-0000-0000-0000-000000000002', 'user', 'en-US', 'partial size',
+			 '14000000-0000-0000-0000-000000000002', 1, 2)`, "23514")
+	assertSQLState(t, conn, `
+		INSERT INTO component_repo.components
+			(id, owner_id, content_kind, content_locale, name, created_by,
+			 current_logical_size_a, current_logical_size_b, current_logical_size_c)
+		VALUES
+			('14000000-0000-0000-0000-000000000001',
+			 '14000000-0000-0000-0000-000000000002', 'user', 'en-US', 'unordered size',
+			 '14000000-0000-0000-0000-000000000002', 3, 2, 1)`, "23514")
+}
+
+func testComponentWatchPeriodState(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+	assertSQLState(t, conn, `
+		WITH component AS (
+			INSERT INTO component_repo.components
+				(id, owner_id, content_kind, content_locale, name, created_by)
+			VALUES
+				('13000000-0000-0000-0000-000000000001',
+				 '13000000-0000-0000-0000-000000000002', 'user', 'en-US', 'watch fixture',
+				 '13000000-0000-0000-0000-000000000002')
+			RETURNING id
+		)
+		INSERT INTO component_repo.component_watch_periods
+			(actor_id, component_id, watch_level)
+		SELECT '13000000-0000-0000-0000-000000000003', id, 'all_public_activity'
+		FROM component`, "23514")
+	assertSQLState(t, conn, `
+		WITH component AS (
+			INSERT INTO component_repo.components
+				(id, owner_id, content_kind, content_locale, name, created_by)
+			VALUES
+				('13000000-0000-0000-0000-000000000001',
+				 '13000000-0000-0000-0000-000000000002', 'user', 'en-US', 'watch fixture',
+				 '13000000-0000-0000-0000-000000000002')
+			RETURNING id
+		)
+		INSERT INTO component_repo.component_watch_periods
+			(actor_id, component_id, watch_level, ended_seq)
+		SELECT '13000000-0000-0000-0000-000000000003', id, 'releases_only',
+		       nextval('component_repo.component_activity_sequence')
+		FROM component`, "23514")
+	assertSQLState(t, conn, `
+		WITH component AS (
+			INSERT INTO component_repo.components
+				(id, owner_id, content_kind, content_locale, name, created_by)
+			VALUES
+				('13000000-0000-0000-0000-000000000001',
+				 '13000000-0000-0000-0000-000000000002', 'user', 'en-US', 'watch fixture',
+				 '13000000-0000-0000-0000-000000000002')
+			RETURNING id
+		)
+		INSERT INTO component_repo.component_watch_periods
+			(actor_id, component_id, watch_level, ended_seq, unwatched_at)
+		SELECT '13000000-0000-0000-0000-000000000003', id, 'releases_only',
+		       nextval('component_repo.component_activity_sequence'), clock_timestamp()
+		FROM component`, "23514")
+	assertSQLState(t, conn, `
+		WITH component AS (
+			INSERT INTO component_repo.components
+				(id, owner_id, content_kind, content_locale, name, created_by)
+			VALUES
+				('13000000-0000-0000-0000-000000000001',
+				 '13000000-0000-0000-0000-000000000002', 'user', 'en-US', 'watch fixture',
+				 '13000000-0000-0000-0000-000000000002')
+			RETURNING id
+		)
+		INSERT INTO component_repo.component_watch_periods
+			(actor_id, component_id, watch_level, ended_seq, unwatched_at, ended_reason)
+		SELECT '13000000-0000-0000-0000-000000000003', id, 'releases_only',
+		       nextval('component_repo.component_activity_sequence'), clock_timestamp(), 'unknown_reason'
+		FROM component`, "23514")
+	assertSQLState(t, conn, `
+		WITH component AS (
+			INSERT INTO component_repo.components
+				(id, owner_id, content_kind, content_locale, name, created_by)
+			VALUES
+				('13000000-0000-0000-0000-000000000001',
+				 '13000000-0000-0000-0000-000000000002', 'user', 'en-US', 'watch fixture',
+				 '13000000-0000-0000-0000-000000000002')
+			RETURNING id
+		)
+		INSERT INTO component_repo.component_watch_periods
+			(actor_id, component_id, watch_level)
+		SELECT '13000000-0000-0000-0000-000000000003', id, 'releases_only'
+		FROM component
+		CROSS JOIN generate_series(1, 2)`, "23505")
 }
 
 func testTaskStateMachine(t *testing.T, conn *pgx.Conn) {
@@ -277,12 +388,85 @@ func testPublishedVersionImmutability(t *testing.T, conn *pgx.Conn) {
 	if _, err := tx.Exec(ctx, fixture); err != nil {
 		t.Fatalf("create immutability fixture: %v", err)
 	}
+	testComponentDomainEventImmutability(t, tx)
 	_, err = tx.Exec(ctx, `
 		UPDATE component_repo.component_versions
 		SET structure_hash = repeat('4', 64)
 		WHERE id = '10000000-0000-0000-0000-000000000006'`)
 	if sqlState(err) != "23514" {
 		t.Fatalf("published structure update SQLSTATE = %q, want 23514 (error: %v)", sqlState(err), err)
+	}
+}
+
+func testComponentDomainEventImmutability(t *testing.T, tx pgx.Tx) {
+	t.Helper()
+	_, err := tx.Exec(context.Background(), `
+		INSERT INTO component_repo.component_domain_events
+			(id, event_type, component_id, component_version_id, actor_id)
+		VALUES
+			('10000000-0000-0000-0000-000000000011', 'component.version.published.v1',
+			 '10000000-0000-0000-0000-000000000001',
+			 '10000000-0000-0000-0000-000000000006',
+			 '10000000-0000-0000-0000-000000000002')`)
+	if err != nil {
+		t.Fatalf("insert valid Component domain event: %v", err)
+	}
+	assertTxSQLState(t, tx, `
+		WITH reverted AS (
+			UPDATE component_repo.component_versions
+			SET status = 'draft', published_at = NULL
+			WHERE id = '10000000-0000-0000-0000-000000000006'
+			RETURNING id, component_id
+		)
+		INSERT INTO component_repo.component_domain_events
+			(id, event_type, component_id, component_version_id, actor_id)
+		SELECT '10000000-0000-0000-0000-000000000014', 'component.version.published.v1',
+		       component_id, id, '10000000-0000-0000-0000-000000000002'
+		FROM reverted`, "23514")
+	assertTxSQLState(t, tx, `
+		INSERT INTO component_repo.component_domain_events
+			(id, event_type, component_id, component_version_id, actor_id)
+		VALUES
+			('10000000-0000-0000-0000-000000000015', 'component.version.published.v1',
+			 '10000000-0000-0000-0000-000000000001',
+			 '10000000-0000-0000-0000-000000000006',
+			 '10000000-0000-0000-0000-000000000099')`, "23514")
+	assertTxSQLState(t, tx, `
+		UPDATE component_repo.component_domain_events
+		SET payload = '{"changed":true}'
+		WHERE id = '10000000-0000-0000-0000-000000000011'`, "23514")
+	assertTxSQLState(t, tx, `
+		DELETE FROM component_repo.component_domain_events
+		WHERE id = '10000000-0000-0000-0000-000000000011'`, "23514")
+	assertTxSQLState(t, tx, `
+		INSERT INTO component_repo.component_domain_events
+			(id, event_type, component_id, component_version_id, actor_id, payload)
+		VALUES
+			('10000000-0000-0000-0000-000000000012', 'component.version.published.v1',
+			 '10000000-0000-0000-0000-000000000001',
+			 '10000000-0000-0000-0000-000000000006',
+			 '10000000-0000-0000-0000-000000000002', '[]')`, "23514")
+	assertTxSQLState(t, tx, `
+		INSERT INTO component_repo.component_domain_events
+			(id, event_type, component_id, component_version_id, actor_id)
+		VALUES
+			('10000000-0000-0000-0000-000000000013', 'component.version.published.v1',
+			 '10000000-0000-0000-0000-000000000001',
+			 '10000000-0000-0000-0000-000000000006',
+			 '10000000-0000-0000-0000-000000000002')`, "23505")
+}
+
+func assertTxSQLState(t *testing.T, tx pgx.Tx, statement, expected string) {
+	t.Helper()
+	ctx := context.Background()
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin constraint savepoint: %v", err)
+	}
+	defer savepoint.Rollback(ctx)
+	_, err = savepoint.Exec(ctx, statement)
+	if sqlState(err) != expected {
+		t.Fatalf("SQLSTATE = %q, want %q (error: %v)", sqlState(err), expected, err)
 	}
 }
 

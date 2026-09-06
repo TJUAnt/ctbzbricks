@@ -22,6 +22,8 @@ const (
 	PreviewMaterializeType     = "component.preview.materialize"
 	PartPreviewMaterializeType = "component.part_preview.materialize"
 	PartPreviewPrebuildType    = "component.part_preview.prebuild"
+	// RelationshipCleanupType 由 Component 生命周期事务创建，Worker 用它异步收敛 Star/Watch 关系。
+	RelationshipCleanupType = "component.relationships.cleanup"
 )
 
 type EnqueueInput struct {

@@ -435,19 +435,49 @@ RETURNING id, owner_id, artifact_type, source_kind, original_filename,
           uploaded_at, metadata, deleted_at, derived_from_artifact_id;
 
 -- name: MarkVersionPreviewReady :exec
-UPDATE component_repo.component_versions
-SET preview_artifact_id = sqlc.arg(artifact_id), preview_status = 'ready',
-    preview_generator_version = sqlc.arg(generator_version),
-    preview_failure_code = NULL, preview_failure_params = NULL,
-    preview_bbox_min = sqlc.narg(preview_bbox_min),
-    preview_bbox_max = sqlc.narg(preview_bbox_max),
-    logical_width_stud = sqlc.narg(logical_width_stud),
-    logical_depth_stud = sqlc.narg(logical_depth_stud),
-    logical_height_plate = sqlc.narg(logical_height_plate),
-    preview_bounds_complete = sqlc.narg(preview_bounds_complete)
-WHERE id = sqlc.arg(version_id)
-  AND preview_task_id = sqlc.arg(task_id)
-  AND preview_generation = sqlc.arg(preview_generation);
+-- Preview 可能晚于 Version 发布完成；写入当前 Version Box 时必须在同一语句刷新 Component 尺寸投影。
+WITH updated_version AS (
+    UPDATE component_repo.component_versions version_record
+    SET preview_artifact_id = sqlc.arg(artifact_id), preview_status = 'ready',
+        preview_generator_version = sqlc.arg(generator_version),
+        preview_failure_code = NULL, preview_failure_params = NULL,
+        preview_bbox_min = sqlc.narg(preview_bbox_min),
+        preview_bbox_max = sqlc.narg(preview_bbox_max),
+        logical_width_stud = sqlc.narg(logical_width_stud),
+        logical_depth_stud = sqlc.narg(logical_depth_stud),
+        logical_height_plate = sqlc.narg(logical_height_plate),
+        preview_bounds_complete = sqlc.narg(preview_bounds_complete)
+    WHERE version_record.id = sqlc.arg(version_id)
+      AND version_record.preview_task_id = sqlc.arg(task_id)
+      AND version_record.preview_generation = sqlc.arg(preview_generation)
+    RETURNING version_record.id, version_record.component_id,
+              version_record.logical_width_stud, version_record.logical_depth_stud,
+              version_record.logical_height_plate
+), projection_source AS (
+    SELECT version.id AS version_id, version.component_id,
+           COALESCE(version.logical_width_stud, component.logical_width_stud) AS size_x,
+           COALESCE(version.logical_depth_stud, component.logical_depth_stud) AS size_y,
+           COALESCE(version.logical_height_plate, component.logical_height_plate) AS size_z
+    FROM updated_version version
+    JOIN component_repo.components component
+      ON component.id = version.component_id
+     AND component.current_version_id = version.id
+), normalized AS (
+    SELECT version_id, component_id,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN LEAST(size_x, size_y, size_z) END AS size_a,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN size_x + size_y + size_z - LEAST(size_x, size_y, size_z) - GREATEST(size_x, size_y, size_z) END AS size_b,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN GREATEST(size_x, size_y, size_z) END AS size_c
+    FROM projection_source
+)
+UPDATE component_repo.components component
+SET current_logical_size_a = normalized.size_a,
+    current_logical_size_b = normalized.size_b,
+    current_logical_size_c = normalized.size_c
+FROM normalized
+WHERE component.id = normalized.component_id;
 
 -- name: MarkVersionPreviewFailed :exec
 UPDATE component_repo.component_versions

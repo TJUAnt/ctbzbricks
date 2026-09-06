@@ -17,9 +17,12 @@ import {
   loadPartPreview,
   publishVersion,
   listComponentStars,
+  listComponentWatches,
   starComponent,
   unstarComponent,
+  unwatchComponent,
   validateCandidate,
+  watchComponent,
 } from '../componentRepoApi';
 
 function jsonResponse(value: unknown, status = 200): Response {
@@ -133,6 +136,48 @@ describe('Component Repo Go API adapter', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       '/api/v1/components/component-1/star',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('uses independent keyset Watch APIs without changing Star', async () => {
+    vi.stubGlobal('window', {
+      location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
+    });
+    const watchPage = { items: [], nextCursor: 'next-watch-cursor' };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(watchPage))
+      .mockResolvedValueOnce(jsonResponse({
+        componentId: 'component-1', watching: true, level: 'releases_only', watchedAt: '2026-08-31T00:00:00Z',
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listComponentWatches({
+      limit: 20,
+      cursor: 'previous-watch-cursor',
+      query: 'castle',
+      category: 'building',
+    })).resolves.toEqual(watchPage);
+    const listURL = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(listURL.pathname).toBe('/api/v1/component-watches');
+    expect(listURL.searchParams.get('limit')).toBe('20');
+    expect(listURL.searchParams.get('cursor')).toBe('previous-watch-cursor');
+    expect(listURL.searchParams.get('query')).toBe('castle');
+    expect(listURL.searchParams.get('category')).toBe('building');
+
+    await watchComponent('component-1');
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/components/component-1/watch',
+      expect.objectContaining({
+        method: 'PUT', body: JSON.stringify({ level: 'releases_only' }),
+      }),
+    );
+    await unwatchComponent('component-1');
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/components/component-1/watch',
       expect.objectContaining({ method: 'DELETE' }),
     );
   });

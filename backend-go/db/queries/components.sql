@@ -32,6 +32,9 @@ SELECT c.id, c.owner_id, c.content_kind,
            WHERE star.actor_id = sqlc.arg(actor_id)
              AND star.component_id = c.id
        ) AS starred_by_actor,
+       (active_watch.actor_id IS NOT NULL)::boolean AS watching_by_actor,
+       active_watch.watch_level,
+       active_watch.watched_at,
        (SELECT count(*)::bigint
         FROM component_repo.component_stars aggregate_star
         WHERE aggregate_star.component_id = c.id)::bigint AS star_count
@@ -59,6 +62,10 @@ LEFT JOIN LATERAL (
       AND t.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
+LEFT JOIN component_repo.component_watch_periods active_watch
+  ON active_watch.actor_id = sqlc.arg(actor_id)
+ AND active_watch.component_id = c.id
+ AND active_watch.ended_seq IS NULL
 WHERE c.id = sqlc.arg(component_id)
   AND c.deleted_at IS NULL
   AND (c.owner_id = sqlc.arg(actor_id) OR c.status = 'active');
@@ -144,9 +151,15 @@ SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        page.logical_width_stud, page.logical_depth_stud, page.logical_height_plate,
        page.metadata, page.created_by, page.created_at, page.updated_at,
        page.owned_by_actor, page.translation_missing, page.starred_by_actor,
+       (active_watch.actor_id IS NOT NULL)::boolean AS watching_by_actor,
+       active_watch.watch_level, active_watch.watched_at,
        COALESCE(page_star_counts.star_count, 0)::bigint AS star_count
 FROM page
 LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
+LEFT JOIN component_repo.component_watch_periods active_watch
+  ON active_watch.actor_id = sqlc.arg(actor_id)
+ AND active_watch.component_id = page.id
+ AND active_watch.ended_seq IS NULL
 ORDER BY page.updated_at DESC, page.id;
 
 -- name: CountVisibleComponents :one
@@ -220,9 +233,39 @@ WHERE id = sqlc.arg(component_id)
 FOR UPDATE;
 
 -- name: SetComponentCurrentVersion :exec
-UPDATE component_repo.components
-SET current_version_id = sqlc.arg(version_id), status = 'active', updated_at = now()
-WHERE id = sqlc.arg(component_id) AND owner_id = sqlc.arg(actor_id);
+-- 发布事务切换 current Version 时同步维护规范化尺寸，避免 Star 筛选读取 Version 后逐行计算。
+WITH projection_source AS (
+    SELECT version.id AS version_id, version.component_id,
+           COALESCE(version.logical_width_stud, component.logical_width_stud) AS size_x,
+           COALESCE(version.logical_depth_stud, component.logical_depth_stud) AS size_y,
+           COALESCE(version.logical_height_plate, component.logical_height_plate) AS size_z
+    FROM component_repo.component_versions version
+    JOIN component_repo.components component ON component.id = version.component_id
+    WHERE version.id = sqlc.arg(version_id)
+      AND version.component_id = sqlc.arg(component_id)
+      AND version.status = 'published'
+      AND version.deleted_at IS NULL
+      AND component.owner_id = sqlc.arg(actor_id)
+), normalized AS (
+    SELECT version_id, component_id,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN LEAST(size_x, size_y, size_z) END AS size_a,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN size_x + size_y + size_z - LEAST(size_x, size_y, size_z) - GREATEST(size_x, size_y, size_z) END AS size_b,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN GREATEST(size_x, size_y, size_z) END AS size_c
+    FROM projection_source
+)
+UPDATE component_repo.components component
+SET current_version_id = normalized.version_id,
+    status = 'active',
+    current_logical_size_a = normalized.size_a,
+    current_logical_size_b = normalized.size_b,
+    current_logical_size_c = normalized.size_c,
+    updated_at = now()
+FROM normalized
+WHERE component.id = normalized.component_id
+  AND component.owner_id = sqlc.arg(actor_id);
 
 -- name: ComponentIsVisible :one
 SELECT EXISTS (

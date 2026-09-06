@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-for command_name in initdb pg_ctl pg_dump; do
+for command_name in initdb pg_ctl pg_dump curl; do
 	if ! command -v "$command_name" >/dev/null 2>&1; then
 		echo "required PostgreSQL command not found: $command_name" >&2
 		exit 1
@@ -49,7 +49,12 @@ go run ./cmd/migrate down
 go run ./cmd/migrate up
 go run ./cmd/migrate up
 go run ./cmd/migrate version
-go test -p=1 -tags=integration ./internal/database ./internal/component ./internal/artifact ./internal/task ./internal/worker ./internal/ingestion ./internal/workbench ./internal/httpapi ./internal/partlibrary
+# 百万级关系计划门禁只在显式开启时输出详细计划，避免日常集成测试产生大量日志。
+integration_test_flags=""
+if [ "${RUN_STAR_SIZE_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_LIST_PLAN_TEST:-0}" = "1" ]; then
+	integration_test_flags="-v"
+fi
+go test $integration_test_flags -p=1 -tags=integration ./internal/database ./internal/component ./internal/artifact ./internal/task ./internal/worker ./internal/ingestion ./internal/workbench ./internal/httpapi ./internal/partlibrary
 
 before_schema="$test_root/schema-before.sql"
 after_schema="$test_root/schema-after.sql"
@@ -59,7 +64,29 @@ GO_BACKEND_HOST=127.0.0.1 GO_BACKEND_PORT="$api_port" go run ./cmd/api >"$test_r
 api_pid=$!
 WORKER_ID=g2-contract-worker WORKER_HEALTH_CHECK_INTERVAL=1s go run ./cmd/worker >"$test_root/worker.log" 2>&1 &
 worker_pid=$!
-sleep 2
+
+# 启动契约同时验证真实 HTTP server 暴露固定指标，而不只验证内存 Handler。
+metrics_output=""
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+	if metrics_output=$(curl -fs --max-time 2 "http://127.0.0.1:$api_port/metrics"); then
+		break
+	fi
+	sleep 1
+done
+case "$metrics_output" in
+	*'component_domain_event_total{event_type="component.version.published.v1",result="committed"} 0'*) ;;
+	*)
+		echo "metrics startup contract failed" >&2
+		exit 1
+		;;
+esac
+case "$metrics_output" in
+	*'component_watch_mutation_total{action="watch",result="succeeded"} 0'*) ;;
+	*)
+		echo "watch mutation metrics startup contract failed" >&2
+		exit 1
+		;;
+esac
 kill "$api_pid" "$worker_pid"
 wait "$api_pid" || true
 wait "$worker_pid" || true

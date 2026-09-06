@@ -78,6 +78,8 @@
     "components": "/api/v1/components",
     "componentStars": "/api/v1/component-stars",
     "componentStar": "/api/v1/components/{componentId}/star",
+    "componentWatches": "/api/v1/component-watches",
+    "componentWatch": "/api/v1/components/{componentId}/watch",
     "componentGroups": "/api/v1/component-groups",
     "componentGroupsBootstrap": "/api/v1/component-groups/bootstrap",
     "componentGroup": "/api/v1/component-groups/{groupId}",
@@ -163,6 +165,7 @@
     "componentRepoImportHistory": "componentRepoImportHistory",
     "componentRepoImportStatus": "componentRepoImportStatus",
     "componentRepoCandidate": "componentRepoCandidate",
+    "componentRepoWatches": "componentRepoWatches",
     "componentRepoDetail": "componentRepoDetail"
   },
   "router": {
@@ -185,6 +188,7 @@
     "componentRepoImportHistory": "/component-repo/imports",
     "componentRepoImportStatus": "/component-repo/imports/:importId",
     "componentRepoCandidate": "/component-repo/candidates/:candidateId",
+    "componentRepoWatches": "/component-repo/watches",
     "componentRepoDetail": "/component-repo/components/:componentId"
   },
   "topbar": {

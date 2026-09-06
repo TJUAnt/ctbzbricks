@@ -30,6 +30,11 @@ export type ComponentResponse = {
   createdBy?: string;
   starredByActor: boolean;
   starCount: number;
+  watch?: {
+    watching: boolean;
+    level: 'releases_only' | null;
+    watchedAt: string | null;
+  };
   translationMissing?: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -39,6 +44,33 @@ export type ComponentResponse = {
 export type ComponentStarResponse = {
   componentId: string;
   starredAt: string;
+};
+
+export type ComponentWatchResponse = {
+  componentId: string;
+  watching: true;
+  level: 'releases_only';
+  watchedAt: string;
+};
+
+export type ComponentWatchListItemResponse = {
+  componentId: string;
+  contentKind: 'official' | 'user';
+  contentLocale: 'zh-CN' | 'en-US';
+  name: string;
+  category: string | null;
+  currentVersionId: string | null;
+  version: string | null;
+  revision: number | null;
+  publishedAt: string | null;
+  level: 'releases_only';
+  watchedAt: string;
+  translationMissing: boolean;
+};
+
+export type ComponentWatchPageResponse = {
+  items: ComponentWatchListItemResponse[];
+  nextCursor: string | null;
 };
 
 export type StarredComponentResponse = ComponentResponse & {
@@ -629,6 +661,36 @@ export async function starComponent(componentId: string): Promise<ComponentStarR
 /** 幂等取消当前用户与 Component 的收藏关系。 */
 export async function unstarComponent(componentId: string): Promise<void> {
   await requestVoid(pathFor('componentStar', { componentId }), { method: 'DELETE' });
+}
+
+/** 显式订阅 Component 的新版本发布；Watch 与 Star 使用独立关系和 API。 */
+export async function watchComponent(componentId: string): Promise<ComponentWatchResponse> {
+  return requestJson<ComponentWatchResponse>(pathFor('componentWatch', { componentId }), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ level: 'releases_only' }),
+  });
+}
+
+/** 幂等取消当前 actor 的更新订阅，不改变 Star 或 Component 权限。 */
+export async function unwatchComponent(componentId: string): Promise<void> {
+  await requestVoid(pathFor('componentWatch', { componentId }), { method: 'DELETE' });
+}
+
+/** 使用服务端不透明 keyset cursor 读取当前 actor 的 active Watch。 */
+export async function listComponentWatches(payload: {
+  limit?: number;
+  cursor?: string;
+  query?: string;
+  category?: string;
+} = {}): Promise<ComponentWatchPageResponse> {
+  const url = new URL(appConfig.componentRepoApi.componentWatches, window.location.origin);
+  url.searchParams.set('locale', currentTaskContext().locale);
+  if (payload.limit) url.searchParams.set('limit', String(payload.limit));
+  if (payload.cursor) url.searchParams.set('cursor', payload.cursor);
+  if (payload.query) url.searchParams.set('query', payload.query);
+  if (payload.category) url.searchParams.set('category', payload.category);
+  return requestJson<ComponentWatchPageResponse>(url.toString());
 }
 
 export async function listComponentGroups(): Promise<ComponentGroupTreeResponse> {

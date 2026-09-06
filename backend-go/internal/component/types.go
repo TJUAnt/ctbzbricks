@@ -38,7 +38,7 @@ type StarListRequest struct {
 	Sort     string
 }
 
-// StarPage 返回稳定分页的个人收藏；RelationshipTotal 仅用于区分“从未收藏”和“关系存在但目标不可见”。
+// StarPage 返回稳定分页的个人收藏；RelationshipTotal 只诊断删除清理完成前短暂存在的隐藏关系。
 type StarPage struct {
 	Items             []StarredComponent `json:"items"`
 	Page              int                `json:"page"`
@@ -48,7 +48,7 @@ type StarPage struct {
 	RelationshipTotal int64              `json:"relationshipTotal"`
 }
 
-// Component 是面向当前 actor 的展示投影；Star 字段只描述收藏关系与聚合计数，不授予权限。
+// Component 是面向当前 actor 的展示投影；Star 与 Watch 都不授予资源权限。
 type Component struct {
 	ID                 string          `json:"id"`
 	OwnerID            *string         `json:"ownerId"`
@@ -65,9 +65,17 @@ type Component struct {
 	OwnedByActor       bool            `json:"ownedByActor"`
 	StarredByActor     bool            `json:"starredByActor"`
 	StarCount          int64           `json:"starCount"`
+	Watch              *WatchState     `json:"watch,omitempty"`
 	TranslationMissing bool            `json:"translationMissing"`
 	CreatedAt          time.Time       `json:"createdAt"`
 	UpdatedAt          time.Time       `json:"updatedAt"`
+}
+
+// WatchState 是当前 actor 的 Component 更新订阅投影；Level 是稳定机器值，不在 API 层翻译。
+type WatchState struct {
+	Watching  bool       `json:"watching"`
+	Level     *string    `json:"level"`
+	WatchedAt *time.Time `json:"watchedAt"`
 }
 
 type LogicalSize struct {

@@ -8,10 +8,12 @@ import (
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/artifact"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/auth"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/component"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentwatch"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/config"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/database"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/health"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/ingestion"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/observability"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/workbench"
@@ -20,16 +22,19 @@ import (
 )
 
 func NewRouter(cfg config.Config, databasePinger database.Pinger, logger *slog.Logger) *gin.Engine {
-	return newRouter(cfg, databasePinger, logger, nil, nil, nil, nil, nil, nil)
+	return newRouter(cfg, databasePinger, logger, observability.NewRegistry(), nil, nil, nil, nil, nil, nil, nil)
 }
 
 func NewApplicationRouter(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) *gin.Engine {
 	objectStore := storage.New(cfg.Storage)
+	metrics := observability.NewRegistry()
 	return newRouter(
 		cfg,
 		pool,
 		logger,
-		component.NewHandler(component.NewService(pool), logger),
+		metrics,
+		component.NewHandler(component.NewService(pool).WithMetrics(metrics), logger),
+		componentwatch.NewHandler(componentwatch.NewService(pool).WithMetrics(metrics), logger),
 		artifact.NewHandler(artifact.NewService(pool, objectStore, cfg.Storage).WithImportConfig(cfg.Import).WithLogger(logger), logger),
 		ingestion.NewHandler(ingestion.NewService(pool), logger),
 		task.NewHTTPHandler(task.NewService(pool), logger),
@@ -42,7 +47,9 @@ func newRouter(
 	cfg config.Config,
 	databasePinger database.Pinger,
 	logger *slog.Logger,
+	metrics *observability.Registry,
 	componentHandler *component.Handler,
+	componentWatchHandler *componentwatch.Handler,
 	artifactHandler *artifact.Handler,
 	ingestionHandler *ingestion.Handler,
 	taskHandler *task.HTTPHandler,
@@ -68,12 +75,17 @@ func newRouter(
 	healthHandler := health.NewHandler(databasePinger, cfg.Database.ConnectTimeout, logger)
 	router.GET("/health/live", healthHandler.Live)
 	router.GET("/health/ready", healthHandler.Ready)
+	// 指标只包含冻结机器标签；生产入口仍必须把该路径限制在内部监控网络。
+	router.GET("/metrics", gin.WrapH(metrics))
 	if verifier != nil {
 		apiV1 := router.Group("/api/v1", authenticationMiddleware(verifier))
 		// 页面刷新只通过这个 Go 入口二次确认 Supabase 会话；普通业务 API 仍只承担本地 JWT 校验。
 		auth.NewSessionHandler(auth.NewSupabaseSessionValidator(cfg.Auth), logger).Register(apiV1)
 		if componentHandler != nil {
 			componentHandler.Register(apiV1)
+		}
+		if componentWatchHandler != nil {
+			componentWatchHandler.Register(apiV1)
 		}
 		if artifactHandler != nil {
 			artifactHandler.Register(apiV1)

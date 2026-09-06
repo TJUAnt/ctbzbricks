@@ -12,106 +12,82 @@ import (
 )
 
 const countStarredComponents = `-- name: CountStarredComponents :one
+WITH actor_stars AS MATERIALIZED (
+    SELECT star.component_id, star.starred_at
+    FROM component_repo.component_stars star
+    WHERE star.actor_id = $8
+)
 SELECT count(*)::bigint AS total,
        (SELECT count(*)::bigint
-        FROM component_repo.component_stars actor_star
-        WHERE actor_star.actor_id = $1) AS relationship_total
-FROM component_repo.component_stars star
+        FROM actor_stars) AS relationship_total
+FROM actor_stars star
 JOIN component_repo.components component ON component.id = star.component_id
-LEFT JOIN LATERAL (
-    SELECT version.logical_width_stud, version.logical_depth_stud,
-           version.logical_height_plate
+JOIN LATERAL (
+    SELECT true AS available
     FROM component_repo.component_versions version
-    WHERE version.id = component.current_version_id
+    WHERE version.component_id = component.id
       AND version.deleted_at IS NULL
+      AND version.status <> 'draft'
     LIMIT 1
-) display_version ON $2::integer <> 0
-LEFT JOIN LATERAL (
-    SELECT LEAST(COALESCE(display_version.logical_width_stud, component.logical_width_stud),
-                 COALESCE(display_version.logical_depth_stud, component.logical_depth_stud),
-                 COALESCE(display_version.logical_height_plate, component.logical_height_plate))::double precision AS size_a,
-           (COALESCE(display_version.logical_width_stud, component.logical_width_stud)
-            + COALESCE(display_version.logical_depth_stud, component.logical_depth_stud)
-            + COALESCE(display_version.logical_height_plate, component.logical_height_plate)
-            - LEAST(COALESCE(display_version.logical_width_stud, component.logical_width_stud),
-                    COALESCE(display_version.logical_depth_stud, component.logical_depth_stud),
-                    COALESCE(display_version.logical_height_plate, component.logical_height_plate))
-            - GREATEST(COALESCE(display_version.logical_width_stud, component.logical_width_stud),
-                       COALESCE(display_version.logical_depth_stud, component.logical_depth_stud),
-                       COALESCE(display_version.logical_height_plate, component.logical_height_plate)))::double precision AS size_b,
-           GREATEST(COALESCE(display_version.logical_width_stud, component.logical_width_stud),
-                    COALESCE(display_version.logical_depth_stud, component.logical_depth_stud),
-                    COALESCE(display_version.logical_height_plate, component.logical_height_plate))::double precision AS size_c
-    WHERE COALESCE(display_version.logical_width_stud, component.logical_width_stud) IS NOT NULL
-      AND COALESCE(display_version.logical_depth_stud, component.logical_depth_stud) IS NOT NULL
-      AND COALESCE(display_version.logical_height_plate, component.logical_height_plate) IS NOT NULL
-) normalized_size ON $2::integer <> 0
+) public_version ON true
 LEFT JOIN LATERAL (
     SELECT translation.id, translation.name
     FROM component_repo.component_translations translation
     WHERE component.content_kind = 'official'
-      AND $3::text <> ''
+      AND $1::text <> ''
       AND translation.component_id = component.id
-      AND translation.locale = $4
+      AND translation.locale = $2
       AND translation.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
-WHERE star.actor_id = $1
-  AND component.deleted_at IS NULL
+WHERE component.deleted_at IS NULL
   AND component.status = 'active'
-  AND EXISTS (
-      SELECT 1
-      FROM component_repo.component_versions version
-      WHERE version.component_id = component.id
-        AND version.deleted_at IS NULL
-        AND version.status <> 'draft'
-  )
-  AND ($5::text = '' OR component.category = $5)
+  AND ($3::text = '' OR component.category = $3)
   AND (
-      $3::text = ''
+      $1::text = ''
       OR CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END
-         ILIKE '%' || $3 || '%'
-      OR component.id::text ILIKE '%' || $3 || '%'
+         ILIKE '%' || $1 || '%'
+      OR component.id::text ILIKE '%' || $1 || '%'
   )
   AND (
-      $2::integer = 0
+      $4::integer = 0
       OR COALESCE(
-          ($2::integer = 3
-           AND normalized_size.size_a > $6::double precision - 1
-           AND normalized_size.size_a < $6::double precision + 1
-           AND normalized_size.size_b > $7::double precision - 1
-           AND normalized_size.size_b < $7::double precision + 1
-           AND normalized_size.size_c > $8::double precision - 1
-           AND normalized_size.size_c < $8::double precision + 1)
+          ($4::integer = 3
+           AND component.current_logical_size_a > $5::double precision - 1
+           AND component.current_logical_size_a < $5::double precision + 1
+           AND component.current_logical_size_b > $6::double precision - 1
+           AND component.current_logical_size_b < $6::double precision + 1
+           AND component.current_logical_size_c > $7::double precision - 1
+           AND component.current_logical_size_c < $7::double precision + 1)
           OR
-          ($2::integer = 2 AND (
-              (normalized_size.size_a > $6::double precision - 1
-               AND normalized_size.size_a < $6::double precision + 1
-               AND normalized_size.size_b > $7::double precision - 1
-               AND normalized_size.size_b < $7::double precision + 1)
+          ($4::integer = 2 AND (
+              (component.current_logical_size_a > $5::double precision - 1
+               AND component.current_logical_size_a < $5::double precision + 1
+               AND component.current_logical_size_b > $6::double precision - 1
+               AND component.current_logical_size_b < $6::double precision + 1)
               OR
-              (normalized_size.size_a > $6::double precision - 1
-               AND normalized_size.size_a < $6::double precision + 1
-               AND normalized_size.size_c > $7::double precision - 1
-               AND normalized_size.size_c < $7::double precision + 1)
+              (component.current_logical_size_a > $5::double precision - 1
+               AND component.current_logical_size_a < $5::double precision + 1
+               AND component.current_logical_size_c > $6::double precision - 1
+               AND component.current_logical_size_c < $6::double precision + 1)
               OR
-              (normalized_size.size_b > $6::double precision - 1
-               AND normalized_size.size_b < $6::double precision + 1
-               AND normalized_size.size_c > $7::double precision - 1
-               AND normalized_size.size_c < $7::double precision + 1)
+              (component.current_logical_size_b > $5::double precision - 1
+               AND component.current_logical_size_b < $5::double precision + 1
+               AND component.current_logical_size_c > $6::double precision - 1
+               AND component.current_logical_size_c < $6::double precision + 1)
           )), false)
   )
 `
 
 type CountStarredComponentsParams struct {
-	ActorID            pgtype.UUID
-	SizeDimensionCount int32
 	SearchQuery        string
 	Locale             string
 	CategoryFilter     string
+	SizeDimensionCount int32
 	SizeA              float64
 	SizeB              float64
 	SizeC              float64
+	ActorID            pgtype.UUID
 }
 
 type CountStarredComponentsRow struct {
@@ -119,17 +95,17 @@ type CountStarredComponentsRow struct {
 	RelationshipTotal int64
 }
 
-// 收藏尺寸过滤与分组搜索共享“忽略 Box 轴方向”的升序归一化规则。
+// 先物化 actor 的有界权威关系集，再逐候选探测 Component 与可公开 Version；避免空/稀疏 actor 先构建全库哈希。
 func (q *Queries) CountStarredComponents(ctx context.Context, arg CountStarredComponentsParams) (CountStarredComponentsRow, error) {
 	row := q.db.QueryRow(ctx, countStarredComponents,
-		arg.ActorID,
-		arg.SizeDimensionCount,
 		arg.SearchQuery,
 		arg.Locale,
 		arg.CategoryFilter,
+		arg.SizeDimensionCount,
 		arg.SizeA,
 		arg.SizeB,
 		arg.SizeC,
+		arg.ActorID,
 	)
 	var i CountStarredComponentsRow
 	err := row.Scan(&i.Total, &i.RelationshipTotal)
@@ -179,6 +155,50 @@ func (q *Queries) DeleteComponentStar(ctx context.Context, arg DeleteComponentSt
 	return component_id, err
 }
 
+const deleteComponentStarsForLifecycleBatch = `-- name: DeleteComponentStarsForLifecycleBatch :many
+WITH batch AS MATERIALIZED (
+    SELECT star.actor_id
+    FROM component_repo.component_stars star
+    WHERE star.component_id = $1
+      AND star.actor_id >= $2
+    ORDER BY star.actor_id
+    LIMIT $3
+    FOR UPDATE
+)
+DELETE FROM component_repo.component_stars star
+USING batch
+WHERE star.component_id = $1
+  AND star.actor_id = batch.actor_id
+RETURNING star.actor_id
+`
+
+type DeleteComponentStarsForLifecycleBatchParams struct {
+	ComponentID  pgtype.UUID
+	AfterActorID pgtype.UUID
+	BatchSize    int32
+}
+
+// Star 是当前收藏状态而不是审计账本；Worker 按 Component 索引和 actor 游标分批物理删除，重试天然幂等。
+func (q *Queries) DeleteComponentStarsForLifecycleBatch(ctx context.Context, arg DeleteComponentStarsForLifecycleBatchParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, deleteComponentStarsForLifecycleBatch, arg.ComponentID, arg.AfterActorID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var actor_id pgtype.UUID
+		if err := rows.Scan(&actor_id); err != nil {
+			return nil, err
+		}
+		items = append(items, actor_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getComponentStarTarget = `-- name: GetComponentStarTarget :one
 SELECT component.id, component.owner_id, component.status,
        EXISTS (
@@ -226,7 +246,12 @@ func (q *Queries) GetComponentStarTarget(ctx context.Context, arg GetComponentSt
 }
 
 const listStarredComponents = `-- name: ListStarredComponents :many
-WITH page AS MATERIALIZED (
+WITH actor_stars AS MATERIALIZED (
+    -- 该候选集受当前产品每 actor 1,000 条 Star 包络约束；物化用于阻止规划器改从全 Component/Version 驱动。
+    SELECT star.component_id, star.starred_at
+    FROM component_repo.component_stars star
+    WHERE star.actor_id = $1
+), page AS MATERIALIZED (
 SELECT component.id, component.owner_id, component.content_kind,
        (CASE WHEN translation.id IS NULL THEN component.content_locale ELSE translation.locale END)::text AS selected_content_locale,
        (CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END)::text AS selected_name,
@@ -234,65 +259,34 @@ SELECT component.id, component.owner_id, component.content_kind,
        (CASE WHEN translation.id IS NULL THEN component.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
        (CASE WHEN translation.id IS NULL THEN component.tags ELSE translation.tags END)::text[] AS selected_tags,
        component.category, component.status, component.current_version_id,
-       COALESCE(display_version.logical_width_stud, component.logical_width_stud) AS logical_width_stud,
-       COALESCE(display_version.logical_depth_stud, component.logical_depth_stud) AS logical_depth_stud,
-       COALESCE(display_version.logical_height_plate, component.logical_height_plate) AS logical_height_plate,
+       component.logical_width_stud, component.logical_depth_stud, component.logical_height_plate,
        component.metadata, component.created_at, component.updated_at,
        false::boolean AS owned_by_actor,
-       (component.content_kind = 'official' AND component.content_locale <> $1
+       (component.content_kind = 'official' AND component.content_locale <> $2
         AND translation.id IS NULL)::boolean AS translation_missing,
        true::boolean AS starred_by_actor,
        star.starred_at
-FROM component_repo.component_stars star
+FROM actor_stars star
 JOIN component_repo.components component ON component.id = star.component_id
-LEFT JOIN LATERAL (
-    SELECT version.logical_width_stud, version.logical_depth_stud,
-           version.logical_height_plate
+JOIN LATERAL (
+    SELECT true AS available
     FROM component_repo.component_versions version
     WHERE version.component_id = component.id
       AND version.deleted_at IS NULL
-      AND version.id = component.current_version_id
+      AND version.status <> 'draft'
     LIMIT 1
-) display_version ON true
-LEFT JOIN LATERAL (
-    SELECT LEAST(COALESCE(display_version.logical_width_stud, component.logical_width_stud),
-                 COALESCE(display_version.logical_depth_stud, component.logical_depth_stud),
-                 COALESCE(display_version.logical_height_plate, component.logical_height_plate))::double precision AS size_a,
-           (COALESCE(display_version.logical_width_stud, component.logical_width_stud)
-            + COALESCE(display_version.logical_depth_stud, component.logical_depth_stud)
-            + COALESCE(display_version.logical_height_plate, component.logical_height_plate)
-            - LEAST(COALESCE(display_version.logical_width_stud, component.logical_width_stud),
-                    COALESCE(display_version.logical_depth_stud, component.logical_depth_stud),
-                    COALESCE(display_version.logical_height_plate, component.logical_height_plate))
-            - GREATEST(COALESCE(display_version.logical_width_stud, component.logical_width_stud),
-                       COALESCE(display_version.logical_depth_stud, component.logical_depth_stud),
-                       COALESCE(display_version.logical_height_plate, component.logical_height_plate)))::double precision AS size_b,
-           GREATEST(COALESCE(display_version.logical_width_stud, component.logical_width_stud),
-                    COALESCE(display_version.logical_depth_stud, component.logical_depth_stud),
-                    COALESCE(display_version.logical_height_plate, component.logical_height_plate))::double precision AS size_c
-    WHERE COALESCE(display_version.logical_width_stud, component.logical_width_stud) IS NOT NULL
-      AND COALESCE(display_version.logical_depth_stud, component.logical_depth_stud) IS NOT NULL
-      AND COALESCE(display_version.logical_height_plate, component.logical_height_plate) IS NOT NULL
-) normalized_size ON true
+) public_version ON true
 LEFT JOIN LATERAL (
     SELECT item.id, item.locale, item.name, item.description, item.tags
     FROM component_repo.component_translations item
     WHERE component.content_kind = 'official'
       AND item.component_id = component.id
-      AND item.locale = $1
+      AND item.locale = $2
       AND item.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
-WHERE star.actor_id = $2
-  AND component.deleted_at IS NULL
+WHERE component.deleted_at IS NULL
   AND component.status = 'active'
-  AND EXISTS (
-      SELECT 1
-      FROM component_repo.component_versions version
-      WHERE version.component_id = component.id
-        AND version.deleted_at IS NULL
-        AND version.status <> 'draft'
-  )
   AND ($3::text = '' OR component.category = $3)
   AND (
       $4::text = ''
@@ -304,28 +298,28 @@ WHERE star.actor_id = $2
       $5::integer = 0
       OR COALESCE(
           ($5::integer = 3
-           AND normalized_size.size_a > $6::double precision - 1
-           AND normalized_size.size_a < $6::double precision + 1
-           AND normalized_size.size_b > $7::double precision - 1
-           AND normalized_size.size_b < $7::double precision + 1
-           AND normalized_size.size_c > $8::double precision - 1
-           AND normalized_size.size_c < $8::double precision + 1)
+           AND component.current_logical_size_a > $6::double precision - 1
+           AND component.current_logical_size_a < $6::double precision + 1
+           AND component.current_logical_size_b > $7::double precision - 1
+           AND component.current_logical_size_b < $7::double precision + 1
+           AND component.current_logical_size_c > $8::double precision - 1
+           AND component.current_logical_size_c < $8::double precision + 1)
           OR
           ($5::integer = 2 AND (
-              (normalized_size.size_a > $6::double precision - 1
-               AND normalized_size.size_a < $6::double precision + 1
-               AND normalized_size.size_b > $7::double precision - 1
-               AND normalized_size.size_b < $7::double precision + 1)
+              (component.current_logical_size_a > $6::double precision - 1
+               AND component.current_logical_size_a < $6::double precision + 1
+               AND component.current_logical_size_b > $7::double precision - 1
+               AND component.current_logical_size_b < $7::double precision + 1)
               OR
-              (normalized_size.size_a > $6::double precision - 1
-               AND normalized_size.size_a < $6::double precision + 1
-               AND normalized_size.size_c > $7::double precision - 1
-               AND normalized_size.size_c < $7::double precision + 1)
+              (component.current_logical_size_a > $6::double precision - 1
+               AND component.current_logical_size_a < $6::double precision + 1
+               AND component.current_logical_size_c > $7::double precision - 1
+               AND component.current_logical_size_c < $7::double precision + 1)
               OR
-              (normalized_size.size_b > $6::double precision - 1
-               AND normalized_size.size_b < $6::double precision + 1
-               AND normalized_size.size_c > $7::double precision - 1
-               AND normalized_size.size_c < $7::double precision + 1)
+              (component.current_logical_size_b > $6::double precision - 1
+               AND component.current_logical_size_b < $6::double precision + 1
+               AND component.current_logical_size_c > $7::double precision - 1
+               AND component.current_logical_size_c < $7::double precision + 1)
           )), false)
   )
 ORDER BY star.starred_at DESC, component.id
@@ -340,19 +334,31 @@ LIMIT $10 OFFSET $9
 SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        page.selected_name, page.selected_description, page.has_description,
        page.selected_tags, page.category, page.status, page.current_version_id,
-       page.logical_width_stud, page.logical_depth_stud, page.logical_height_plate,
+       COALESCE(display_version.logical_width_stud, page.logical_width_stud) AS logical_width_stud,
+       COALESCE(display_version.logical_depth_stud, page.logical_depth_stud) AS logical_depth_stud,
+       COALESCE(display_version.logical_height_plate, page.logical_height_plate) AS logical_height_plate,
        page.metadata, page.created_at, page.updated_at, page.owned_by_actor,
        page.translation_missing, page.starred_by_actor,
        COALESCE(page_star_counts.star_count, 0)::bigint AS star_count,
        page.starred_at
 FROM page
+LEFT JOIN LATERAL (
+    -- 原始有方向尺寸仅服务最终展示；必须在 page 固定后读取，不能扩大到 actor 的全部候选。
+    SELECT version.logical_width_stud, version.logical_depth_stud,
+           version.logical_height_plate
+    FROM component_repo.component_versions version
+    WHERE version.component_id = page.id
+      AND version.deleted_at IS NULL
+      AND version.id = page.current_version_id
+    LIMIT 1
+) display_version ON true
 LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
 ORDER BY page.starred_at DESC, page.id
 `
 
 type ListStarredComponentsParams struct {
-	Locale             string
 	ActorID            pgtype.UUID
+	Locale             string
 	CategoryFilter     string
 	SearchQuery        string
 	SizeDimensionCount int32
@@ -388,11 +394,11 @@ type ListStarredComponentsRow struct {
 	StarredAt             pgtype.Timestamptz
 }
 
-// 收藏列表只投影仍公开可见的 Component；关系本身保留，以便未来重新激活后恢复个人收藏。
+// 收藏列表只投影仍公开可见的 Component；归档/删除提交后立即隐藏，v17 Worker 最终物理删除关系且不恢复。
 func (q *Queries) ListStarredComponents(ctx context.Context, arg ListStarredComponentsParams) ([]ListStarredComponentsRow, error) {
 	rows, err := q.db.Query(ctx, listStarredComponents,
-		arg.Locale,
 		arg.ActorID,
+		arg.Locale,
 		arg.CategoryFilter,
 		arg.SearchQuery,
 		arg.SizeDimensionCount,

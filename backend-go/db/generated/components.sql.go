@@ -114,7 +114,29 @@ type CreateComponentParams struct {
 	CreatedBy     pgtype.UUID
 }
 
-func (q *Queries) CreateComponent(ctx context.Context, arg CreateComponentParams) (ComponentRepoComponent, error) {
+type CreateComponentRow struct {
+	ID                 pgtype.UUID
+	OwnerID            pgtype.UUID
+	ContentKind        string
+	ContentLocale      string
+	Name               string
+	Description        *string
+	Tags               []string
+	Category           *string
+	Status             string
+	CurrentVersionID   pgtype.UUID
+	LogicalWidthStud   pgtype.Numeric
+	LogicalDepthStud   pgtype.Numeric
+	LogicalHeightPlate pgtype.Numeric
+	Metadata           []byte
+	CreatedBy          pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	DeletedAt          pgtype.Timestamptz
+	DeletedBy          pgtype.UUID
+}
+
+func (q *Queries) CreateComponent(ctx context.Context, arg CreateComponentParams) (CreateComponentRow, error) {
 	row := q.db.QueryRow(ctx, createComponent,
 		arg.ID,
 		arg.OwnerID,
@@ -125,7 +147,7 @@ func (q *Queries) CreateComponent(ctx context.Context, arg CreateComponentParams
 		arg.Category,
 		arg.CreatedBy,
 	)
-	var i ComponentRepoComponent
+	var i CreateComponentRow
 	err := row.Scan(
 		&i.ID,
 		&i.OwnerID,
@@ -171,6 +193,9 @@ SELECT c.id, c.owner_id, c.content_kind,
            WHERE star.actor_id = $1
              AND star.component_id = c.id
        ) AS starred_by_actor,
+       (active_watch.actor_id IS NOT NULL)::boolean AS watching_by_actor,
+       active_watch.watch_level,
+       active_watch.watched_at,
        (SELECT count(*)::bigint
         FROM component_repo.component_stars aggregate_star
         WHERE aggregate_star.component_id = c.id)::bigint AS star_count
@@ -198,6 +223,10 @@ LEFT JOIN LATERAL (
       AND t.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
+LEFT JOIN component_repo.component_watch_periods active_watch
+  ON active_watch.actor_id = $1
+ AND active_watch.component_id = c.id
+ AND active_watch.ended_seq IS NULL
 WHERE c.id = $3
   AND c.deleted_at IS NULL
   AND (c.owner_id = $1 OR c.status = 'active')
@@ -231,6 +260,9 @@ type GetVisibleComponentRow struct {
 	OwnedByActor          bool
 	TranslationMissing    bool
 	StarredByActor        bool
+	WatchingByActor       bool
+	WatchLevel            *string
+	WatchedAt             pgtype.Timestamptz
 	StarCount             int64
 }
 
@@ -259,6 +291,9 @@ func (q *Queries) GetVisibleComponent(ctx context.Context, arg GetVisibleCompone
 		&i.OwnedByActor,
 		&i.TranslationMissing,
 		&i.StarredByActor,
+		&i.WatchingByActor,
+		&i.WatchLevel,
+		&i.WatchedAt,
 		&i.StarCount,
 	)
 	return i, err
@@ -345,9 +380,15 @@ SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        page.logical_width_stud, page.logical_depth_stud, page.logical_height_plate,
        page.metadata, page.created_by, page.created_at, page.updated_at,
        page.owned_by_actor, page.translation_missing, page.starred_by_actor,
+       (active_watch.actor_id IS NOT NULL)::boolean AS watching_by_actor,
+       active_watch.watch_level, active_watch.watched_at,
        COALESCE(page_star_counts.star_count, 0)::bigint AS star_count
 FROM page
 LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
+LEFT JOIN component_repo.component_watch_periods active_watch
+  ON active_watch.actor_id = $1
+ AND active_watch.component_id = page.id
+ AND active_watch.ended_seq IS NULL
 ORDER BY page.updated_at DESC, page.id
 `
 
@@ -383,6 +424,9 @@ type ListVisibleComponentsRow struct {
 	OwnedByActor          bool
 	TranslationMissing    bool
 	StarredByActor        bool
+	WatchingByActor       bool
+	WatchLevel            *string
+	WatchedAt             pgtype.Timestamptz
 	StarCount             int64
 }
 
@@ -425,6 +469,9 @@ func (q *Queries) ListVisibleComponents(ctx context.Context, arg ListVisibleComp
 			&i.OwnedByActor,
 			&i.TranslationMissing,
 			&i.StarredByActor,
+			&i.WatchingByActor,
+			&i.WatchLevel,
+			&i.WatchedAt,
 			&i.StarCount,
 		); err != nil {
 			return nil, err
@@ -466,19 +513,49 @@ func (q *Queries) LockOwnedComponent(ctx context.Context, arg LockOwnedComponent
 }
 
 const setComponentCurrentVersion = `-- name: SetComponentCurrentVersion :exec
-UPDATE component_repo.components
-SET current_version_id = $1, status = 'active', updated_at = now()
-WHERE id = $2 AND owner_id = $3
+WITH projection_source AS (
+    SELECT version.id AS version_id, version.component_id,
+           COALESCE(version.logical_width_stud, component.logical_width_stud) AS size_x,
+           COALESCE(version.logical_depth_stud, component.logical_depth_stud) AS size_y,
+           COALESCE(version.logical_height_plate, component.logical_height_plate) AS size_z
+    FROM component_repo.component_versions version
+    JOIN component_repo.components component ON component.id = version.component_id
+    WHERE version.id = $2
+      AND version.component_id = $3
+      AND version.status = 'published'
+      AND version.deleted_at IS NULL
+      AND component.owner_id = $1
+), normalized AS (
+    SELECT version_id, component_id,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN LEAST(size_x, size_y, size_z) END AS size_a,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN size_x + size_y + size_z - LEAST(size_x, size_y, size_z) - GREATEST(size_x, size_y, size_z) END AS size_b,
+           CASE WHEN size_x IS NOT NULL AND size_y IS NOT NULL AND size_z IS NOT NULL
+                THEN GREATEST(size_x, size_y, size_z) END AS size_c
+    FROM projection_source
+)
+UPDATE component_repo.components component
+SET current_version_id = normalized.version_id,
+    status = 'active',
+    current_logical_size_a = normalized.size_a,
+    current_logical_size_b = normalized.size_b,
+    current_logical_size_c = normalized.size_c,
+    updated_at = now()
+FROM normalized
+WHERE component.id = normalized.component_id
+  AND component.owner_id = $1
 `
 
 type SetComponentCurrentVersionParams struct {
+	ActorID     pgtype.UUID
 	VersionID   pgtype.UUID
 	ComponentID pgtype.UUID
-	ActorID     pgtype.UUID
 }
 
+// 发布事务切换 current Version 时同步维护规范化尺寸，避免 Star 筛选读取 Version 后逐行计算。
 func (q *Queries) SetComponentCurrentVersion(ctx context.Context, arg SetComponentCurrentVersionParams) error {
-	_, err := q.db.Exec(ctx, setComponentCurrentVersion, arg.VersionID, arg.ComponentID, arg.ActorID)
+	_, err := q.db.Exec(ctx, setComponentCurrentVersion, arg.ActorID, arg.VersionID, arg.ComponentID)
 	return err
 }
 
@@ -537,7 +614,29 @@ type UpdateOwnedComponentParams struct {
 	ActorID          pgtype.UUID
 }
 
-func (q *Queries) UpdateOwnedComponent(ctx context.Context, arg UpdateOwnedComponentParams) (ComponentRepoComponent, error) {
+type UpdateOwnedComponentRow struct {
+	ID                 pgtype.UUID
+	OwnerID            pgtype.UUID
+	ContentKind        string
+	ContentLocale      string
+	Name               string
+	Description        *string
+	Tags               []string
+	Category           *string
+	Status             string
+	CurrentVersionID   pgtype.UUID
+	LogicalWidthStud   pgtype.Numeric
+	LogicalDepthStud   pgtype.Numeric
+	LogicalHeightPlate pgtype.Numeric
+	Metadata           []byte
+	CreatedBy          pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	DeletedAt          pgtype.Timestamptz
+	DeletedBy          pgtype.UUID
+}
+
+func (q *Queries) UpdateOwnedComponent(ctx context.Context, arg UpdateOwnedComponentParams) (UpdateOwnedComponentRow, error) {
 	row := q.db.QueryRow(ctx, updateOwnedComponent,
 		arg.SetName,
 		arg.Name,
@@ -552,7 +651,7 @@ func (q *Queries) UpdateOwnedComponent(ctx context.Context, arg UpdateOwnedCompo
 		arg.ComponentID,
 		arg.ActorID,
 	)
-	var i ComponentRepoComponent
+	var i UpdateOwnedComponentRow
 	err := row.Scan(
 		&i.ID,
 		&i.OwnerID,

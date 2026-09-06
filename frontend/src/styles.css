@@ -4981,6 +4981,7 @@ button {
   padding: 0 18px;
   font-size: 14px;
   font-weight: 750;
+  text-decoration: none;
 }
 
 .component-library-tab svg {
@@ -5170,6 +5171,42 @@ button {
   border-bottom: 1px solid #edf0f4;
   background: #fbfcfe;
   padding: 13px 22px;
+}
+
+.component-watch-toolbar {
+  grid-template-columns: minmax(240px, 1fr) minmax(190px, auto) auto;
+}
+
+.component-watch-toolbar-actions,
+.component-watch-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.component-watch-toolbar-actions .component-repo-secondary-button {
+  min-height: 38px;
+}
+
+.component-watch-table-grid {
+  grid-template-columns: minmax(220px, 1.35fr) minmax(170px, 1fr) minmax(150px, 0.8fr) 148px minmax(210px, 0.8fr);
+}
+
+.component-watch-version {
+  display: grid;
+  gap: 4px;
+  color: #32455d;
+  font-size: 12px;
+}
+
+.component-watch-version span {
+  color: #8a96a6;
+  font-size: 10px;
+}
+
+.component-watch-actions button {
+  color: #a43737;
 }
 
 .component-library-search-form {
@@ -6529,6 +6566,20 @@ button {
     grid-column: 1 / -1;
     grid-row: 2;
     width: min(100%, 280px);
+  }
+
+  .component-watch-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .component-watch-toolbar .component-library-category-filter,
+  .component-watch-toolbar-actions {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+
+  .component-watch-toolbar-actions {
+    justify-content: flex-start;
   }
 
   .component-library-table {

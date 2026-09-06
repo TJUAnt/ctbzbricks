@@ -12,7 +12,10 @@ import (
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentactivity"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentdiff"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/observability"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -21,10 +24,11 @@ import (
 )
 
 const (
-	defaultPageSize     = 20
-	maxPageSize         = 100
-	maxGroupDepth       = 5
-	maxSearchConditions = 8
+	defaultPageSize                = 20
+	maxPageSize                    = 100
+	maxGroupDepth                  = 5
+	maxSearchConditions            = 8
+	watchEndReasonComponentDeleted = "component_deleted"
 )
 
 var componentSizeQueryPattern = regexp.MustCompile(`^\s*(\d+(?:\.\d+)?|\.\d+)\s*[xX×]\s*(\d+(?:\.\d+)?|\.\d+)(?:\s*[xX×]\s*(\d+(?:\.\d+)?|\.\d+))?\s*$`)
@@ -37,12 +41,19 @@ type componentSizeFilter struct {
 }
 
 type Service struct {
-	pool *pgxpool.Pool
-	q    *db.Queries
+	pool    *pgxpool.Pool
+	q       *db.Queries
+	metrics *observability.Registry
 }
 
 func NewService(pool *pgxpool.Pool) *Service {
 	return &Service{pool: pool, q: db.New(pool)}
+}
+
+// WithMetrics 为发布事务接入进程级运维指标；未配置时业务行为保持不变。
+func (s *Service) WithMetrics(metrics *observability.Registry) *Service {
+	s.metrics = metrics
+	return s
 }
 
 func (s *Service) CreateComponent(ctx context.Context, actor pgtype.UUID, input CreateComponentInput) (Component, error) {
@@ -134,7 +145,7 @@ func (s *Service) ListComponents(ctx context.Context, actor pgtype.UUID, request
 	}, nil
 }
 
-// ListStars 返回 actor 的个人收藏；软删除或不再公开的 Component 保留关系但不进入结果。
+// ListStars 返回 actor 当前仍公开可见的个人收藏；归档/删除提交后立即隐藏，持久任务随后删除关系。
 func (s *Service) ListStars(ctx context.Context, actor pgtype.UUID, request StarListRequest) (StarPage, error) {
 	request.PageRequest = normalizePage(request.PageRequest)
 	if len(request.Query) > 200 || len(request.Category) > 128 {
@@ -236,10 +247,38 @@ func (s *Service) DeleteComponent(ctx context.Context, actor pgtype.UUID, compon
 		return err
 	}
 	_, err = withTx(ctx, s.pool, func(q *db.Queries) (struct{}, error) {
+		// 生命周期独占锁先于状态写入取得：已在途的 Star/Watch 先完成，删除提交后新的关系创建
+		// 重新执行资格检查并失败；同事务持久化的清理任务因此覆盖完整且不会继续增长的候选集合。
+		if lockErr := q.AcquireExclusiveComponentActivityLock(ctx, componentactivity.LockKey(id)); lockErr != nil {
+			return struct{}{}, lockErr
+		}
 		_, err := q.SoftDeleteOwnedComponent(ctx, db.SoftDeleteOwnedComponentParams{ActorID: actor, ComponentID: id})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return struct{}{}, notFound("component_repo.component_not_found", "componentId", componentID)
 		}
+		if err != nil {
+			return struct{}{}, err
+		}
+		boundary, err := q.CreateComponentRelationshipEndBoundary(ctx)
+		if err != nil {
+			return struct{}{}, err
+		}
+		payload, err := json.Marshal(relationshipCleanupPayload{
+			ComponentID: componentID,
+			EndedSeq:    boundary.EndedSeq,
+			EndedAt:     boundary.EndedAt.Time.UTC(),
+			EndedReason: watchEndReasonComponentDeleted,
+		})
+		if err != nil {
+			return struct{}{}, err
+		}
+		// 百万关系的同步清理会把 DELETE Handler 扩大成长事务；任务与软删除同事务创建，列表立即因
+		// Component 不可见而移除条目，Worker 再以冻结边界分批物理收敛 Star/Watch 关系。
+		_, _, err = task.EnqueueWithQueries(ctx, q, task.EnqueueInput{
+			OwnerID: actor, TaskType: task.RelationshipCleanupType, Payload: payload,
+			Locale: "en-US", Timezone: "UTC", CreatedBy: actor,
+			IdempotencyKey: componentID, MaxAttempts: 10,
+		})
 		return struct{}{}, err
 	})
 	return err
@@ -386,13 +425,15 @@ func (s *Service) ListVersions(ctx context.Context, actor pgtype.UUID, component
 	return VersionPage{Items: items, Page: page.Page, PageSize: page.PageSize}, nil
 }
 
-// PublishVersion 直接发布 owner 的 Draft；可选 ValidationReport 不参与发布事务门禁。
+// PublishVersion 直接发布 owner 的 Draft，并在同一事务中追加唯一的版本发布领域事件。
+// 发布边界对 Component activity 使用独占锁，保证事件序号不会越过尚未提交的 Watch/Unwatch。
 func (s *Service) PublishVersion(ctx context.Context, actor pgtype.UUID, versionID string) (ComponentVersion, error) {
 	id, err := resourceID(versionID, "versionId")
 	if err != nil {
 		return ComponentVersion{}, err
 	}
-	return withTx(ctx, s.pool, func(q *db.Queries) (ComponentVersion, error) {
+	eventAttempted := false
+	published, publishErr := withTx(ctx, s.pool, func(q *db.Queries) (ComponentVersion, error) {
 		locked, err := q.LockOwnedComponentVersion(ctx, db.LockOwnedComponentVersionParams{VersionID: id, ActorID: actor})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ComponentVersion{}, notFound("component_repo.version_not_found", "versionId", versionID)
@@ -403,6 +444,9 @@ func (s *Service) PublishVersion(ctx context.Context, actor pgtype.UUID, version
 		if locked.Status != "draft" {
 			return ComponentVersion{}, apierror.New("request.conflict", http.StatusConflict, nil)
 		}
+		if err := q.AcquireExclusiveComponentActivityLock(ctx, componentactivity.LockKey(locked.ComponentID)); err != nil {
+			return ComponentVersion{}, err
+		}
 		if err := q.DeprecateOtherPublishedVersions(ctx, db.DeprecateOtherPublishedVersionsParams{ComponentID: locked.ComponentID, VersionID: id}); err != nil {
 			return ComponentVersion{}, err
 		}
@@ -412,9 +456,25 @@ func (s *Service) PublishVersion(ctx context.Context, actor pgtype.UUID, version
 		if err := q.SetComponentCurrentVersion(ctx, db.SetComponentCurrentVersionParams{VersionID: id, ComponentID: locked.ComponentID, ActorID: actor}); err != nil {
 			return ComponentVersion{}, err
 		}
+		eventID, err := uuidutil.New()
+		if err != nil {
+			return ComponentVersion{}, err
+		}
+		eventAttempted = true
+		if _, err := q.CreateComponentVersionPublishedEvent(ctx, db.CreateComponentVersionPublishedEventParams{
+			ID: eventID, ComponentID: locked.ComponentID, ComponentVersionID: id, ActorID: actor,
+		}); err != nil {
+			return ComponentVersion{}, mapDatabaseError(err, "request.conflict")
+		}
 		row, err := q.GetVisibleComponentVersion(ctx, db.GetVisibleComponentVersionParams{VersionID: id, ActorID: actor})
 		return versionFromDB(row), err
 	})
+	if publishErr == nil {
+		s.metrics.RecordComponentDomainEvent(observability.ComponentVersionPublishedEvent, observability.DomainEventCommitted)
+	} else if eventAttempted {
+		s.metrics.RecordComponentDomainEvent(observability.ComponentVersionPublishedEvent, observability.DomainEventFailed)
+	}
+	return published, publishErr
 }
 
 func (s *Service) TransitionVersion(ctx context.Context, actor pgtype.UUID, versionID, target string) (ComponentVersion, error) {
@@ -894,6 +954,11 @@ func (s *Service) Star(ctx context.Context, actor pgtype.UUID, componentID strin
 		return Star{}, err
 	}
 	return withTx(ctx, s.pool, func(q *db.Queries) (Star, error) {
+		// Star 创建参与 Component activity 共享锁，使归档/删除的独占清理边界可以等待已在途收藏，
+		// 并阻止资格检查之后、生命周期清理之后又提交一条新的 Star 关系。
+		if err := q.AcquireSharedComponentActivityLock(ctx, componentactivity.LockKey(id)); err != nil {
+			return Star{}, err
+		}
 		target, err := q.GetComponentStarTarget(ctx, db.GetComponentStarTargetParams{ActorID: actor, ComponentID: id})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Star{}, notFound("component_repo.component_not_found", "componentId", componentID)

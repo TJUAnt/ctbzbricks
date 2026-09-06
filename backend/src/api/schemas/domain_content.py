@@ -27,18 +27,6 @@ class TranslationContentRequest(BaseModel):
         return validate_translation_status(value)
 
 
-class ComponentTranslationRequest(TranslationContentRequest):
-    tags: list[str] = []
-
-
-class ComponentTranslationResponse(ComponentTranslationRequest):
-    componentId: str
-    locale: str
-    reviewedBy: str | None
-    reviewedAt: str | None
-    updatedAt: str | None
-
-
 class PartTranslationResponse(TranslationContentRequest):
     ldrawPartNum: str
     locale: str
