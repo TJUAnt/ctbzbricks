@@ -1,0 +1,1884 @@
+{
+  "format": "lego-design-plan",
+  "includeSupportBase": true,
+  "grid": {
+    "width": 8,
+    "height": 8
+  },
+  "ldrawProjection": {
+    "lduPerStud": 20,
+    "gridRotationMatrices": {
+      "0": [
+        0,
+        0,
+        1,
+        0,
+        1,
+        0,
+        -1,
+        0,
+        0
+      ],
+      "90": [
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1
+      ],
+      "180": [
+        0,
+        0,
+        -1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        0
+      ],
+      "270": [
+        -1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        -1
+      ]
+    },
+    "xOriginGridWidthMultiplier": 0,
+    "xDirection": 1,
+    "zOriginGridHeightMultiplier": 1,
+    "zDirection": -1
+  },
+  "layers": [
+    {
+      "id": "blackSupport",
+      "name": "Black support connectors and border",
+      "order": 0,
+      "ldrawY": 16,
+      "placements": [
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 0,
+            "y": 0,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 16,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 2,
+            "y": 0,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 16,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 4,
+            "y": 0,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 16,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 6,
+            "y": 0,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 16,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 0,
+            "y": 4,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 16,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 2,
+            "y": 4,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 16,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 4,
+            "y": 4,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 16,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 6,
+            "y": 4,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 16,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "whiteBase",
+      "name": "White support base",
+      "order": 1,
+      "ldrawY": 8,
+      "placements": [
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 0,
+            "y": 0,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 8,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 2,
+            "y": 0,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 8,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 4,
+            "y": 0,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 8,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 6,
+            "y": 0,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 8,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 0,
+            "y": 4,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 8,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 2,
+            "y": 4,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 8,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 4,
+            "y": 4,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 8,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 6,
+            "y": 4,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 8,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "topDesign",
+      "name": "Top pixel design",
+      "order": 2,
+      "ldrawY": 0,
+      "placements": [
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 4,
+          "colorName": "Red",
+          "colorRgb": "#FF0000",
+          "ldrawColorCode": "0x2FF0000",
+          "grid": {
+            "x": 0,
+            "y": 0,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 0,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 4,
+          "colorName": "Red",
+          "colorRgb": "#FF0000",
+          "ldrawColorCode": "0x2FF0000",
+          "grid": {
+            "x": 2,
+            "y": 0,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 0,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 4,
+          "colorName": "Red",
+          "colorRgb": "#FF0000",
+          "ldrawColorCode": "0x2FF0000",
+          "grid": {
+            "x": 0,
+            "y": 4,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 0,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 4,
+          "colorName": "Red",
+          "colorRgb": "#FF0000",
+          "ldrawColorCode": "0x2FF0000",
+          "grid": {
+            "x": 2,
+            "y": 4,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 0,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 1,
+          "colorName": "Blue",
+          "colorRgb": "#0000FF",
+          "ldrawColorCode": "0x20000FF",
+          "grid": {
+            "x": 4,
+            "y": 0,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 0,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 1,
+          "colorName": "Blue",
+          "colorRgb": "#0000FF",
+          "ldrawColorCode": "0x20000FF",
+          "grid": {
+            "x": 6,
+            "y": 0,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 0,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 1,
+          "colorName": "Blue",
+          "colorRgb": "#0000FF",
+          "ldrawColorCode": "0x20000FF",
+          "grid": {
+            "x": 4,
+            "y": 4,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 0,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 1,
+          "colorName": "Blue",
+          "colorRgb": "#0000FF",
+          "ldrawColorCode": "0x20000FF",
+          "grid": {
+            "x": 6,
+            "y": 4,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 0,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "id": "base-1",
+      "name": "Base 1",
+      "order": 1,
+      "layer": "base",
+      "placements": [
+        {
+          "layer": "whiteBase",
+          "ldrawY": 8,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 0,
+            "y": 0,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 8,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "whiteBase",
+          "ldrawY": 8,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 2,
+            "y": 0,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 8,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "whiteBase",
+          "ldrawY": 8,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 4,
+            "y": 0,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 8,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "whiteBase",
+          "ldrawY": 8,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 6,
+            "y": 0,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 8,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "blackSupport",
+          "ldrawY": 16,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 0,
+            "y": 0,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 16,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "blackSupport",
+          "ldrawY": 16,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 2,
+            "y": 0,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 16,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "blackSupport",
+          "ldrawY": 16,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 4,
+            "y": 0,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 16,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "blackSupport",
+          "ldrawY": 16,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 6,
+            "y": 0,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 16,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "base-2",
+      "name": "Base 2",
+      "order": 2,
+      "layer": "base",
+      "placements": [
+        {
+          "layer": "whiteBase",
+          "ldrawY": 8,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 0,
+            "y": 4,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 8,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "whiteBase",
+          "ldrawY": 8,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 2,
+            "y": 4,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 8,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "whiteBase",
+          "ldrawY": 8,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 4,
+            "y": 4,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 8,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "whiteBase",
+          "ldrawY": 8,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 15,
+          "colorName": "White",
+          "colorRgb": "#FFFFFF",
+          "ldrawColorCode": "15",
+          "grid": {
+            "x": 6,
+            "y": 4,
+            "level": 8,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 8,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "blackSupport",
+          "ldrawY": 16,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 0,
+            "y": 4,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 16,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "blackSupport",
+          "ldrawY": 16,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 2,
+            "y": 4,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 16,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "blackSupport",
+          "ldrawY": 16,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 4,
+            "y": 4,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 16,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "blackSupport",
+          "ldrawY": 16,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 0,
+          "colorName": "Black",
+          "colorRgb": "#000000",
+          "ldrawColorCode": "0",
+          "grid": {
+            "x": 6,
+            "y": 4,
+            "level": 16,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 16,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "top-1",
+      "name": "Top rows 0-3",
+      "order": 3,
+      "layer": "top",
+      "placements": [
+        {
+          "layer": "topDesign",
+          "ldrawY": 0,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 4,
+          "colorName": "Red",
+          "colorRgb": "#FF0000",
+          "ldrawColorCode": "0x2FF0000",
+          "grid": {
+            "x": 0,
+            "y": 0,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 0,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "topDesign",
+          "ldrawY": 0,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 4,
+          "colorName": "Red",
+          "colorRgb": "#FF0000",
+          "ldrawColorCode": "0x2FF0000",
+          "grid": {
+            "x": 2,
+            "y": 0,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 0,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "topDesign",
+          "ldrawY": 0,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 1,
+          "colorName": "Blue",
+          "colorRgb": "#0000FF",
+          "ldrawColorCode": "0x20000FF",
+          "grid": {
+            "x": 4,
+            "y": 0,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 0,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "topDesign",
+          "ldrawY": 0,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 1,
+          "colorName": "Blue",
+          "colorRgb": "#0000FF",
+          "ldrawColorCode": "0x20000FF",
+          "grid": {
+            "x": 6,
+            "y": 0,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 0,
+            "z": 120,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "top-2",
+      "name": "Top rows 4-7",
+      "order": 4,
+      "layer": "top",
+      "placements": [
+        {
+          "layer": "topDesign",
+          "ldrawY": 0,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 4,
+          "colorName": "Red",
+          "colorRgb": "#FF0000",
+          "ldrawColorCode": "0x2FF0000",
+          "grid": {
+            "x": 0,
+            "y": 4,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 20,
+            "y": 0,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "topDesign",
+          "ldrawY": 0,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 4,
+          "colorName": "Red",
+          "colorRgb": "#FF0000",
+          "ldrawColorCode": "0x2FF0000",
+          "grid": {
+            "x": 2,
+            "y": 4,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 60,
+            "y": 0,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "topDesign",
+          "ldrawY": 0,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 1,
+          "colorName": "Blue",
+          "colorRgb": "#0000FF",
+          "ldrawColorCode": "0x20000FF",
+          "grid": {
+            "x": 4,
+            "y": 4,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 100,
+            "y": 0,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "layer": "topDesign",
+          "ldrawY": 0,
+          "partId": "3020.dat",
+          "rebrickablePartNum": null,
+          "legoDesignId": null,
+          "colorId": 1,
+          "colorName": "Blue",
+          "colorRgb": "#0000FF",
+          "ldrawColorCode": "0x20000FF",
+          "grid": {
+            "x": 6,
+            "y": 4,
+            "level": 0,
+            "width": 2,
+            "height": 4,
+            "logicalHeightPlate": 1,
+            "rotation": 0
+          },
+          "ldraw": {
+            "x": 140,
+            "y": 0,
+            "z": 40,
+            "matrix": [
+              0,
+              0,
+              1,
+              0,
+              1,
+              0,
+              -1,
+              0,
+              0
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "modelDimensions": {
+    "lengthStud": 8,
+    "widthStud": 8,
+    "heightPlate": 1,
+    "lengthCm": 6.4,
+    "widthCm": 6.4,
+    "heightCm": 0.32
+  },
+  "bom": [
+    {
+      "key": "3020.dat:4:0x2FF0000:2:4",
+      "partId": "3020.dat",
+      "rebrickablePartNum": null,
+      "legoDesignId": null,
+      "colorId": 4,
+      "colorName": "Red",
+      "colorRgb": "#FF0000",
+      "ldrawColorCode": "0x2FF0000",
+      "width": 2,
+      "height": 4,
+      "quantity": 4
+    },
+    {
+      "key": "3020.dat:1:0x20000FF:2:4",
+      "partId": "3020.dat",
+      "rebrickablePartNum": null,
+      "legoDesignId": null,
+      "colorId": 1,
+      "colorName": "Blue",
+      "colorRgb": "#0000FF",
+      "ldrawColorCode": "0x20000FF",
+      "width": 2,
+      "height": 4,
+      "quantity": 4
+    }
+  ],
+  "colorMappings": [
+    {
+      "sourceRgb": "#FF0000",
+      "colorId": 4,
+      "colorName": "Red",
+      "colorRgb": "#FF0000",
+      "ldrawColorCode": "0x2FF0000"
+    },
+    {
+      "sourceRgb": "#0000FF",
+      "colorId": 1,
+      "colorName": "Blue",
+      "colorRgb": "#0000FF",
+      "ldrawColorCode": "0x20000FF"
+    }
+  ],
+  "document": {
+    "schema": "brickbuilder.export.v1",
+    "locale": "en-US",
+    "timezone": "Asia/Shanghai",
+    "catalogVersion": "brickbuilder-export-2026.07.18.1",
+    "kind": "legoDesignPlan",
+    "title": "LEGO Design Plan",
+    "description": "Deterministic construction plan and bill of materials.",
+    "sections": {
+      "layers": "Layers",
+      "steps": "Build steps",
+      "dimensions": "Model dimensions",
+      "bom": "Bill of materials",
+      "colorMappings": "Color mappings",
+      "validation": "Validation report"
+    },
+    "fields": {
+      "partId": "Part ID",
+      "partName": "Part name",
+      "color": "Color",
+      "quantity": "Quantity",
+      "width": "Width",
+      "height": "Height",
+      "depth": "Depth",
+      "role": "Role",
+      "stage": "Stage",
+      "status": "Status",
+      "metric": "Metric",
+      "value": "Value"
+    }
+  }
+}

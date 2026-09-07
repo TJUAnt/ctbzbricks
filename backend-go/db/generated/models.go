@@ -111,6 +111,27 @@ type ComponentRepoComponentDomainEvent struct {
 	CreatedAt          pgtype.Timestamptz
 }
 
+type ComponentRepoComponentEventDelivery struct {
+	EventID                  pgtype.UUID
+	Status                   string
+	CursorActorID            pgtype.UUID
+	CursorPeriodID           *int64
+	Attempts                 int16
+	MaxAttempts              int16
+	AvailableAt              pgtype.Timestamptz
+	LeaseOwner               *string
+	LeaseExpiresAt           pgtype.Timestamptz
+	LastErrorCode            *string
+	LastErrorParams          []byte
+	StartedAt                pgtype.Timestamptz
+	CompletedAt              pgtype.Timestamptz
+	DeadLetteredAt           pgtype.Timestamptz
+	DeadLetterAcknowledgedAt pgtype.Timestamptz
+	DeadLetterAcknowledgedBy pgtype.UUID
+	CreatedAt                pgtype.Timestamptz
+	UpdatedAt                pgtype.Timestamptz
+}
+
 type ComponentRepoComponentGroup struct {
 	ID             pgtype.UUID
 	OwnerID        pgtype.UUID
@@ -193,15 +214,18 @@ type ComponentRepoComponentVersion struct {
 }
 
 type ComponentRepoComponentWatchPeriod struct {
-	ID          int64
-	ActorID     pgtype.UUID
-	ComponentID pgtype.UUID
-	WatchLevel  string
-	StartedSeq  int64
-	EndedSeq    *int64
-	WatchedAt   pgtype.Timestamptz
-	UnwatchedAt pgtype.Timestamptz
-	EndedReason *string
+	ID                         int64
+	ActorID                    pgtype.UUID
+	ComponentID                pgtype.UUID
+	WatchLevel                 string
+	StartedSeq                 int64
+	EndedSeq                   *int64
+	WatchedAt                  pgtype.Timestamptz
+	UnwatchedAt                pgtype.Timestamptz
+	EndedReason                *string
+	NotificationLocale         string
+	NotificationTimezone       string
+	NotificationCatalogVersion string
 }
 
 type ComponentRepoConnectorAnalysis struct {
@@ -571,6 +595,25 @@ type ComponentRepoUploadSessionFile struct {
 	CompletedAt      pgtype.Timestamptz
 }
 
+type ComponentRepoUserNotification struct {
+	ID                     pgtype.UUID
+	RecipientID            pgtype.UUID
+	EventID                pgtype.UUID
+	SourceWatchPeriodID    int64
+	NotificationType       string
+	Code                   string
+	Params                 []byte
+	ComponentID            pgtype.UUID
+	ComponentVersionID     pgtype.UUID
+	Locale                 string
+	Timezone               string
+	ResourceCatalogVersion string
+	Tombstone              bool
+	CreatedAt              pgtype.Timestamptz
+	ReadAt                 pgtype.Timestamptz
+	DeletedAt              pgtype.Timestamptz
+}
+
 type ComponentRepoValidationReport struct {
 	ID                   pgtype.UUID
 	ComponentCandidateID pgtype.UUID
@@ -586,4 +629,50 @@ type ComponentRepoValidationReport struct {
 	InterfaceSignature   string
 	StructureHash        string
 	GeometryHash         string
+}
+
+type Pixel2dBlob struct {
+	ID          pgtype.UUID
+	OwnerID     pgtype.UUID
+	ObjectKey   string
+	Bucket      string
+	Kind        string
+	Sha256      string
+	ByteSize    int64
+	ContentType string
+	Status      string
+	CreatedAt   pgtype.Timestamptz
+}
+
+type Pixel2dCatalog struct {
+	Hash      string
+	Document  []byte
+	CreatedAt pgtype.Timestamptz
+}
+
+type Pixel2dProject struct {
+	ID                pgtype.UUID
+	OwnerID           pgtype.UUID
+	Name              string
+	ContentLocale     string
+	SourceName        string
+	SourceBlobID      pgtype.UUID
+	GridWidth         int32
+	GridHeight        int32
+	ColorCount        int32
+	CurrentRevisionID pgtype.UUID
+	CreatedAt         pgtype.Timestamptz
+}
+
+type Pixel2dRevision struct {
+	ID               pgtype.UUID
+	ProjectID        pgtype.UUID
+	OwnerID          pgtype.UUID
+	ParentRevisionID pgtype.UUID
+	InputBlobID      pgtype.UUID
+	TaskID           pgtype.UUID
+	DocumentBlobID   pgtype.UUID
+	PreviewBlobID    pgtype.UUID
+	Settings         []byte
+	CreatedAt        pgtype.Timestamptz
 }

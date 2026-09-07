@@ -1,0 +1,183 @@
+Isolated PostgreSQL; 2026-09-06; local warm-cache query-shape evidence, not production SLO.
+100000 projects/revisions owned by one actor; shared task fixture; selective actor and empty actor.
+=== RUN   TestPixelProjectPlans
+    service_integration_test.go:275: PostgreSQL 14.17 (Homebrew) on aarch64-apple-darwin24.2.0, compiled by Apple clang version 16.0.0 (clang-1600.0.26.6), 64-bit
+    service_integration_test.go:293: high-match-first
+    service_integration_test.go:297: Result  (cost=4968.48..4968.49 rows=1 width=40) (actual time=6.895..6.895 rows=1 loops=1)
+    service_integration_test.go:297:   Buffers: shared hit=3421
+    service_integration_test.go:297:   CTE selected_page
+    service_integration_test.go:297:     ->  Limit  (cost=0.42..2.18 rows=12 width=77) (actual time=0.006..0.008 rows=12 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=4
+    service_integration_test.go:297:           ->  Index Scan using pixel_projects_owner_created_idx on projects p  (cost=0.42..14651.32 rows=99998 width=77) (actual time=0.005..0.007 rows=12 loops=1)
+    service_integration_test.go:297:                 Index Cond: (owner_id = 'f2696e4c-f155-4bfd-b86d-64dac56b69f3'::uuid)
+    service_integration_test.go:297:                 Buffers: shared hit=4
+    service_integration_test.go:297:   InitPlan 2 (returns $1)
+    service_integration_test.go:297:     ->  Aggregate  (cost=4864.01..4864.02 rows=1 width=8) (actual time=6.766..6.766 rows=1 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=3364
+    service_integration_test.go:297:           ->  Seq Scan on projects p_1  (cost=0.00..4614.01 rows=99998 width=0) (actual time=0.002..4.556 rows=100000 loops=1)
+    service_integration_test.go:297:                 Filter: (owner_id = 'f2696e4c-f155-4bfd-b86d-64dac56b69f3'::uuid)
+    service_integration_test.go:297:                 Rows Removed by Filter: 1
+    service_integration_test.go:297:                 Buffers: shared hit=3364
+    service_integration_test.go:297:   InitPlan 3 (returns $4)
+    service_integration_test.go:297:     ->  Aggregate  (cost=102.28..102.29 rows=1 width=32) (actual time=0.126..0.127 rows=1 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=57
+    service_integration_test.go:297:           ->  Nested Loop Left Join  (cost=0.57..102.22 rows=12 width=212) (actual time=0.020..0.051 rows=12 loops=1)
+    service_integration_test.go:297:                 Buffers: shared hit=54
+    service_integration_test.go:297:                 ->  Nested Loop Left Join  (cost=0.42..101.46 rows=12 width=180) (actual time=0.013..0.042 rows=12 loops=1)
+    service_integration_test.go:297:                       Buffers: shared hit=52
+    service_integration_test.go:297:                       ->  CTE Scan on selected_page p_2  (cost=0.00..0.24 rows=12 width=148) (actual time=0.007..0.012 rows=12 loops=1)
+    service_integration_test.go:297:                             Buffers: shared hit=4
+    service_integration_test.go:297:                       ->  Index Scan using revisions_id_project_id_owner_id_key on revisions r  (cost=0.42..8.44 rows=1 width=48) (actual time=0.002..0.002 rows=1 loops=12)
+    service_integration_test.go:297:                             Index Cond: (id = p_2.current_revision_id)
+    service_integration_test.go:297:                             Buffers: shared hit=48
+    service_integration_test.go:297:                 ->  Memoize  (cost=0.15..0.17 rows=1 width=48) (actual time=0.001..0.001 rows=1 loops=12)
+    service_integration_test.go:297:                       Cache Key: r.task_id
+    service_integration_test.go:297:                       Cache Mode: logical
+    service_integration_test.go:297:                       Hits: 11  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+    service_integration_test.go:297:                       Buffers: shared hit=2
+    service_integration_test.go:297:                       ->  Index Scan using tasks_id_job_unique on tasks t  (cost=0.14..0.16 rows=1 width=48) (actual time=0.004..0.004 rows=1 loops=1)
+    service_integration_test.go:297:                             Index Cond: (id = r.task_id)
+    service_integration_test.go:297:                             Buffers: shared hit=2
+    service_integration_test.go:297: Planning:
+    service_integration_test.go:297:   Buffers: shared hit=124
+    service_integration_test.go:297: Planning Time: 0.296 ms
+    service_integration_test.go:297: Execution Time: 6.948 ms
+    service_integration_test.go:293: high-match-middle
+    service_integration_test.go:297: Result  (cost=12292.91..12292.92 rows=1 width=40) (actual time=13.364..13.365 rows=1 loops=1)
+    service_integration_test.go:297:   Buffers: shared hit=4913
+    service_integration_test.go:297:   CTE selected_page
+    service_integration_test.go:297:     ->  Limit  (cost=7324.84..7326.60 rows=12 width=77) (actual time=6.738..6.740 rows=12 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=1499
+    service_integration_test.go:297:           ->  Index Scan using pixel_projects_owner_created_idx on projects p  (cost=0.42..14651.32 rows=99998 width=77) (actual time=0.006..5.760 rows=50004 loops=1)
+    service_integration_test.go:297:                 Index Cond: (owner_id = 'f2696e4c-f155-4bfd-b86d-64dac56b69f3'::uuid)
+    service_integration_test.go:297:                 Buffers: shared hit=1499
+    service_integration_test.go:297:   InitPlan 2 (returns $1)
+    service_integration_test.go:297:     ->  Aggregate  (cost=4864.01..4864.02 rows=1 width=8) (actual time=6.500..6.501 rows=1 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=3364
+    service_integration_test.go:297:           ->  Seq Scan on projects p_1  (cost=0.00..4614.01 rows=99998 width=0) (actual time=0.002..4.248 rows=100000 loops=1)
+    service_integration_test.go:297:                 Filter: (owner_id = 'f2696e4c-f155-4bfd-b86d-64dac56b69f3'::uuid)
+    service_integration_test.go:297:                 Rows Removed by Filter: 1
+    service_integration_test.go:297:                 Buffers: shared hit=3364
+    service_integration_test.go:297:   InitPlan 3 (returns $4)
+    service_integration_test.go:297:     ->  Aggregate  (cost=102.28..102.29 rows=1 width=32) (actual time=6.860..6.861 rows=1 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=1549
+    service_integration_test.go:297:           ->  Nested Loop Left Join  (cost=0.57..102.22 rows=12 width=212) (actual time=6.753..6.785 rows=12 loops=1)
+    service_integration_test.go:297:                 Buffers: shared hit=1549
+    service_integration_test.go:297:                 ->  Nested Loop Left Join  (cost=0.42..101.46 rows=12 width=180) (actual time=6.748..6.776 rows=12 loops=1)
+    service_integration_test.go:297:                       Buffers: shared hit=1547
+    service_integration_test.go:297:                       ->  CTE Scan on selected_page p_2  (cost=0.00..0.24 rows=12 width=148) (actual time=6.740..6.744 rows=12 loops=1)
+    service_integration_test.go:297:                             Buffers: shared hit=1499
+    service_integration_test.go:297:                       ->  Index Scan using revisions_id_project_id_owner_id_key on revisions r  (cost=0.42..8.44 rows=1 width=48) (actual time=0.002..0.002 rows=1 loops=12)
+    service_integration_test.go:297:                             Index Cond: (id = p_2.current_revision_id)
+    service_integration_test.go:297:                             Buffers: shared hit=48
+    service_integration_test.go:297:                 ->  Memoize  (cost=0.15..0.17 rows=1 width=48) (actual time=0.000..0.000 rows=1 loops=12)
+    service_integration_test.go:297:                       Cache Key: r.task_id
+    service_integration_test.go:297:                       Cache Mode: logical
+    service_integration_test.go:297:                       Hits: 11  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+    service_integration_test.go:297:                       Buffers: shared hit=2
+    service_integration_test.go:297:                       ->  Index Scan using tasks_id_job_unique on tasks t  (cost=0.14..0.16 rows=1 width=48) (actual time=0.003..0.003 rows=1 loops=1)
+    service_integration_test.go:297:                             Index Cond: (id = r.task_id)
+    service_integration_test.go:297:                             Buffers: shared hit=2
+    service_integration_test.go:297: Planning Time: 0.169 ms
+    service_integration_test.go:297: Execution Time: 13.393 ms
+    service_integration_test.go:293: high-match-deep
+    service_integration_test.go:297: Result  (cost=19532.60..19532.61 rows=1 width=40) (actual time=20.148..20.149 rows=1 loops=1)
+    service_integration_test.go:297:   Buffers: shared hit=6383
+    service_integration_test.go:297:   CTE selected_page
+    service_integration_test.go:297:     ->  Limit  (cost=14651.03..14651.32 rows=2 width=77) (actual time=13.344..13.346 rows=4 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=2995
+    service_integration_test.go:297:           ->  Index Scan using pixel_projects_owner_created_idx on projects p  (cost=0.42..14651.32 rows=99998 width=77) (actual time=0.008..11.383 rows=100000 loops=1)
+    service_integration_test.go:297:                 Index Cond: (owner_id = 'f2696e4c-f155-4bfd-b86d-64dac56b69f3'::uuid)
+    service_integration_test.go:297:                 Buffers: shared hit=2995
+    service_integration_test.go:297:   InitPlan 2 (returns $1)
+    service_integration_test.go:297:     ->  Aggregate  (cost=4864.01..4864.02 rows=1 width=8) (actual time=6.740..6.740 rows=1 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=3364
+    service_integration_test.go:297:           ->  Seq Scan on projects p_1  (cost=0.00..4614.01 rows=99998 width=0) (actual time=0.002..4.467 rows=100000 loops=1)
+    service_integration_test.go:297:                 Filter: (owner_id = 'f2696e4c-f155-4bfd-b86d-64dac56b69f3'::uuid)
+    service_integration_test.go:297:                 Rows Removed by Filter: 1
+    service_integration_test.go:297:                 Buffers: shared hit=3364
+    service_integration_test.go:297:   InitPlan 3 (returns $4)
+    service_integration_test.go:297:     ->  Aggregate  (cost=17.25..17.26 rows=1 width=32) (actual time=13.406..13.406 rows=1 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=3019
+    service_integration_test.go:297:           ->  Nested Loop Left Join  (cost=0.56..17.24 rows=2 width=212) (actual time=13.359..13.372 rows=4 loops=1)
+    service_integration_test.go:297:                 Buffers: shared hit=3019
+    service_integration_test.go:297:                 ->  Nested Loop Left Join  (cost=0.42..16.91 rows=2 width=180) (actual time=13.355..13.366 rows=4 loops=1)
+    service_integration_test.go:297:                       Buffers: shared hit=3011
+    service_integration_test.go:297:                       ->  CTE Scan on selected_page p_2  (cost=0.00..0.04 rows=2 width=148) (actual time=13.346..13.348 rows=4 loops=1)
+    service_integration_test.go:297:                             Buffers: shared hit=2995
+    service_integration_test.go:297:                       ->  Index Scan using revisions_id_project_id_owner_id_key on revisions r  (cost=0.42..8.44 rows=1 width=48) (actual time=0.003..0.003 rows=1 loops=4)
+    service_integration_test.go:297:                             Index Cond: (id = p_2.current_revision_id)
+    service_integration_test.go:297:                             Buffers: shared hit=16
+    service_integration_test.go:297:                 ->  Index Scan using tasks_id_job_unique on tasks t  (cost=0.14..0.16 rows=1 width=48) (actual time=0.001..0.001 rows=1 loops=4)
+    service_integration_test.go:297:                       Index Cond: (id = r.task_id)
+    service_integration_test.go:297:                       Buffers: shared hit=8
+    service_integration_test.go:297: Planning Time: 0.170 ms
+    service_integration_test.go:297: Execution Time: 20.174 ms
+    service_integration_test.go:293: empty-actor
+    service_integration_test.go:297: Result  (cost=42.34..42.35 rows=1 width=40) (actual time=0.013..0.014 rows=1 loops=1)
+    service_integration_test.go:297:   Buffers: shared hit=6
+    service_integration_test.go:297:   CTE selected_page
+    service_integration_test.go:297:     ->  Limit  (cost=0.42..11.97 rows=3 width=77) (actual time=0.003..0.003 rows=0 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=3
+    service_integration_test.go:297:           ->  Index Scan using pixel_projects_owner_created_idx on projects p  (cost=0.42..11.97 rows=3 width=77) (actual time=0.002..0.002 rows=0 loops=1)
+    service_integration_test.go:297:                 Index Cond: (owner_id = 'a1fa38c0-9468-4701-b3f1-045aac7b2332'::uuid)
+    service_integration_test.go:297:                 Buffers: shared hit=3
+    service_integration_test.go:297:   InitPlan 2 (returns $1)
+    service_integration_test.go:297:     ->  Aggregate  (cost=4.48..4.49 rows=1 width=8) (actual time=0.007..0.007 rows=1 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=3
+    service_integration_test.go:297:           ->  Index Only Scan using pixel_projects_owner_created_idx on projects p_1  (cost=0.42..4.47 rows=3 width=0) (actual time=0.007..0.007 rows=0 loops=1)
+    service_integration_test.go:297:                 Index Cond: (owner_id = 'a1fa38c0-9468-4701-b3f1-045aac7b2332'::uuid)
+    service_integration_test.go:297:                 Heap Fetches: 0
+    service_integration_test.go:297:                 Buffers: shared hit=3
+    service_integration_test.go:297:   InitPlan 3 (returns $4)
+    service_integration_test.go:297:     ->  Aggregate  (cost=25.87..25.88 rows=1 width=32) (actual time=0.005..0.006 rows=1 loops=1)
+    service_integration_test.go:297:           Buffers: shared hit=3
+    service_integration_test.go:297:           ->  Nested Loop Left Join  (cost=0.56..25.85 rows=3 width=212) (actual time=0.003..0.003 rows=0 loops=1)
+    service_integration_test.go:297:                 Buffers: shared hit=3
+    service_integration_test.go:297:                 ->  Nested Loop Left Join  (cost=0.42..25.37 rows=3 width=180) (actual time=0.003..0.003 rows=0 loops=1)
+    service_integration_test.go:297:                       Buffers: shared hit=3
+    service_integration_test.go:297:                       ->  CTE Scan on selected_page p_2  (cost=0.00..0.06 rows=3 width=148) (actual time=0.003..0.003 rows=0 loops=1)
+    service_integration_test.go:297:                             Buffers: shared hit=3
+    service_integration_test.go:297:                       ->  Index Scan using revisions_id_project_id_owner_id_key on revisions r  (cost=0.42..8.44 rows=1 width=48) (never executed)
+    service_integration_test.go:297:                             Index Cond: (id = p_2.current_revision_id)
+    service_integration_test.go:297:                 ->  Index Scan using tasks_id_job_unique on tasks t  (cost=0.14..0.16 rows=1 width=48) (never executed)
+    service_integration_test.go:297:                       Index Cond: (id = r.task_id)
+    service_integration_test.go:297: Planning Time: 0.182 ms
+    service_integration_test.go:297: Execution Time: 0.037 ms
+    service_integration_test.go:312: selective-actor
+    service_integration_test.go:316: Result  (cost=42.34..42.35 rows=1 width=40) (actual time=0.040..0.040 rows=1 loops=1)
+    service_integration_test.go:316:   Buffers: shared hit=14
+    service_integration_test.go:316:   CTE selected_page
+    service_integration_test.go:316:     ->  Limit  (cost=0.42..11.97 rows=3 width=77) (actual time=0.004..0.005 rows=1 loops=1)
+    service_integration_test.go:316:           Buffers: shared hit=4
+    service_integration_test.go:316:           ->  Index Scan using pixel_projects_owner_created_idx on projects p  (cost=0.42..11.97 rows=3 width=77) (actual time=0.004..0.004 rows=1 loops=1)
+    service_integration_test.go:316:                 Index Cond: (owner_id = '6a48971b-82ce-479c-9ce9-4d5ead406f7a'::uuid)
+    service_integration_test.go:316:                 Buffers: shared hit=4
+    service_integration_test.go:316:   InitPlan 2 (returns $1)
+    service_integration_test.go:316:     ->  Aggregate  (cost=4.48..4.49 rows=1 width=8) (actual time=0.009..0.009 rows=1 loops=1)
+    service_integration_test.go:316:           Buffers: shared hit=4
+    service_integration_test.go:316:           ->  Index Only Scan using pixel_projects_owner_created_idx on projects p_1  (cost=0.42..4.47 rows=3 width=0) (actual time=0.007..0.007 rows=1 loops=1)
+    service_integration_test.go:316:                 Index Cond: (owner_id = '6a48971b-82ce-479c-9ce9-4d5ead406f7a'::uuid)
+    service_integration_test.go:316:                 Heap Fetches: 0
+    service_integration_test.go:316:                 Buffers: shared hit=4
+    service_integration_test.go:316:   InitPlan 3 (returns $4)
+    service_integration_test.go:316:     ->  Aggregate  (cost=25.87..25.88 rows=1 width=32) (actual time=0.030..0.030 rows=1 loops=1)
+    service_integration_test.go:316:           Buffers: shared hit=10
+    service_integration_test.go:316:           ->  Nested Loop Left Join  (cost=0.56..25.85 rows=3 width=212) (actual time=0.014..0.014 rows=1 loops=1)
+    service_integration_test.go:316:                 Buffers: shared hit=10
+    service_integration_test.go:316:                 ->  Nested Loop Left Join  (cost=0.42..25.37 rows=3 width=180) (actual time=0.010..0.010 rows=1 loops=1)
+    service_integration_test.go:316:                       Buffers: shared hit=8
+    service_integration_test.go:316:                       ->  CTE Scan on selected_page p_2  (cost=0.00..0.06 rows=3 width=148) (actual time=0.005..0.005 rows=1 loops=1)
+    service_integration_test.go:316:                             Buffers: shared hit=4
+    service_integration_test.go:316:                       ->  Index Scan using revisions_id_project_id_owner_id_key on revisions r  (cost=0.42..8.44 rows=1 width=48) (actual time=0.004..0.004 rows=1 loops=1)
+    service_integration_test.go:316:                             Index Cond: (id = p_2.current_revision_id)
+    service_integration_test.go:316:                             Buffers: shared hit=4
+    service_integration_test.go:316:                 ->  Index Scan using tasks_id_job_unique on tasks t  (cost=0.14..0.16 rows=1 width=48) (actual time=0.003..0.003 rows=1 loops=1)
+    service_integration_test.go:316:                       Index Cond: (id = r.task_id)
+    service_integration_test.go:316:                       Buffers: shared hit=2
+    service_integration_test.go:316: Planning Time: 0.151 ms
+    service_integration_test.go:316: Execution Time: 0.061 ms
+--- PASS: TestPixelProjectPlans (3.93s)
+PASS
+ok  	github.com/ctbzbricks/brickbuilder/backend-go/internal/pixel2d	4.323s
+isolated PostgreSQL migration and startup contract: PASS

@@ -2400,7 +2400,9 @@ button {
   min-height: 520px;
 }
 
+/* 固定 CSS 高度范围，避免 canvas 像素尺寸反向撑高 auto 网格并触发 ResizeObserver 循环。 */
 .pixel-art-canvas {
+  height: clamp(520px, calc(100vh - 240px), 800px);
   display: block;
   border: 1px solid rgba(23, 32, 27, 0.14);
   border-radius: 8px;
@@ -2427,6 +2429,34 @@ button {
   color: #153d32;
   font-size: 13px;
   line-height: 1.4;
+}
+
+.pixel-art-task-progress {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid rgba(23, 32, 27, 0.14);
+  background: #f7faf8;
+  padding: 12px 22px;
+  color: #153d32;
+}
+
+.pixel-art-task-progress > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+}
+
+.pixel-art-task-progress progress,
+.pixel-art-project-progress progress {
+  width: 100%;
+  height: 9px;
+  accent-color: #1f7a5a;
+}
+
+.pixel-art-task-progress small {
+  color: #65716b;
+  font-size: 12px;
 }
 
 .pixel-art-palette {
@@ -2544,6 +2574,10 @@ button {
   grid-template-columns: 18px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
+}
+
+.pixel-art-project-card .pixel-art-project-progress {
+  display: block;
 }
 
 .pixel-art-project-card svg {

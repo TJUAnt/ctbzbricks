@@ -1,4 +1,5 @@
-import { apiFetch, requestJson } from '../api/client';
+import { authenticatedApiFetch as apiFetch, authenticatedRequestJson as requestJson } from '../api/authenticatedClient';
+import { waitForPixelProject } from '../pixelArt/pixelArtApi';
 import type { StructuredMessage } from '../api/client';
 import { currentTaskContext } from '../api/taskContext';
 import type { PixelArtProject, PixelArtProjectList } from '../pixelArt/pixelArtApi';
@@ -190,10 +191,5 @@ export async function loadLegoDesignPixelProjects(page: number): Promise<PixelAr
 }
 
 export async function loadLegoDesignPixelProject(projectId: string): Promise<PixelArtProject> {
-  return requestJson<PixelArtProject>(
-    legoDesignConfig.projectApiUrl.replace(
-      legoDesignConfig.routePlaceholders.projectId,
-      projectId,
-    ),
-  );
+  return waitForPixelProject(projectId);
 }

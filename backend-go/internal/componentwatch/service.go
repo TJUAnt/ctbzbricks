@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,11 +22,15 @@ import (
 )
 
 const (
-	defaultListLimit = 20
-	maxListLimit     = 100
+	defaultListLimit                  = 20
+	maxListLimit                      = 100
+	defaultNotificationLocale         = "zh-CN"
+	defaultNotificationTimezone       = "UTC"
+	defaultNotificationCatalogVersion = "frontend-2026.09.06.1"
 )
 
 var errRetryWatchTransaction = errors.New("retry concurrent watch transaction")
+var catalogVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 // Service 管理当前 actor 的 Watch 偏好与只读列表；它不负责发布事件或通知投递。
 type Service struct {
@@ -45,9 +50,22 @@ func (s *Service) WithMetrics(metrics *observability.Registry) *Service {
 	return s
 }
 
-// Watch 幂等建立 releases_only 订阅。资格检查与写入位于同一可重试串行化事务，
-// 但本阶段只保存偏好，不创建领域事件或通知副作用。
+// Watch 为内部调用提供默认通知上下文；HTTP 入口必须使用 WatchWithContext 保存浏览器的冻结上下文。
 func (s *Service) Watch(ctx context.Context, actor pgtype.UUID, componentID, level string) (result Watch, err error) {
+	return s.WatchWithContext(ctx, actor, componentID, level, NotificationContext{
+		Locale: defaultNotificationLocale, Timezone: defaultNotificationTimezone,
+		CatalogVersion: defaultNotificationCatalogVersion,
+	})
+}
+
+// WatchWithContext 幂等建立 releases_only 订阅。资格检查、上下文冻结与写入位于同一可重试串行化事务；
+// 重复 PUT 保留原 period 及原上下文，避免改变既有事件时点和未来通知审计语义。
+func (s *Service) WatchWithContext(
+	ctx context.Context,
+	actor pgtype.UUID,
+	componentID, level string,
+	notificationContext NotificationContext,
+) (result Watch, err error) {
 	defer func() {
 		s.recordMutation(observability.ComponentWatchActionWatch, err)
 	}()
@@ -55,6 +73,10 @@ func (s *Service) Watch(ctx context.Context, actor pgtype.UUID, componentID, lev
 		return Watch{}, apierror.New("component_repo.watch_level_unsupported", http.StatusUnprocessableEntity, map[string]any{"level": level})
 	}
 	id, err := parseID(componentID, "componentId")
+	if err != nil {
+		return Watch{}, err
+	}
+	notificationContext, err = normalizeNotificationContext(notificationContext)
 	if err != nil {
 		return Watch{}, err
 	}
@@ -83,6 +105,8 @@ func (s *Service) Watch(ctx context.Context, actor pgtype.UUID, componentID, lev
 		}
 		row, err := q.CreateActiveComponentWatchPeriod(ctx, db.CreateActiveComponentWatchPeriodParams{
 			ActorID: actor, ComponentID: id, WatchLevel: level,
+			NotificationLocale: notificationContext.Locale, NotificationTimezone: notificationContext.Timezone,
+			NotificationCatalogVersion: notificationContext.CatalogVersion,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			// 并发请求已先创建 active period；回滚当前快照并重试，下一轮按重复 Watch 返回权威周期。
@@ -96,6 +120,28 @@ func (s *Service) Watch(ctx context.Context, actor pgtype.UUID, componentID, lev
 			Level: row.WatchLevel, WatchedAt: row.WatchedAt.Time,
 		}, nil
 	})
+}
+
+func normalizeNotificationContext(value NotificationContext) (NotificationContext, error) {
+	locale := displayLocale(value.Locale)
+	normalizedInput := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value.Locale, "_", "-")))
+	if normalizedInput == "" || (normalizedInput != "zh" && normalizedInput != "zh-cn" &&
+		normalizedInput != "zh-hans" && !strings.HasPrefix(normalizedInput, "zh-hans-") && normalizedInput != "en" &&
+		normalizedInput != "en-us" && !strings.HasPrefix(normalizedInput, "en-")) {
+		return NotificationContext{}, validationError("locale")
+	}
+	zone := strings.TrimSpace(value.Timezone)
+	if len(zone) > 128 {
+		return NotificationContext{}, validationError("timezone")
+	}
+	if _, err := time.LoadLocation(zone); err != nil {
+		return NotificationContext{}, validationError("timezone")
+	}
+	catalogVersion := strings.TrimSpace(value.CatalogVersion)
+	if !catalogVersionPattern.MatchString(catalogVersion) {
+		return NotificationContext{}, validationError("catalogVersion")
+	}
+	return NotificationContext{Locale: locale, Timezone: zone, CatalogVersion: catalogVersion}, nil
 }
 
 // Unwatch 在共享 Component activity lock 下幂等关闭当前订阅有效区间；Component 删除后由清理任务写统一边界，

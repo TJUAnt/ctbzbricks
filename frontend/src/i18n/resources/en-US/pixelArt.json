@@ -74,5 +74,13 @@
   "texts.editSource": "Source Color Picker",
   "texts.pixelEditor": "Pixel Art Editor",
   "texts.cropWorkspace": "Select Pixelation Area",
-  "colors": "colors"
+  "colors": "colors",
+  "texts.previewFailed": "Preview processing failed. Adjust the settings to try again.",
+  "texts.taskUploading": "Submitting the processing image",
+  "texts.taskQueued": "Pixelation task queued",
+  "texts.taskProcessing": "Generating pixel art",
+  "texts.taskCompleted": "Pixel art processing complete",
+  "texts.taskFailed": "Pixel art processing failed",
+  "texts.safeToClose": "The task is saved. You can close this page and return from Saved Pixel Art later.",
+  "texts.resumeProcessing": "View processing progress"
 }

@@ -1,28 +1,28 @@
 import React from 'react';
 import { BarChart3, FileJson, Grid3X3, Layers3, Mountain, RefreshCw, Save } from 'lucide-react';
-import { localizeStructuredMessage } from '../api/client';
-import { formatNumber as formatLocalizedNumber } from '../i18n/formatters';
-import legoTerrainConfig from './legoTerrainConfig';
+import { localizeStructuredMessage } from '../../api/client';
+import { formatNumber as formatLocalizedNumber } from '../../i18n/formatters';
+import legoTerrainConfig from '../../legoTerrain/legoTerrainConfig';
 import {
   createLegoHeightmapAsset,
   saveLegoHeightmapModel,
   type LegoHeightmapModelMetadata,
-} from './legoHeightmapAsset';
+} from '../../legoTerrain/legoHeightmapAsset';
 import {
   createLegoHeightmap,
   type LegoHeightCell,
   type LegoHeightmap,
   type LegoHeightmapScale,
-} from './legoHeightmap';
+} from '../../legoTerrain/legoHeightmap';
 import {
   combineGeojsonFeatureCollections,
   createTerrainJob,
   createTerrainUploadPayload,
   loadTerrainJob,
   routeWithParam,
-} from '../terrain/terrainApi';
-import terrainConfig from '../terrain/terrainConfig';
-import type { TerrainAsset, TerrainJob } from '../terrain/terrainTypes';
+} from '../../terrain/terrainApi';
+import terrainConfig from '../../terrain/terrainConfig';
+import type { TerrainAsset, TerrainJob } from '../../terrain/terrainTypes';
 
 type LegoTerrainState =
   | { status: 'loading'; asset: null; error: null; progress: number }

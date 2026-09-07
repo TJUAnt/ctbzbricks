@@ -1,5 +1,7 @@
 # Component Repo Go 迁移路线与实施计划
 
+> 后续领域专项：[2D 像素化与拼接方案 Go 迁移](go_pixel_2d_migration.md)（P2D，独立记录；不计入 Component Repo G0～G8）。
+
 > 状态：G0～G8 completed / Component Repo Go-only runtime established
 > 更新日期：2026-09-05
 > 原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)

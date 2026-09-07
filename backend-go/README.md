@@ -36,10 +36,9 @@ local development. The independent `start-go-worker` and
 They load shared connection values from `backend/.env`, then optional Go-only
 overrides from `backend-go/.env`; already-exported shell variables take
 precedence. Secrets remain in environment files and are not embedded in the
-scripts. `scripts/start-dev.sh` starts the Go API, necessary legacy API, one Go
-Worker, and Vite, and waits for both HTTP processes before declaring readiness.
-Set `START_LEGACY_API=0` or `START_COMPONENT_WORKERS=0` only for a deliberately
-reduced local topology. Corresponding PowerShell launchers provide the same
+scripts. `scripts/start-dev.sh` defaults to Go API + Go Worker + Vite, with no Python
+service. `START_LEGACY_API=1` explicitly opts into archived legacy development;
+`START_COMPONENT_WORKERS=0` disables task processing and is not a complete 2D topology. Corresponding PowerShell launchers provide the same
 process boundaries on Windows.
 
 Environment files are not loaded implicitly. Export the variables through the shell, a development runner, or the deployment environment.
@@ -52,9 +51,12 @@ GET /health/ready
 GET /metrics
 ```
 
-`/metrics` 输出 Prometheus 文本格式的低基数机器指标，包括发布事件结果与固定 action/result 的 Watch mutation
-计数，不要求业务 Bearer token；生产反向代理或网络策略必须
-只允许监控系统访问。指标不包含 actor、Component ID、用户内容、Storage 定位符或凭据。
+`/metrics` 输出 Prometheus 文本格式的低基数机器指标，包括发布事件结果、固定 action/result 的 Watch mutation
+以及 WATCH-3 预冻结的 Component notification fan-out Counter/Histogram/Gauge。Notification Worker 尚未实现时
+这些 fan-out 序列保持零值，不能解释为数据库 backlog 为零；Worker 上线后必须提供独立内部 scrape endpoint，
+并从 PostgreSQL delivery 状态采样 backlog Gauge。完整标签、bucket、容量和 SLO 契约见 Watch 路线第 26 节。
+该端点不要求业务 Bearer token；生产反向代理或网络策略必须只允许监控系统访问。指标不包含 actor、
+Component ID、用户内容、Storage 定位符或凭据。
 
 The authenticated Component Repo API under `/api/v1` currently exposes:
 

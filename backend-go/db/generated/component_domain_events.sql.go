@@ -21,6 +21,17 @@ func (q *Queries) AcquireExclusiveComponentActivityLock(ctx context.Context, loc
 	return err
 }
 
+const createComponentEventDelivery = `-- name: CreateComponentEventDelivery :exec
+INSERT INTO component_repo.component_event_deliveries (event_id)
+VALUES ($1)
+`
+
+// 发布事务为每个领域事件建立且只建立一条独立 fan-out Delivery；失败会与发布事实一起回滚。
+func (q *Queries) CreateComponentEventDelivery(ctx context.Context, eventID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, createComponentEventDelivery, eventID)
+	return err
+}
+
 const createComponentVersionPublishedEvent = `-- name: CreateComponentVersionPublishedEvent :one
 INSERT INTO component_repo.component_domain_events (
     id, event_type, component_id, component_version_id, actor_id, payload

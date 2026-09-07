@@ -1,0 +1,577 @@
+{
+  "project": {
+    "gridWidth": 8,
+    "gridHeight": 8,
+    "palette": [
+      {
+        "rgb": "#FF0000"
+      },
+      {
+        "rgb": "#0000FF"
+      }
+    ],
+    "pixels": [
+      {
+        "x": 0,
+        "y": 0,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 1,
+        "y": 0,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 2,
+        "y": 0,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 3,
+        "y": 0,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 4,
+        "y": 0,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 5,
+        "y": 0,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 6,
+        "y": 0,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 7,
+        "y": 0,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 0,
+        "y": 1,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 1,
+        "y": 1,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 2,
+        "y": 1,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 3,
+        "y": 1,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 4,
+        "y": 1,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 5,
+        "y": 1,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 6,
+        "y": 1,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 7,
+        "y": 1,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 0,
+        "y": 2,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 1,
+        "y": 2,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 2,
+        "y": 2,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 3,
+        "y": 2,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 4,
+        "y": 2,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 5,
+        "y": 2,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 6,
+        "y": 2,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 7,
+        "y": 2,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 0,
+        "y": 3,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 1,
+        "y": 3,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 2,
+        "y": 3,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 3,
+        "y": 3,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 4,
+        "y": 3,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 5,
+        "y": 3,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 6,
+        "y": 3,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 7,
+        "y": 3,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 0,
+        "y": 4,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 1,
+        "y": 4,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 2,
+        "y": 4,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 3,
+        "y": 4,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 4,
+        "y": 4,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 5,
+        "y": 4,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 6,
+        "y": 4,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 7,
+        "y": 4,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 0,
+        "y": 5,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 1,
+        "y": 5,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 2,
+        "y": 5,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 3,
+        "y": 5,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 4,
+        "y": 5,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 5,
+        "y": 5,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 6,
+        "y": 5,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 7,
+        "y": 5,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 0,
+        "y": 6,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 1,
+        "y": 6,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 2,
+        "y": 6,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 3,
+        "y": 6,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 4,
+        "y": 6,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 5,
+        "y": 6,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 6,
+        "y": 6,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 7,
+        "y": 6,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 0,
+        "y": 7,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 1,
+        "y": 7,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 2,
+        "y": 7,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 3,
+        "y": 7,
+        "rgb": "#FF0000"
+      },
+      {
+        "x": 4,
+        "y": 7,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 5,
+        "y": 7,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 6,
+        "y": 7,
+        "rgb": "#0000FF"
+      },
+      {
+        "x": 7,
+        "y": 7,
+        "rgb": "#0000FF"
+      }
+    ]
+  },
+  "metadata": {
+    "colors": [
+      {
+        "id": 4,
+        "name": "Red",
+        "rgb": "#FF0000",
+        "isTrans": false
+      },
+      {
+        "id": 1,
+        "name": "Blue",
+        "rgb": "#0000FF",
+        "isTrans": false
+      }
+    ],
+    "parts": [
+      {
+        "ldrawPartNum": "3024.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "name": "Plate 1 x 1",
+        "partRole": "plate",
+        "width": 1,
+        "height": 1,
+        "logicalHeightPlate": 1,
+        "area": 1
+      },
+      {
+        "ldrawPartNum": "3023.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "name": "Plate 1 x 2",
+        "partRole": "plate",
+        "width": 1,
+        "height": 2,
+        "logicalHeightPlate": 1,
+        "area": 2
+      },
+      {
+        "ldrawPartNum": "3022.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "name": "Plate 2 x 2",
+        "partRole": "plate",
+        "width": 2,
+        "height": 2,
+        "logicalHeightPlate": 1,
+        "area": 4
+      },
+      {
+        "ldrawPartNum": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "name": "Plate 2 x 4",
+        "partRole": "plate",
+        "width": 2,
+        "height": 4,
+        "logicalHeightPlate": 1,
+        "area": 8
+      }
+    ],
+    "terrainParts": []
+  },
+  "expected": {
+    "width": 8,
+    "height": 8,
+    "placements": [
+      {
+        "partId": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "colorId": 4,
+        "colorName": "Red",
+        "colorRgb": "#FF0000",
+        "ldrawColorCode": "0x2FF0000",
+        "x": 0,
+        "y": 0,
+        "width": 2,
+        "height": 4,
+        "logicalHeightPlate": 1,
+        "rotation": 0
+      },
+      {
+        "partId": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "colorId": 4,
+        "colorName": "Red",
+        "colorRgb": "#FF0000",
+        "ldrawColorCode": "0x2FF0000",
+        "x": 2,
+        "y": 0,
+        "width": 2,
+        "height": 4,
+        "logicalHeightPlate": 1,
+        "rotation": 0
+      },
+      {
+        "partId": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "colorId": 4,
+        "colorName": "Red",
+        "colorRgb": "#FF0000",
+        "ldrawColorCode": "0x2FF0000",
+        "x": 0,
+        "y": 4,
+        "width": 2,
+        "height": 4,
+        "logicalHeightPlate": 1,
+        "rotation": 0
+      },
+      {
+        "partId": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "colorId": 4,
+        "colorName": "Red",
+        "colorRgb": "#FF0000",
+        "ldrawColorCode": "0x2FF0000",
+        "x": 2,
+        "y": 4,
+        "width": 2,
+        "height": 4,
+        "logicalHeightPlate": 1,
+        "rotation": 0
+      },
+      {
+        "partId": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "colorId": 1,
+        "colorName": "Blue",
+        "colorRgb": "#0000FF",
+        "ldrawColorCode": "0x20000FF",
+        "x": 4,
+        "y": 0,
+        "width": 2,
+        "height": 4,
+        "logicalHeightPlate": 1,
+        "rotation": 0
+      },
+      {
+        "partId": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "colorId": 1,
+        "colorName": "Blue",
+        "colorRgb": "#0000FF",
+        "ldrawColorCode": "0x20000FF",
+        "x": 6,
+        "y": 0,
+        "width": 2,
+        "height": 4,
+        "logicalHeightPlate": 1,
+        "rotation": 0
+      },
+      {
+        "partId": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "colorId": 1,
+        "colorName": "Blue",
+        "colorRgb": "#0000FF",
+        "ldrawColorCode": "0x20000FF",
+        "x": 4,
+        "y": 4,
+        "width": 2,
+        "height": 4,
+        "logicalHeightPlate": 1,
+        "rotation": 0
+      },
+      {
+        "partId": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "colorId": 1,
+        "colorName": "Blue",
+        "colorRgb": "#0000FF",
+        "ldrawColorCode": "0x20000FF",
+        "x": 6,
+        "y": 4,
+        "width": 2,
+        "height": 4,
+        "logicalHeightPlate": 1,
+        "rotation": 0
+      }
+    ],
+    "bom": [
+      {
+        "key": "3020.dat:4:0x2FF0000:2:4",
+        "partId": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "colorId": 4,
+        "colorName": "Red",
+        "colorRgb": "#FF0000",
+        "ldrawColorCode": "0x2FF0000",
+        "width": 2,
+        "height": 4,
+        "quantity": 4
+      },
+      {
+        "key": "3020.dat:1:0x20000FF:2:4",
+        "partId": "3020.dat",
+        "rebrickablePartNum": null,
+        "legoDesignId": null,
+        "colorId": 1,
+        "colorName": "Blue",
+        "colorRgb": "#0000FF",
+        "ldrawColorCode": "0x20000FF",
+        "width": 2,
+        "height": 4,
+        "quantity": 4
+      }
+    ],
+    "colorMappings": [
+      {
+        "sourceRgb": "#FF0000",
+        "colorId": 4,
+        "colorName": "Red",
+        "colorRgb": "#FF0000",
+        "ldrawColorCode": "0x2FF0000"
+      },
+      {
+        "sourceRgb": "#0000FF",
+        "colorId": 1,
+        "colorName": "Blue",
+        "colorRgb": "#0000FF",
+        "ldrawColorCode": "0x20000FF"
+      }
+    ],
+    "modelDimensions": {
+      "lengthStud": 8,
+      "widthStud": 8,
+      "heightPlate": 1,
+      "lengthCm": 6.4,
+      "widthCm": 6.4,
+      "heightCm": 0.32
+    }
+  }
+}

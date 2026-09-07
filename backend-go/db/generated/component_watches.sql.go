@@ -113,34 +113,50 @@ func (q *Queries) CloseActiveComponentWatchesForLifecycleBatch(ctx context.Conte
 
 const createActiveComponentWatchPeriod = `-- name: CreateActiveComponentWatchPeriod :one
 INSERT INTO component_repo.component_watch_periods (
-    actor_id, component_id, watch_level
+    actor_id, component_id, watch_level,
+    notification_locale, notification_timezone, notification_catalog_version
 ) VALUES (
-    $1, $2, $3
+    $1, $2, $3,
+    $4, $5, $6
 )
 ON CONFLICT (actor_id, component_id) WHERE ended_seq IS NULL DO NOTHING
-RETURNING id, actor_id, component_id, watch_level, started_seq, ended_seq, watched_at, unwatched_at
+RETURNING id, actor_id, component_id, watch_level, started_seq, ended_seq, watched_at, unwatched_at,
+          notification_locale, notification_timezone, notification_catalog_version
 `
 
 type CreateActiveComponentWatchPeriodParams struct {
-	ActorID     pgtype.UUID
-	ComponentID pgtype.UUID
-	WatchLevel  string
+	ActorID                    pgtype.UUID
+	ComponentID                pgtype.UUID
+	WatchLevel                 string
+	NotificationLocale         string
+	NotificationTimezone       string
+	NotificationCatalogVersion string
 }
 
 type CreateActiveComponentWatchPeriodRow struct {
-	ID          int64
-	ActorID     pgtype.UUID
-	ComponentID pgtype.UUID
-	WatchLevel  string
-	StartedSeq  int64
-	EndedSeq    *int64
-	WatchedAt   pgtype.Timestamptz
-	UnwatchedAt pgtype.Timestamptz
+	ID                         int64
+	ActorID                    pgtype.UUID
+	ComponentID                pgtype.UUID
+	WatchLevel                 string
+	StartedSeq                 int64
+	EndedSeq                   *int64
+	WatchedAt                  pgtype.Timestamptz
+	UnwatchedAt                pgtype.Timestamptz
+	NotificationLocale         string
+	NotificationTimezone       string
+	NotificationCatalogVersion string
 }
 
 // 没有 active period 时追加新周期；并发重复 PUT 命中部分唯一索引时不更新任何既有行，由 Service 重试读取。
 func (q *Queries) CreateActiveComponentWatchPeriod(ctx context.Context, arg CreateActiveComponentWatchPeriodParams) (CreateActiveComponentWatchPeriodRow, error) {
-	row := q.db.QueryRow(ctx, createActiveComponentWatchPeriod, arg.ActorID, arg.ComponentID, arg.WatchLevel)
+	row := q.db.QueryRow(ctx, createActiveComponentWatchPeriod,
+		arg.ActorID,
+		arg.ComponentID,
+		arg.WatchLevel,
+		arg.NotificationLocale,
+		arg.NotificationTimezone,
+		arg.NotificationCatalogVersion,
+	)
 	var i CreateActiveComponentWatchPeriodRow
 	err := row.Scan(
 		&i.ID,
@@ -151,6 +167,9 @@ func (q *Queries) CreateActiveComponentWatchPeriod(ctx context.Context, arg Crea
 		&i.EndedSeq,
 		&i.WatchedAt,
 		&i.UnwatchedAt,
+		&i.NotificationLocale,
+		&i.NotificationTimezone,
+		&i.NotificationCatalogVersion,
 	)
 	return i, err
 }
@@ -185,7 +204,10 @@ SELECT component.id, component.owner_id, component.status,
        existing_watch.watch_level,
        existing_watch.id AS watch_period_id,
        existing_watch.started_seq,
-       existing_watch.watched_at
+       existing_watch.watched_at,
+       existing_watch.notification_locale,
+       existing_watch.notification_timezone,
+       existing_watch.notification_catalog_version
 FROM component_repo.components component
 LEFT JOIN component_repo.component_watch_periods existing_watch
   ON existing_watch.actor_id = $1
@@ -202,14 +224,17 @@ type GetComponentWatchTargetParams struct {
 }
 
 type GetComponentWatchTargetRow struct {
-	ID                     pgtype.UUID
-	OwnerID                pgtype.UUID
-	Status                 string
-	PublicVersionAvailable bool
-	WatchLevel             *string
-	WatchPeriodID          *int64
-	StartedSeq             *int64
-	WatchedAt              pgtype.Timestamptz
+	ID                         pgtype.UUID
+	OwnerID                    pgtype.UUID
+	Status                     string
+	PublicVersionAvailable     bool
+	WatchLevel                 *string
+	WatchPeriodID              *int64
+	StartedSeq                 *int64
+	WatchedAt                  pgtype.Timestamptz
+	NotificationLocale         *string
+	NotificationTimezone       *string
+	NotificationCatalogVersion *string
 }
 
 // Watch 资格检查只读取目标可用性与当前 actor 的关系；不加载 Component 详情、翻译或聚合。
@@ -225,6 +250,9 @@ func (q *Queries) GetComponentWatchTarget(ctx context.Context, arg GetComponentW
 		&i.WatchPeriodID,
 		&i.StartedSeq,
 		&i.WatchedAt,
+		&i.NotificationLocale,
+		&i.NotificationTimezone,
+		&i.NotificationCatalogVersion,
 	)
 	return i, err
 }

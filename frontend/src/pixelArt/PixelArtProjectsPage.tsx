@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+import appConfig from '../app/appConfig';
 import React from 'react';
 import { ChevronLeft, ChevronRight, Image as ImageIcon, RefreshCw } from 'lucide-react';
 import { loadPixelArtProjects, type PixelArtProjectList } from './pixelArtApi';
@@ -52,7 +54,15 @@ export function PixelArtProjectsPage() {
       <section className="pixel-art-project-grid">
         {projectList?.items.map((project) => (
           <article className="pixel-art-project-card" key={project.modelId}>
-            <img alt={project.name} src={project.previewImage} />
+            {project.previewImage ? <img alt={project.name} src={project.previewImage} /> : <span>{project.status === 'failed' ? pixelArtConfig.texts.saveFailed : pixelArtConfig.texts.generating}</span>}
+            <Link to={`${appConfig.routePaths.pixelArt}?project=${encodeURIComponent(project.modelId)}`}>
+              {project.status === 'succeeded' ? tr('app:navigation.pixelEdit') : pixelArtConfig.texts.resumeProcessing}
+            </Link>
+            {project.status === 'queued' || project.status === 'running' ? (
+              <div className="pixel-art-project-progress">
+                <progress aria-label={pixelArtConfig.texts.taskProcessing} max={100} />
+              </div>
+            ) : null}
             <div>
               <ImageIcon aria-hidden="true" />
               <strong>{project.name}</strong>

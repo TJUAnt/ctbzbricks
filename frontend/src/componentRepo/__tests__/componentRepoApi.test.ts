@@ -171,7 +171,11 @@ describe('Component Repo Go API adapter', () => {
       2,
       '/api/v1/components/component-1/watch',
       expect.objectContaining({
-        method: 'PUT', body: JSON.stringify({ level: 'releases_only' }),
+        method: 'PUT',
+        body: JSON.stringify({
+          level: 'releases_only', locale: 'zh-CN', timezone: 'UTC',
+          catalogVersion: 'frontend-2026.09.06.1',
+        }),
       }),
     );
     await unwatchComponent('component-1');

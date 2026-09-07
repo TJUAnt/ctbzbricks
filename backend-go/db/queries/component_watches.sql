@@ -15,7 +15,10 @@ SELECT component.id, component.owner_id, component.status,
        existing_watch.watch_level,
        existing_watch.id AS watch_period_id,
        existing_watch.started_seq,
-       existing_watch.watched_at
+       existing_watch.watched_at,
+       existing_watch.notification_locale,
+       existing_watch.notification_timezone,
+       existing_watch.notification_catalog_version
 FROM component_repo.components component
 LEFT JOIN component_repo.component_watch_periods existing_watch
   ON existing_watch.actor_id = sqlc.arg(actor_id)
@@ -28,12 +31,15 @@ WHERE component.id = sqlc.arg(component_id)
 -- name: CreateActiveComponentWatchPeriod :one
 -- 没有 active period 时追加新周期；并发重复 PUT 命中部分唯一索引时不更新任何既有行，由 Service 重试读取。
 INSERT INTO component_repo.component_watch_periods (
-    actor_id, component_id, watch_level
+    actor_id, component_id, watch_level,
+    notification_locale, notification_timezone, notification_catalog_version
 ) VALUES (
-    sqlc.arg(actor_id), sqlc.arg(component_id), sqlc.arg(watch_level)
+    sqlc.arg(actor_id), sqlc.arg(component_id), sqlc.arg(watch_level),
+    sqlc.arg(notification_locale), sqlc.arg(notification_timezone), sqlc.arg(notification_catalog_version)
 )
 ON CONFLICT (actor_id, component_id) WHERE ended_seq IS NULL DO NOTHING
-RETURNING id, actor_id, component_id, watch_level, started_seq, ended_seq, watched_at, unwatched_at;
+RETURNING id, actor_id, component_id, watch_level, started_seq, ended_seq, watched_at, unwatched_at,
+          notification_locale, notification_timezone, notification_catalog_version;
 
 -- name: CloseActiveComponentWatchPeriod :execrows
 -- 用户主动 Unwatch 仅关闭仍处于 active 生命周期的 Component；结束序号与时间在同一条语句中只写一次。

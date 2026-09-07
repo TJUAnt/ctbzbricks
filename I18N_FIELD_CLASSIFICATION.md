@@ -11,7 +11,8 @@
 | `ComponentGroup.id/owner_id/parent_group_id/group_type/sort_order`、分组关系与 Star 关系 | 机器数据 | `actor_id/component_id/starred_at/source`、`starredAt/starCount/relationshipTotal` 和 `sort=starred_at_desc` 保持稳定且不翻译；分类与尺寸筛选值按用户原文传输 |
 | Component Watch period 与列表 cursor | 机器数据 / 系统内容边界 | period ID、`actor_id/component_id/watch_level/started_seq/ended_seq/watched_at/unwatched_at`、`releases_only`、不透明 cursor 及 API 字段保持稳定且不翻译；Watch 操作、状态、级别说明和结构化错误通过 typed semantic key 本地化。Watch 不改变 Star、Fork 或资源权限。 |
 | Component 发布领域事件与指标 | 机器数据 | `event_id/event_type/component_id/component_version_id/actor_id/event_seq/occurred_at/created_at`、空对象 payload、`component_domain_event_total` 及其固定 `event_type/result=committed\|failed` 标签保持稳定且不翻译。指标不接受 actor、Component ID 或请求文本。v1 不复制 Version Label、Release Note/locale、Component 名称、Artifact 路径或最终译文；后续通知快照必须独立遵守用户原文与 reviewed official translation 边界。 |
-| `PixelArtProject.name` | 用户内容 | 原文保存并返回 `contentLocale` |
+| `PixelArtProject.name` / Go `pixel_2d.projects.name/source_name` | 用户内容 | 原文保存并返回 `contentLocale`；不自动迁移无 owner 的 legacy 项目 |
+| Go 2D revision/task/catalog/blob ID、RGB、BOM、尺寸、算法版本 | 机器数据 | 保持稳定；任务冻结 locale/timezone/export catalogVersion，JSON 属性不翻译，官方目录名称保留源内容并声明 en-US |
 | `ModelAsset.name/source_name` | 用户内容 | 原文保存并返回 `contentLocale` |
 | `Component`（`content_kind=official`） | 官方内容 | 源内容保存在主表，翻译保存在 `component_translations` |
 | `LDrawPart.name/description` | 官方内容 | 英文源内容保存在主表，翻译保存在 `part_translations` |

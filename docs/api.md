@@ -117,7 +117,7 @@ session；网络或 provider 暂不可用只隐藏未经确认的用户信息并
 |---|---|---|---|
 | `GET /health/live` | 进程存活检查 | `200 {status:"ok",traceId}` | 不访问数据库或 Storage，只证明 Gin 进程能够响应。 |
 | `GET /health/ready` | 依赖就绪检查 | `200 {status:"ready",checks:{database:"ok"},traceId}` | 在独立超时内 Ping PostgreSQL；失败返回 `503` 和机器状态 `database=unavailable`，不暴露连接错误。 |
-| `GET /metrics` | Prometheus 0.0.4 文本指标 | `200 text/plain` | 当前输出固定低基数 `component_domain_event_total{event_type,result}` 和 `component_watch_mutation_total{action,result}`。Watch action 只允许 `watch/unwatch`，result 只允许 `succeeded/failed`；幂等空操作属于 succeeded。两类指标均不接受请求值、actor、Component ID、错误正文或用户内容。计数属于单个 API 进程，跨实例聚合与重启连续性由监控系统负责。 |
+| `GET /metrics` | Prometheus 0.0.4 文本指标 | `200 text/plain` | 输出固定低基数 `component_domain_event_total{event_type,result}`、`component_watch_mutation_total{action,result}` 与 WATCH-3 预冻结的 `component_notification_*` Counter/Histogram/Gauge。Watch action 只允许 `watch/unwatch`，result 只允许 `succeeded/failed`；fan-out 标签集合见 Watch 路线第 26.6 节。所有指标拒绝请求值、actor、Component/event ID、错误正文或用户内容。fan-out Worker 尚未实现，因此通知指标当前只是零值契约，不代表真实 backlog 为零；WATCH-3 必须由独立 Worker scrape endpoint 暴露 Counter，并从 PostgreSQL delivery 状态采样 Gauge。 |
 
 ## 3. Component
 
@@ -541,3 +541,32 @@ GET Candidate / Draft Version
 - 不提供在线 hard purge；Component DELETE 当前为 soft delete。
 - 不提供通用 `library-items` Part Preview alias。
 - 不提供公共 Worker claim/heartbeat/complete HTTP API；Worker 直接使用 PostgreSQL 持久化协议。
+
+## 2D 模型工具：Go-only API（2026-09-06）
+
+实现与部署门禁见 [专项迁移记录](go_pixel_2d_migration.md)。全部路由位于 Go 已认证组，JWT actor 是唯一所有权依据；不接受客户端 owner。旧 FastAPI 2D 路由已停止注册，不提供兼容代理。
+
+| 方法与路径 | 请求与响应 |
+|---|---|
+| POST `/api/v1/pixel-art/projects` | multipart `name/contentLocale/timezone/settings/image`；文件不超过 20 MiB，PNG/JPEG/WebP，网格 1～128。202 `{modelId,revisionId,taskId,status}` |
+| GET `/api/v1/pixel-art/projects` | `page`、`page_size`；返回页信息、精确 total、当前修订/任务状态和已完成预览签名 URL；只查询 owner 项目 |
+| GET `/api/v1/pixel-art/projects/:projectId` | 未完成返回修订/task/status/error；完成返回像素项目、palette、revisionId 与预览签名 URL |
+| PUT `/api/v1/pixel-art/projects/:projectId/pixels` | JSON `revisionId,pixels,palette,locale,timezone`；palette 不作为权威统计，Worker 重算。父修订 CAS 防止旧编辑覆盖；202 返回新修订与任务 |
+| GET `/api/v1/lego-design/metadata` | 显式导入的真实 colors/parts 目录，名称为源内容，`contentLocale=en-US` |
+| GET `/api/v1/lego-design/candidates` | `footprint=rectangular`，返回目录 Plate candidates |
+| POST `/api/v1/lego-design/jobs` | JSON `projectId,locale,timezone`；202 返回 job 信息；冻结成功的当前修订、目录 hash/内容、算法版本、ExportContext |
+| GET `/api/v1/lego-design/jobs/:jobId` | owner-only 设计状态；成功映射为 `complete`，返回持久设计结果；进度与错误为 code/params |
+| GET `/api/v1/lego-design/jobs/:jobId/ldraw` 或 `/plan` | 必须提供 `include_base=true/false`；读取 Worker 已物化产物，使用冻结语言和 UTF-8 文件名；下载不再次运行算法 |
+
+Goose 独占 `pixel_2d`，Alembic/public 与 provider storage RLS 的归属不变。`pixel_2d.generate/edit/design` 复用共享持久 task/job、lease、重试协议；任务写入与修订切换使用显式 pgx 事务。HTTP 只执行有界 IO/校验；图片解码、量化、像素校验、拼接及导出由 Go Worker 执行。Blob 先 reservation 后上传；派生产物按 owner/kind/哈希定位，临时输入增加独立 UUID，防止相同图片的并发任务互相删除。大产物不进入 task result，仅保留 blob UUID。API/Worker 启动均不执行 DDL 或元数据导入。
+
+用户项目名称/文件名保留原文并带 contentLocale；机器字段不翻译，错误不会回传内部异常。旧无 owner 的项目不自动纳入新列表。详细兼容差异和发布步骤以专项记录为准。
+
+前端收到 202 后将 `projectId` 写入 URL，并以响应的 `taskId` 调用共享 `GET /api/v1/tasks/:taskId`。关闭或离开页面只停止客户端轮询；不调用任务取消接口。重新打开项目时，先通过项目接口恢复 taskId，再轮询 Task；只有 succeeded 后读取一次完整项目。像素任务没有真实 percent 时进度条为不确定状态。成功修订完成后 Worker 删除 source/input 对象正文；删除失败进入持久任务重试，已物化修订不会重复计算。数据库保留源文件名和 blob 审计元数据，但 API 不提供原图下载。
+
+### Go-only 2D 验收补充（2026-09-06）
+
+- LEGO job 的 `progress` 同时包含数值 `percent` 和 `params.percent`，供进度条与语义资源插值共用；完成值为 100。
+- `POST /api/v1/i18n/events`：匿名接收既有客户端遥测，严格校验 kind/locale/namespace/code，成功 204、无效 422（稳定结构化错误）。
+- `GET /api/v1/i18n/metrics`：返回 unknownKeyCount、unknownApiCodeCount、localeFallbackCount、metricOverflowCount、events、hourly。仅进程级观测，最多 1000 个维度、保留 24 个 UTC 小时；进程重启清空，不承担持久业务任务或跨实例汇总。
+- 前端只代理 `/api/v1` 至 Go；不再将 `/api` 兜底发往 Python。DEM/GLB 工具旧路由不开放。

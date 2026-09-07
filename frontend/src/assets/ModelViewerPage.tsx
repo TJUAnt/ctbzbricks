@@ -5,7 +5,7 @@ import {
   HeightmapCanvas,
   HeightmapLegend,
   HeightmapMetrics,
-} from '../legoTerrain/LegoTerrainBuilderPage';
+} from '../archive/dem/LegoTerrainBuilderPage';
 import {
   loadLegoHeightmapModel,
   type LegoHeightmapAsset,
@@ -14,7 +14,7 @@ import { MeshModelViewer } from '../modelImport/MeshModelViewer';
 import legoTerrainConfig from '../legoTerrain/legoTerrainConfig';
 import { loadTerrainModel, routeWithParam } from '../terrain/terrainApi';
 import terrainConfig from '../terrain/terrainConfig';
-import { TerrainScene, TerrainStats } from '../terrain/TerrainDemPage';
+import { TerrainScene, TerrainStats } from '../archive/dem/TerrainDemPage';
 import type { TerrainAsset } from '../terrain/terrainTypes';
 import type { ModelAsset } from './modelAssetApi';
 

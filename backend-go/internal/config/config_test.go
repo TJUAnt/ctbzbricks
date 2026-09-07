@@ -46,6 +46,13 @@ func TestLoadUsesDefaults(t *testing.T) {
 		cfg.Worker.HeartbeatInterval != 10*time.Second || cfg.Worker.Concurrency != 4 {
 		t.Fatalf("unexpected worker defaults: %+v", cfg.Worker)
 	}
+	if cfg.NotificationWorker.MetricsAddress() != "127.0.0.1:9091" ||
+		cfg.NotificationWorker.PollInterval != 500*time.Millisecond ||
+		cfg.NotificationWorker.LeaseDuration != 60*time.Second ||
+		cfg.NotificationWorker.HeartbeatInterval != 20*time.Second ||
+		cfg.NotificationWorker.Concurrency != 4 {
+		t.Fatalf("unexpected notification worker defaults: %+v", cfg.NotificationWorker)
+	}
 	if cfg.Import.ParserVersion != "component-repo-ldraw-parser-v2" ||
 		cfg.Import.SnapshotSchema != "component-repo-v2" || cfg.Import.MaxAttempts != 3 {
 		t.Fatalf("unexpected import defaults: %+v", cfg.Import)
@@ -66,6 +73,17 @@ func TestLoadValidatesWorkerLeaseTiming(t *testing.T) {
 	}
 }
 
+func TestLoadValidatesNotificationWorkerLeaseTiming(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{
+		"DATABASE_URL":                           "postgresql://localhost/brickbuilder",
+		"NOTIFICATION_WORKER_LEASE_DURATION":     "10s",
+		"NOTIFICATION_WORKER_HEARTBEAT_INTERVAL": "5s",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "NOTIFICATION_WORKER_HEARTBEAT_INTERVAL") {
+		t.Fatalf("expected notification worker lease timing error, got %v", err)
+	}
+}
+
 func TestLoadValidatesPoolBounds(t *testing.T) {
 	_, err := load(mapLookup(map[string]string{
 		"DATABASE_URL":            "postgresql://localhost/brickbuilder",
@@ -79,13 +97,22 @@ func TestLoadValidatesPoolBounds(t *testing.T) {
 
 func TestLoadParsesOverrides(t *testing.T) {
 	cfg, err := load(mapLookup(map[string]string{
-		"APP_ENV":              ProductionEnvironment,
-		"DATABASE_URL":         "postgres://localhost/brickbuilder",
-		"GO_BACKEND_HOST":      "0.0.0.0",
-		"GO_BACKEND_PORT":      "9090",
-		"HTTP_REQUEST_TIMEOUT": "7s",
-		"HTTP_MAX_BODY_BYTES":  "4096",
-		"WORKER_ID":            "worker-a",
+		"APP_ENV":                                      ProductionEnvironment,
+		"DATABASE_URL":                                 "postgres://localhost/brickbuilder",
+		"GO_BACKEND_HOST":                              "0.0.0.0",
+		"GO_BACKEND_PORT":                              "9090",
+		"HTTP_REQUEST_TIMEOUT":                         "7s",
+		"HTTP_MAX_BODY_BYTES":                          "4096",
+		"WORKER_ID":                                    "worker-a",
+		"NOTIFICATION_WORKER_ID":                       "notification-a",
+		"NOTIFICATION_WORKER_METRICS_HOST":             "0.0.0.0",
+		"NOTIFICATION_WORKER_METRICS_PORT":             "9191",
+		"NOTIFICATION_WORKER_CONCURRENCY":              "2",
+		"NOTIFICATION_WORKER_POLL_INTERVAL":            "2s",
+		"NOTIFICATION_WORKER_LEASE_DURATION":           "90s",
+		"NOTIFICATION_WORKER_HEARTBEAT_INTERVAL":       "20s",
+		"NOTIFICATION_WORKER_HEALTH_CHECK_INTERVAL":    "40s",
+		"NOTIFICATION_WORKER_METRICS_REFRESH_INTERVAL": "25s",
 	}))
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -95,6 +122,12 @@ func TestLoadParsesOverrides(t *testing.T) {
 	}
 	if cfg.HTTP.MaxBodyBytes != 4096 || cfg.Worker.ID != "worker-a" {
 		t.Fatalf("unexpected override config: %+v %+v", cfg.HTTP, cfg.Worker)
+	}
+	if cfg.NotificationWorker.ID != "notification-a" || cfg.NotificationWorker.MetricsAddress() != "0.0.0.0:9191" ||
+		cfg.NotificationWorker.Concurrency != 2 || cfg.NotificationWorker.PollInterval != 2*time.Second ||
+		cfg.NotificationWorker.LeaseDuration != 90*time.Second || cfg.NotificationWorker.HeartbeatInterval != 20*time.Second ||
+		cfg.NotificationWorker.HealthCheckInterval != 40*time.Second || cfg.NotificationWorker.MetricsRefreshInterval != 25*time.Second {
+		t.Fatalf("unexpected notification worker override: %+v", cfg.NotificationWorker)
 	}
 }
 

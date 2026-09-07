@@ -11,6 +11,8 @@ import { recordI18nEvent } from './telemetry';
 export type { TranslationKey } from './generated';
 
 export { productLocales };
+// resourceCatalogVersion 随客户端请求冻结系统内容资源版本；它是机器标识，不是展示文案。
+export const resourceCatalogVersion = catalog.catalogVersion;
 export type SupportedLocale = string;
 export const supportedLocales: readonly string[] = [
   ...productLocales,

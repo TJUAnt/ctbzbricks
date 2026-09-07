@@ -15,3 +15,8 @@ INSERT INTO component_repo.component_domain_events (
     '{}'::jsonb
 )
 RETURNING event_seq;
+
+-- name: CreateComponentEventDelivery :exec
+-- 发布事务为每个领域事件建立且只建立一条独立 fan-out Delivery；失败会与发布事实一起回滚。
+INSERT INTO component_repo.component_event_deliveries (event_id)
+VALUES (sqlc.arg(event_id));

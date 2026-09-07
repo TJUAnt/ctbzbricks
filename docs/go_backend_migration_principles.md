@@ -1,5 +1,7 @@
 # Go 后端迁移原则
 
+> 后续领域专项：[2D 像素化与拼接方案 Go 迁移](go_pixel_2d_migration.md)（P2D，独立记录；不计入 Component Repo G0～G8）。
+
 > 状态：Approved target architecture（Component Repo Go-only）
 > 生效日期：2026-08-06
 > Component Repo Go-only 修订：2026-08-22
@@ -311,3 +313,7 @@ Go 迁移不得建立第二套本地化机制，必须遵守仓库 i18n 文档�
 - 对象存储部分失败和任务重试具有幂等或补偿策略。
 - 文档和 `go_migration_progress.md` 已更新。
 - 被替代的 Component Repo Python 公共路由、Worker 入口和仅服务该实现的死代码已删除。
+
+### 2D 领域 schema authority（2026-09-06）
+
+P2D 专项沿用上述模块化单体与持久任务规则。Goose v19 起独占新增 `pixel_2d` schema；`public` 中旧像素项目仍由既有 Alembic 历史管理，不存在双重 authority 或运行时回填。2D API 和算法 consumer 均为 Go，不新增 Python Worker 例外。详见 [独立迁移记录](go_pixel_2d_migration.md)。

@@ -33,3 +33,27 @@ func TestWatchCursorRejectsInvalidInput(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeNotificationContextFreezesSupportedLocaleAndZone(t *testing.T) {
+	context, err := normalizeNotificationContext(NotificationContext{
+		Locale: "zh-Hans", Timezone: "Asia/Shanghai", CatalogVersion: "frontend-2026.09.06.1",
+	})
+	if err != nil {
+		t.Fatalf("normalize notification context: %v", err)
+	}
+	if context.Locale != "zh-CN" || context.Timezone != "Asia/Shanghai" || context.CatalogVersion != "frontend-2026.09.06.1" {
+		t.Fatalf("unexpected notification context: %+v", context)
+	}
+}
+
+func TestNormalizeNotificationContextRejectsUntrustedMachineValues(t *testing.T) {
+	for field, context := range map[string]NotificationContext{
+		"locale":         {Locale: "fr-FR", Timezone: "UTC", CatalogVersion: "frontend-2026.09.06.1"},
+		"timezone":       {Locale: "en-US", Timezone: "../../etc/passwd", CatalogVersion: "frontend-2026.09.06.1"},
+		"catalogVersion": {Locale: "en-US", Timezone: "UTC", CatalogVersion: "version with spaces"},
+	} {
+		if _, err := normalizeNotificationContext(context); err == nil {
+			t.Fatalf("%s context unexpectedly accepted", field)
+		}
+	}
+}

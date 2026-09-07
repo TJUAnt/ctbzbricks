@@ -20,9 +20,7 @@ import {
 } from 'lucide-react';
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import appConfig from './app/appConfig';
-import { ModelAssetsPage } from './assets/ModelAssetsPage';
-import { ModelViewerPage } from './assets/ModelViewerPage';
-import type { ModelAsset } from './assets/modelAssetApi';
+import { PixelModelNavigation } from './modelTools/PixelModelNavigation';
 import { requestJson } from './api/client';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ComponentCandidateWorkbenchPage } from './componentRepo/ComponentCandidateWorkbenchPage';
@@ -32,14 +30,11 @@ import { ComponentImportStatusPage } from './componentRepo/ComponentImportStatus
 import { ComponentRepoPage } from './componentRepo/ComponentRepoPage';
 import { ComponentDetailPage } from './componentRepo/ComponentDetailPage';
 import { ComponentWatchListPage } from './componentRepo/ComponentWatchListPage';
-import { LegoDesignPage } from './legoDesign/LegoDesignPage';
-import { LegoTerrainBuilderPage } from './legoTerrain/LegoTerrainBuilderPage';
-import { DirectModelImportPage } from './modelImport/DirectModelImportPage';
+import { LegoDesignPage } from './archive/dem/LegacyLegoDesignPage';
 import { PartSearchPage } from './parts/PartSearchPage';
 import { PartViewerPage } from './parts/PartViewerPage';
 import { PixelArtPage } from './pixelArt/PixelArtPage';
 import { PixelArtProjectsPage } from './pixelArt/PixelArtProjectsPage';
-import { TerrainDemPage } from './terrain/TerrainDemPage';
 import i18n, {
   productLocales,
   resolvedLocale,
@@ -137,21 +132,16 @@ function App() {
 }
 
 function WorkbenchShell() {
-  const [selectedModelAsset, setSelectedModelAsset] = React.useState<ModelAsset | null>(null);
 
   return (
     <main className="workbench">
       <WorkbenchTopbar />
       <aside className="workbench-nav">
-        <WorkbenchNav clearSelectedModel={() => setSelectedModelAsset(null)} />
+        <WorkbenchNav />
       </aside>
 
       <section className="workbench-content">
-        <WorkbenchRoutes
-          clearSelectedModel={() => setSelectedModelAsset(null)}
-          openAsset={(asset) => setSelectedModelAsset(asset)}
-          selectedModelAsset={selectedModelAsset}
-        />
+        <WorkbenchRoutes />
       </section>
     </main>
   );
@@ -246,11 +236,8 @@ function LanguageSwitcher() {
   );
 }
 
-function WorkbenchNav({
-  clearSelectedModel,
-}: {
-  clearSelectedModel: () => void;
-}) {
+/** 当前开放入口全部由 Go 提供；归档页面不参与活动路由。 */
+function WorkbenchNav() {
   return (
     <nav className="workbench-menu" aria-label={appConfig.texts.appTitle}>
       {menuGroups.map((group) => (
@@ -265,7 +252,6 @@ function WorkbenchNav({
               icon={item.icon}
               key={item.id}
               label={item.label}
-              onNavigate={clearSelectedModel}
               page={item.page}
               tone={group.tone}
             />
@@ -284,13 +270,11 @@ function WorkbenchNav({
 function MenuLink({
   icon,
   label,
-  onNavigate,
   page,
   tone,
 }: {
   icon: IconName;
   label: string;
-  onNavigate: () => void;
   page: PageKey;
   tone: string;
 }) {
@@ -299,7 +283,6 @@ function MenuLink({
       className={({ isActive }) =>
         isActive ? `menu-button menu-button-${tone} menu-button-active` : `menu-button menu-button-${tone}`
       }
-      onClick={onNavigate}
       to={routePathFor(page)}
     >
       <Icon name={icon} />
@@ -308,29 +291,8 @@ function MenuLink({
   );
 }
 
-function WorkbenchRoutes({
-  clearSelectedModel,
-  openAsset,
-  selectedModelAsset,
-}: {
-  clearSelectedModel: () => void;
-  openAsset: (asset: ModelAsset) => void;
-  selectedModelAsset: ModelAsset | null;
-}) {
-  const navigate = useNavigate();
-
-  if (selectedModelAsset) {
-    return (
-      <ModelViewerPage
-        modelAsset={selectedModelAsset}
-        onBack={() => {
-          clearSelectedModel();
-          navigate(routePathFor(appConfig.pages.modelAssets as PageKey));
-        }}
-      />
-    );
-  }
-
+/** 未开放的旧书签由兜底路由返回首页，不触发 Python 请求。 */
+export function WorkbenchRoutes() {
   return (
     <Routes>
       <Route
@@ -338,19 +300,13 @@ function WorkbenchRoutes({
         path={appConfig.router.rootPath}
       />
       <Route element={<DashboardPage />} path={routePathFor(appConfig.pages.dashboard as PageKey)} />
-      <Route element={<DirectModelImportPage />} path={routePathFor(appConfig.pages.directImport as PageKey)} />
-      <Route element={<TerrainDemPage />} path={routePathFor(appConfig.pages.demBuilder as PageKey)} />
-      <Route
-        element={<ModelAssetsPage onOpenAsset={openAsset} />}
-        path={routePathFor(appConfig.pages.modelAssets as PageKey)}
-      />
-      <Route element={<LegoTerrainBuilderPage />} path={routePathFor(appConfig.pages.legoBuilder as PageKey)} />
-      <Route element={<LegoDesignPage />} path={routePathFor(appConfig.pages.legoDesign as PageKey)} />
-      <Route element={<PixelArtPage />} path={routePathFor(appConfig.pages.pixelArt as PageKey)} />
-      <Route element={<PixelArtProjectsPage />} path={routePathFor(appConfig.pages.pixelArtProjects as PageKey)} />
+      <Route element={<><PixelModelNavigation /><LegoDesignPage /></>} path={routePathFor(appConfig.pages.legoDesign as PageKey)} />
+      <Route element={<><PixelModelNavigation /><PixelArtPage /></>} path={routePathFor(appConfig.pages.pixelArt as PageKey)} />
+      <Route element={<><PixelModelNavigation /><PixelArtProjectsPage /></>} path={routePathFor(appConfig.pages.pixelArtProjects as PageKey)} />
       <Route element={<PartSearchPage />} path={routePathFor(appConfig.pages.partSearch as PageKey)} />
       <Route element={<PartViewerPage />} path={routePathFor(appConfig.pages.partViewer as PageKey)} />
-      <Route element={<ComponentRepoPage />} path={routePathFor(appConfig.pages.componentRepo as PageKey)} />
+      <Route element={<ComponentRepoPage key="plaza" mode="plaza" />} path={routePathFor(appConfig.pages.modelPlaza as PageKey)} />
+      <Route element={<ComponentRepoPage key="mine" />} path={routePathFor(appConfig.pages.componentRepo as PageKey)} />
       <Route element={<ComponentImportPage />} path={routePathFor(appConfig.pages.componentRepoImport as PageKey)} />
       <Route
         element={<ComponentImportHistoryPage />}
@@ -425,7 +381,7 @@ function I18nHealthPanel() {
   const [unavailable, setUnavailable] = React.useState(false);
   React.useEffect(() => {
     let active = true;
-    void requestJson<I18nMetrics>('/api/i18n/metrics')
+    void requestJson<I18nMetrics>('/api/v1/i18n/metrics')
       .then((value) => { if (active) setMetrics(value); })
       .catch(() => { if (active) setUnavailable(true); });
     return () => { active = false; };

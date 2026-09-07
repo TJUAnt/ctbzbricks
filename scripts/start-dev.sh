@@ -7,9 +7,12 @@ GO_API_PORT="${GO_BACKEND_PORT:-8080}"
 LEGACY_API_PORT="${BACKEND_PORT:-8000}"
 GO_API_HEALTH_URL="${GO_API_HEALTH_URL:-http://${BACKEND_HOST}:${GO_API_PORT}/health/live}"
 LEGACY_API_HEALTH_URL="${LEGACY_API_HEALTH_URL:-http://${BACKEND_HOST}:${LEGACY_API_PORT}/api/health}"
+NOTIFICATION_WORKER_METRICS_PORT="${NOTIFICATION_WORKER_METRICS_PORT:-9091}"
+NOTIFICATION_WORKER_HEALTH_URL="${NOTIFICATION_WORKER_HEALTH_URL:-http://${BACKEND_HOST}:${NOTIFICATION_WORKER_METRICS_PORT}/health/ready}"
 BACKEND_READY_TIMEOUT_SECONDS="${BACKEND_READY_TIMEOUT_SECONDS:-60}"
-START_LEGACY_API="${START_LEGACY_API:-1}"
+START_LEGACY_API="${START_LEGACY_API:-0}"
 START_COMPONENT_WORKERS="${START_COMPONENT_WORKERS:-1}"
+START_NOTIFICATION_WORKER="${START_NOTIFICATION_WORKER:-1}"
 
 CHILD_NAMES=()
 CHILD_PIDS=()
@@ -68,10 +71,16 @@ fi
 if [[ "${START_COMPONENT_WORKERS}" == "1" ]]; then
   start_child "Go Worker" "${SCRIPT_DIR}/start-go-worker.sh"
 fi
+if [[ "${START_NOTIFICATION_WORKER}" == "1" ]]; then
+  start_child "Notification Worker" "${SCRIPT_DIR}/start-notification-worker.sh"
+fi
 
 wait_for_health "Go API" "${GO_API_HEALTH_URL}"
 if [[ "${START_LEGACY_API}" == "1" ]]; then
   wait_for_health "Legacy API" "${LEGACY_API_HEALTH_URL}"
+fi
+if [[ "${START_NOTIFICATION_WORKER}" == "1" ]]; then
+  wait_for_health "Notification Worker" "${NOTIFICATION_WORKER_HEALTH_URL}"
 fi
 assert_children_running
 
@@ -84,7 +93,10 @@ if [[ "${START_LEGACY_API}" == "1" ]]; then
   echo "  Legacy API             http://${BACKEND_HOST}:${LEGACY_API_PORT}"
 fi
 if [[ "${START_COMPONENT_WORKERS}" == "1" ]]; then
-  echo "  Go Worker              component.artifact.verify / component.import.parse / component.relations.detect / component.validate / component.preview.materialize"
+  echo "  Go Worker              component.artifact.verify / component.import.parse / component.relations.detect / component.validate / component.preview.materialize / pixel_2d.generate / pixel_2d.edit / pixel_2d.design"
+fi
+if [[ "${START_NOTIFICATION_WORKER}" == "1" ]]; then
+  echo "  Notification Worker    PostgreSQL Component notification delivery; monitoring http://${BACKEND_HOST}:${NOTIFICATION_WORKER_METRICS_PORT}"
 fi
 echo "  Frontend               http://${FRONTEND_HOST:-127.0.0.1}:${FRONTEND_PORT:-5173}"
 echo

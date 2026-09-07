@@ -4,7 +4,7 @@ import type { StructuredMessage } from '../api/client';
 import { authenticatedApiFetch, authenticatedRequestJson } from '../api/authenticatedClient';
 import { supabase } from '../auth/supabaseClient';
 import { currentTaskContext } from '../api/taskContext';
-import { translate as tr } from '../i18n';
+import { resourceCatalogVersion, translate as tr } from '../i18n';
 
 type ComponentRepoApiConfig = typeof appConfig.componentRepoApi;
 
@@ -665,10 +665,16 @@ export async function unstarComponent(componentId: string): Promise<void> {
 
 /** 显式订阅 Component 的新版本发布；Watch 与 Star 使用独立关系和 API。 */
 export async function watchComponent(componentId: string): Promise<ComponentWatchResponse> {
+	const context = currentTaskContext();
   return requestJson<ComponentWatchResponse>(pathFor('componentWatch', { componentId }), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ level: 'releases_only' }),
+    body: JSON.stringify({
+      level: 'releases_only',
+      locale: context.locale,
+      timezone: context.timezone,
+      catalogVersion: resourceCatalogVersion,
+    }),
   });
 }
 

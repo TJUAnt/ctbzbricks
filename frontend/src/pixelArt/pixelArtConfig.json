@@ -1,6 +1,6 @@
 {
-  "projectsApiUrl": "/api/pixel-art/projects",
-  "projectPixelsApiUrl": "/api/pixel-art/projects/{projectId}/pixels",
+  "projectsApiUrl": "/api/v1/pixel-art/projects",
+  "projectPixelsApiUrl": "/api/v1/pixel-art/projects/{projectId}/pixels",
   "pageSize": 12,
   "routePlaceholders": {
     "projectId": "{projectId}"
@@ -267,6 +267,14 @@
     "panCanvas": "pixelArt:texts.panCanvas",
     "editSource": "pixelArt:texts.editSource",
     "pixelEditor": "pixelArt:texts.pixelEditor",
-    "cropWorkspace": "pixelArt:texts.cropWorkspace"
+    "cropWorkspace": "pixelArt:texts.cropWorkspace",
+    "previewFailed": "pixelArt:texts.previewFailed",
+    "taskUploading": "pixelArt:texts.taskUploading",
+    "taskQueued": "pixelArt:texts.taskQueued",
+    "taskProcessing": "pixelArt:texts.taskProcessing",
+    "taskCompleted": "pixelArt:texts.taskCompleted",
+    "taskFailed": "pixelArt:texts.taskFailed",
+    "safeToClose": "pixelArt:texts.safeToClose",
+    "resumeProcessing": "pixelArt:texts.resumeProcessing"
   }
 }

@@ -17,7 +17,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Sparkles,
   Star,
   Trash2,
   Upload,
@@ -79,7 +78,9 @@ type LibraryItem = {
   data: ComponentResponse;
 };
 
-export function ComponentRepoPage() {
+/** 复用分页列表展示公开广场或个人仓库；广场不加载个人分组，也不提供导入入口。 */
+export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }) {
+  const isPlaza = mode === 'plaza';
   const navigate = useNavigate();
   const tr = useAppTranslation();
   const trDynamic = useDynamicTranslation();
@@ -98,7 +99,7 @@ export function ComponentRepoPage() {
   const [queryDraft, setQueryDraft] = React.useState('');
   const [filter, setFilter] = React.useState<LibraryFilter>('all');
   const [category, setCategory] = React.useState('');
-  const [libraryView, setLibraryView] = React.useState<LibraryView>('library');
+  const [libraryView, setLibraryView] = React.useState<LibraryView>(isPlaza ? 'community' : 'library');
   const [page, setPage] = React.useState(1);
   const [refreshRevision, setRefreshRevision] = React.useState(0);
   const [isUploadOpen, setIsUploadOpen] = React.useState(false);
@@ -160,12 +161,12 @@ export function ComponentRepoPage() {
 
   React.useEffect(() => {
     // 重新请求可确保已进入错误态的结构化错误随当前语言重新渲染，避免把切换前的译文固化在页面中。
-    void loadLibrary();
+    if (!isPlaza) void loadLibrary();
     return () => {
       groupRequestIdRef.current += 1;
       searchRequestIdRef.current += 1;
     };
-  }, [contentLocale, loadLibrary]);
+  }, [contentLocale, isPlaza, loadLibrary]);
 
   React.useEffect(() => {
     if (libraryView === 'library' && !selectedGroupId) return undefined;
@@ -332,11 +333,11 @@ export function ComponentRepoPage() {
         <div className="component-library-heading">
           <span className="component-library-heading-icon"><Boxes aria-hidden="true" /></span>
           <div>
-            <h1>{tr('componentRepo:componentLibrary')}</h1>
-            <p>{tr('componentRepo:manageReviewAndPublishReusableLegoComponents')}</p>
+            <h1>{tr(isPlaza ? 'app:navigation.modelPlaza' : 'app:navigation.myModels')}</h1>
+            <p>{tr(isPlaza ? 'app:navigation.modelPlazaDescription' : 'app:navigation.myModelsDescription')}</p>
           </div>
         </div>
-        <nav aria-label={tr('componentRepo:componentLibrarySections')} className="component-library-tabs">
+        {!isPlaza ? <nav aria-label={tr('componentRepo:componentLibrarySections')} className="component-library-tabs">
           <button
             aria-pressed={libraryView === 'library'}
             className={`component-library-tab ${libraryView === 'library' ? 'component-library-tab-active' : ''}`}
@@ -368,28 +369,14 @@ export function ComponentRepoPage() {
             <Bell aria-hidden="true" />
             {tr('componentRepo:mySubscriptions')}
           </Link>
-          <button
-            aria-pressed={libraryView === 'community'}
-            className={`component-library-tab ${libraryView === 'community' ? 'component-library-tab-active' : ''}`}
-            onClick={() => {
-              setLibraryView('community');
-              setFilter('all');
-              setCategory('');
-              setPage(1);
-            }}
-            type="button"
-          >
-            <Sparkles aria-hidden="true" />
-            {tr('componentRepo:communityLibrary')}
-          </button>
-        </nav>
+        </nav> : null}
       </header>
 
-      <section className="component-library-summary" aria-label={tr('componentRepo:componentStatusOverview')}>
+      {!isPlaza ? <section className="component-library-summary" aria-label={tr('componentRepo:componentStatusOverview')}>
         <SummaryCard icon={<Boxes />} label={tr('componentRepo:allComponents')} tone="blue" value={stats.total} />
         <SummaryCard icon={<Layers3 />} label={tr('componentRepo:draft')} tone="purple" value={stats.draft} />
         <SummaryCard icon={<PackageCheck />} label={tr('componentRepo:published')} tone="green" value={stats.published} />
-      </section>
+      </section> : null}
 
       <section className="component-library-panel">
         <header className="component-library-panel-header">
@@ -410,7 +397,7 @@ export function ComponentRepoPage() {
                 ? 'componentRepo:customGroupDescription'
                 : 'componentRepo:rootGroupDescription')}</p>
           </div>
-          <div className="component-library-panel-actions">
+          {!isPlaza ? <div className="component-library-panel-actions">
             <button onClick={() => navigate(routeFor('componentRepoImportHistory'))} type="button">
               <FileClock aria-hidden="true" />
               {tr('componentRepo:importHistory')}
@@ -419,7 +406,7 @@ export function ComponentRepoPage() {
               <Upload aria-hidden="true" />
               {tr('componentRepo:uploadComponent')}
             </button>
-          </div>
+          </div> : null}
         </header>
 
         <div className={`component-library-workspace ${libraryView !== 'library' ? 'component-library-workspace-starred' : ''}`}>

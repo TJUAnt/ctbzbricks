@@ -466,6 +466,10 @@ func (s *Service) PublishVersion(ctx context.Context, actor pgtype.UUID, version
 		}); err != nil {
 			return ComponentVersion{}, mapDatabaseError(err, "request.conflict")
 		}
+		// WATCH-3 Delivery 与发布事实同事务创建；任何一侧失败都回滚，避免出现无法 fan-out 的幽灵发布。
+		if err := q.CreateComponentEventDelivery(ctx, eventID); err != nil {
+			return ComponentVersion{}, mapDatabaseError(err, "request.conflict")
+		}
 		row, err := q.GetVisibleComponentVersion(ctx, db.GetVisibleComponentVersionParams{VersionID: id, ActorID: actor})
 		return versionFromDB(row), err
 	})

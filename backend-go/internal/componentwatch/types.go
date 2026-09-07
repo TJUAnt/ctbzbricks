@@ -14,9 +14,20 @@ type Watch struct {
 	WatchedAt   time.Time `json:"watchedAt"`
 }
 
-// WatchInput 是 Watch PUT 的严格输入；MVP 只接受 releases_only。
+// WatchInput 是 Watch PUT 的严格输入；locale/timezone/catalogVersion 会冻结到新建周期，
+// 供异步通知在浏览器语言变化后仍保留创建时上下文。
 type WatchInput struct {
-	Level string `json:"level"`
+	Level          string `json:"level"`
+	Locale         string `json:"locale"`
+	Timezone       string `json:"timezone"`
+	CatalogVersion string `json:"catalogVersion"`
+}
+
+// NotificationContext 是新 Watch period 的异步展示上下文；它只保存机器值，不保存最终译文。
+type NotificationContext struct {
+	Locale         string
+	Timezone       string
+	CatalogVersion string
 }
 
 // WatchListItem 是“我的订阅”的只读投影，不公开 watcher 数量或其他 actor 身份。

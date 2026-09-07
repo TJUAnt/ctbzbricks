@@ -1,10 +1,15 @@
 {
   "schema": "brickbuilder-frontend-i18n-catalog-v1",
-  "catalogVersion": "frontend-2026.09.04.1",
+  "catalogVersion": "frontend-2026.09.07.1",
   "sourceLocale": "en-US",
   "defaultLocale": "zh-CN",
-  "productLocales": ["zh-CN", "en-US"],
-  "validationLocales": ["ja-JP"],
+  "productLocales": [
+    "zh-CN",
+    "en-US"
+  ],
+  "validationLocales": [
+    "ja-JP"
+  ],
   "localeLabelKeys": {
     "zh-CN": "common:chinese",
     "en-US": "common:english"
@@ -15,7 +20,12 @@
     "en": "en-US",
     "ja": "ja-JP"
   },
-  "rtlLanguageCodes": ["ar", "fa", "he", "ur"],
-  "telemetryEndpoint": "/api/i18n/events",
-  "contentHash": "25ef31679402e7c0aaafae4d3d25607f9a96286bd864ec1ed9b086d999a6379d"
+  "rtlLanguageCodes": [
+    "ar",
+    "fa",
+    "he",
+    "ur"
+  ],
+  "telemetryEndpoint": "/api/v1/i18n/events",
+  "contentHash": "369c7fe3189d1643ced79283c52eea375718f7fb515eaa5cbba7e7e724aa58c2"
 }

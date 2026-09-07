@@ -14,6 +14,7 @@ import (
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/health"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/ingestion"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/observability"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/pixel2d"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/workbench"
@@ -40,6 +41,7 @@ func NewApplicationRouter(cfg config.Config, pool *pgxpool.Pool, logger *slog.Lo
 		task.NewHTTPHandler(task.NewService(pool), logger),
 		auth.NewVerifier(cfg.Auth),
 		workbench.NewHandler(workbench.NewService(pool, objectStore, cfg.Storage.SignedURLTTL), logger),
+		pixel2d.NewHandler(pixel2d.NewService(pool, objectStore, cfg.Storage), logger),
 	)
 }
 
@@ -55,6 +57,7 @@ func newRouter(
 	taskHandler *task.HTTPHandler,
 	verifier auth.TokenVerifier,
 	workbenchHandler *workbench.Handler,
+	pixelHandlers ...*pixel2d.Handler,
 ) *gin.Engine {
 	if cfg.Environment == config.ProductionEnvironment {
 		gin.SetMode(gin.ReleaseMode)
@@ -77,8 +80,15 @@ func newRouter(
 	router.GET("/health/ready", healthHandler.Ready)
 	// 指标只包含冻结机器标签；生产入口仍必须把该路径限制在内部监控网络。
 	router.GET("/metrics", gin.WrapH(metrics))
+	observability.NewI18nTelemetry().Register(router)
 	if verifier != nil {
 		apiV1 := router.Group("/api/v1", authenticationMiddleware(verifier))
+		// 新领域复用认证与共享任务，业务查询仍在独立 schema 中。
+		for _, handler := range pixelHandlers {
+			if handler != nil {
+				handler.Register(apiV1)
+			}
+		}
 		// 页面刷新只通过这个 Go 入口二次确认 Supabase 会话；普通业务 API 仍只承担本地 JWT 校验。
 		auth.NewSessionHandler(auth.NewSupabaseSessionValidator(cfg.Auth), logger).Register(apiV1)
 		if componentHandler != nil {

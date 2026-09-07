@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom';
 import React from 'react';
 import {
   Boxes,
@@ -15,8 +16,8 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { localizeStructuredMessage } from '../api/client';
-import type { PixelArtProject, PixelArtProjectList, PixelArtProjectSummary } from '../pixelArt/pixelArtApi';
+import { localizeStructuredMessage } from '../../api/client';
+import type { PixelArtProject, PixelArtProjectList, PixelArtProjectSummary } from '../../pixelArt/pixelArtApi';
 import {
   createLegoDesignJob,
   exportLegoDesign,
@@ -30,7 +31,7 @@ import {
   type LegoDesignMetadata,
   type LegoDesignResult,
   type LegoPlacement,
-} from './legoDesignApi';
+} from '../../legoDesign/legoDesignApi';
 import {
   createDemFinalDesign,
   createDemFinalDesignRequest,
@@ -39,17 +40,20 @@ import {
   type DemFinalBomItem,
   type DemFinalDesign,
   type DemSurfacePlacement,
-} from './demFinalDesignApi';
-import appConfig from '../app/appConfig';
-import { loadModelAssetPage, type ModelAsset, type ModelAssetPage } from '../assets/modelAssetApi';
-import type { LegoHeightmapScale } from '../legoTerrain/legoHeightmap';
-import legoTerrainConfig from '../legoTerrain/legoTerrainConfig';
-import { loadTerrainModel, routeWithParam } from '../terrain/terrainApi';
-import terrainConfig from '../terrain/terrainConfig';
-import type { TerrainAsset } from '../terrain/terrainTypes';
-import legoDesignConfig from './legoDesignConfig';
+} from '../../legoDesign/demFinalDesignApi';
+import appConfig from '../../app/appConfig';
+import { loadModelAssetPage, type ModelAsset, type ModelAssetPage } from '../../assets/modelAssetApi';
+import type { LegoHeightmapScale } from '../../legoTerrain/legoHeightmap';
+import legoTerrainConfig from '../../legoTerrain/legoTerrainConfig';
+import { loadTerrainModel, routeWithParam } from '../../terrain/terrainApi';
+import terrainConfig from '../../terrain/terrainConfig';
+import type { TerrainAsset } from '../../terrain/terrainTypes';
+import legoDesignConfig from '../../legoDesign/legoDesignConfig';
 
-export function LegoDesignPage() {
+/** 保留历史 DEM 设计流程；正式 2D 入口禁用 DEM 选择与资产请求。 */
+export function LegoDesignPage({ enableDem = false }: { enableDem?: boolean }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeJobId = searchParams.get('job');
   const [page, setPage] = React.useState(legoDesignConfig.pagination.initialPage);
   const [projectList, setProjectList] = React.useState<PixelArtProjectList | null>(null);
   const [demAssetPage, setDemAssetPage] = React.useState<ModelAssetPage | null>(null);
@@ -93,7 +97,7 @@ export function LegoDesignPage() {
       const [nextMetadata, nextProjects, nextDemAssets] = await Promise.all([
         loadLegoDesignMetadata(),
         loadLegoDesignPixelProjects(page),
-        loadModelAssetPage(appConfig.modelAssetsApiUrl, legoDesignConfig.pagination.initialPage, legoDesignConfig.demAssetPageSize),
+        enableDem ? loadModelAssetPage(appConfig.modelAssetsApiUrl, legoDesignConfig.pagination.initialPage, legoDesignConfig.demAssetPageSize) : Promise.resolve(null),
       ]);
       setMetadata(nextMetadata);
       setProjectList(nextProjects);
@@ -103,7 +107,7 @@ export function LegoDesignPage() {
     } finally {
       setLoading(false);
     }
-  }, [page]);
+  }, [enableDem, page]);
 
   React.useEffect(() => {
     void loadData();
@@ -117,6 +121,8 @@ export function LegoDesignPage() {
     setJob(null);
     setDemDesign(null);
     try {
+      setSearchParams({}, { replace: true });
+      setGenerating(false);
       setSelectedProject(await loadLegoDesignPixelProject(pendingProject.modelId));
       setSelectedDemAsset(null);
       setSelectedTerrainAsset(null);
@@ -170,34 +176,40 @@ export function LegoDesignPage() {
       }
       const createdJob = await createLegoDesignJob(selectedProject!.modelId);
       setJob(createdJob);
-      await pollJob(createdJob.jobId);
+      if (createdJob.status === legoDesignConfig.jobStatus.complete) setGenerating(false);
+      setSearchParams({ job: createdJob.jobId }, { replace: true });
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : legoDesignConfig.texts.designFailed);
       setGenerating(false);
     }
   };
 
-  const pollJob = async (jobId: string) => {
-    const nextJob = await loadLegoDesignJob(jobId);
-    setJob(nextJob);
-    if (nextJob.status === legoDesignConfig.jobStatus.complete) {
-      if (nextJob.result?.placements.length === legoDesignConfig.emptyCount) {
-        setError(legoDesignConfig.texts.noParts);
+  React.useEffect(() => {
+    if (!activeJobId) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setGenerating(true);
+    const poll = async () => {
+      try {
+        const nextJob = await loadLegoDesignJob(activeJobId);
+        if (!active) return;
+        setJob(nextJob);
+        if (nextJob.status === legoDesignConfig.jobStatus.complete || nextJob.status === legoDesignConfig.jobStatus.failed) {
+          setGenerating(false);
+          if (nextJob.error) setError(localizeStructuredMessage(nextJob.error));
+          return;
+        }
+        timer = setTimeout(() => void poll(), legoDesignConfig.polling.intervalMs);
+      } catch (error) {
+        if (active) {
+          setGenerating(false);
+          setError(error instanceof Error ? error.message : legoDesignConfig.texts.designFailed);
+        }
       }
-      setGenerating(false);
-      return;
-    }
-    if (nextJob.status === legoDesignConfig.jobStatus.failed) {
-      setError(
-        nextJob.error
-          ? localizeStructuredMessage(nextJob.error)
-          : legoDesignConfig.texts.designFailed,
-      );
-      setGenerating(false);
-      return;
-    }
-    window.setTimeout(() => void pollJob(jobId), legoDesignConfig.polling.intervalMs);
-  };
+    };
+    void poll();
+    return () => { active = false; clearTimeout(timer); };
+  }, [activeJobId]);
 
   const exportDesign = async () => {
     if (!hasDesign) {
@@ -292,10 +304,10 @@ export function LegoDesignPage() {
             <ImageIcon aria-hidden="true" />
             {legoDesignConfig.texts.choosePixelArt}
           </button>
-          <button onClick={() => setDemModalOpen(true)} type="button">
+          {enableDem ? <button onClick={() => setDemModalOpen(true)} type="button">
             <Boxes aria-hidden="true" />
             {legoDesignConfig.texts.chooseDemModel}
-          </button>
+          </button> : null}
           <button disabled={generating} onClick={() => void generateDesign()} type="button">
             <Wand2 aria-hidden="true" />
             {generating
@@ -732,7 +744,7 @@ function ProjectPickerModal({
               onClick={() => setPendingProject(project)}
               type="button"
             >
-              <img alt={project.name} src={project.previewImage} />
+              {project.previewImage ? <img alt={project.name} src={project.previewImage} /> : <span>{legoDesignConfig.texts.loading}</span>}
               <span>
                 <strong>{project.name}</strong>
                 <em>{project.gridWidth} x {project.gridHeight}</em>

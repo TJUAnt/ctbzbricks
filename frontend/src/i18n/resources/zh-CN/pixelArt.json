@@ -74,5 +74,13 @@
   "texts.editSource": "原图取色",
   "texts.pixelEditor": "像素图精修",
   "texts.cropWorkspace": "框选像素化范围",
-  "colors": "种颜色"
+  "colors": "种颜色",
+  "texts.previewFailed": "预览处理失败，请重新调整参数后重试。",
+  "texts.taskUploading": "正在提交处理图片",
+  "texts.taskQueued": "像素化任务已排队",
+  "texts.taskProcessing": "正在生成像素图",
+  "texts.taskCompleted": "像素图处理完成",
+  "texts.taskFailed": "像素图处理失败",
+  "texts.safeToClose": "任务已保存，可以关闭页面；稍后可从已保存像素图继续查看。",
+  "texts.resumeProcessing": "查看处理进度"
 }

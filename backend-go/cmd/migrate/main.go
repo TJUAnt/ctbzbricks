@@ -24,10 +24,10 @@ Commands:
   up-by-one   Apply one pending migration
   down        Roll back one migration
   redo        Roll back and re-apply one migration
-  reset       Roll back all migrations (destructive; drops component_repo)
+  reset       Roll back all migrations (destructive; drops Go-owned schemas)
 
-Goose exclusively owns the component_repo schema. Alembic may only manage
-unmigrated legacy objects outside that schema.`
+Goose exclusively owns component_repo and pixel_2d. Alembic may only manage
+unmigrated legacy objects outside those schemas.`
 
 var allowedCommands = map[string]struct{}{
 	"status": {}, "version": {}, "up": {}, "up-by-one": {},

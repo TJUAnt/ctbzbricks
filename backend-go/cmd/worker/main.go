@@ -15,6 +15,7 @@ import (
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/database"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/ingestion"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/logging"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/pixel2d"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/workbench"
@@ -43,11 +44,26 @@ func validateWorkerConfig(cfg config.Config) error {
 	if cfg.Storage.Provider == "supabase" && cfg.Storage.ServiceRoleKey == "" {
 		return errors.New("SUPABASE_STORAGE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY is required by the worker for server-side storage operations")
 	}
-	// Component Repo 上传的完成条件包含 GLB；启用对象存储时不能启动一个缺少预览能力的 Worker。
-	if cfg.Storage.Provider != "disabled" && cfg.PartPreview.LDrawRoot == "" {
+	// 通用 Worker 必须具备预览能力；专用 2D Worker 的算法不依赖 LDraw 文件库。
+	if cfg.Storage.Provider != "disabled" && !pixelOnlyWorker(cfg) && cfg.PartPreview.LDrawRoot == "" {
 		return errors.New("LDRAW_ROOT is required by the worker for Component preview materialization")
 	}
 	return nil
+}
+
+// pixelOnlyWorker 仅对显式选择的纯 2D 消费集合解除几何预览依赖。
+func pixelOnlyWorker(cfg config.Config) bool {
+	if len(cfg.Worker.TaskTypes) == 0 {
+		return false
+	}
+	for _, kind := range cfg.Worker.TaskTypes {
+		switch kind {
+		case pixel2d.GenerateType, pixel2d.EditType, pixel2d.DesignType:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func run(cfg config.Config, logger *slog.Logger) error {
@@ -75,11 +91,16 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	handlers[task.RelationshipCleanupType] = component.NewRelationshipCleanupTaskHandler(pool)
 	objectStore := storage.New(cfg.Storage)
 	if cfg.Storage.Provider != "disabled" {
+		// 2D 图片、编辑和拼接统一使用共享持久任务调度，不创建进程本地队列。
+		pixelService := pixel2d.NewService(pool, objectStore, cfg.Storage)
+		handlers[pixel2d.GenerateType] = pixelService
+		handlers[pixel2d.EditType] = pixelService
+		handlers[pixel2d.DesignType] = pixelService
 		artifactService := artifact.NewService(pool, objectStore, cfg.Storage).WithImportConfig(cfg.Import)
 		maintenance = artifactService
 		handlers[task.ArtifactVerifyType] = artifact.NewVerificationTaskHandler(artifactService)
 		handlers[task.ImportParseType] = ingestion.NewImportParseTaskHandler(pool, objectStore, cfg.Import)
-		if cfg.PartPreview.LDrawRoot != "" {
+		if !pixelOnlyWorker(cfg) && cfg.PartPreview.LDrawRoot != "" {
 			partOptimizer, optimizerErr := workbench.NewGLTFPackOptimizer(cfg.PartPreview.GLTFPackPath)
 			if optimizerErr != nil {
 				return optimizerErr

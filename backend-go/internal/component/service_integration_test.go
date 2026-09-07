@@ -10,11 +10,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentactivity"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentwatch"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/notification"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/observability"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/scene"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
@@ -203,6 +205,14 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 		t.Fatalf("unexpected version published event: type=%q component=%s version=%s actor=%s seq=%d payload=%s",
 			eventType, uuidutil.String(eventComponentID), uuidutil.String(eventVersionID), uuidutil.String(eventActorID), eventSeq, eventPayload)
 	}
+	var deliveryCount int64
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM component_repo.component_event_deliveries delivery
+		JOIN component_repo.component_domain_events event ON event.id=delivery.event_id
+		WHERE event.component_version_id=$1 AND delivery.status='pending'`, mustUUID(t, version.ID)).Scan(&deliveryCount); err != nil || deliveryCount != 1 {
+		t.Fatalf("published event delivery count = %d, error = %v", deliveryCount, err)
+	}
 	if _, err := service.PublishVersion(ctx, actorA, version.ID); errorCode(err) != "request.conflict" {
 		t.Fatalf("repeated publish code = %q, error = %v", errorCode(err), err)
 	}
@@ -255,7 +265,7 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	}
 
 	testOfficialTranslationSelection(t, service, pool, actorA)
-	testGroupsMembershipsAndStars(t, service, actorA, actorB, created.ID, headVersion.ID)
+	watchedEventSeq := testGroupsMembershipsAndStars(t, service, actorA, actorB, created.ID, headVersion.ID)
 	testStablePagination(t, service, actorA)
 
 	// Component DELETE 是软删除生命周期终点：Star 直接移除，active Watch 使用一个共同边界关闭并保留历史。
@@ -307,6 +317,7 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	if err != nil || string(repeatedCleanup.Payload) != `{"closedWatches":0,"componentId":"`+created.ID+`","deletedStars":0}` {
 		t.Fatalf("repeat relationship cleanup task: result=%s error=%v", repeatedCleanup.Payload, err)
 	}
+	testNotificationTombstoneMaterialization(t, pool, watchedEventSeq)
 	var remainingStars, activeWatches, lifecycleClosed, lifecycleBoundaries int64
 	var lifecycleStart, lifecycleEnd int64
 	if err := pool.QueryRow(ctx, `
@@ -348,6 +359,54 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	}
 }
 
+func testNotificationTombstoneMaterialization(t *testing.T, pool *pgxpool.Pool, eventSeq int64) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		DELETE FROM component_repo.user_notifications notification
+		USING component_repo.component_domain_events event
+		WHERE event.id=notification.event_id AND event.event_seq=$1`, eventSeq); err != nil {
+		t.Fatalf("clear tombstone notification fixture: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE component_repo.component_event_deliveries delivery
+		SET status='pending', cursor_actor_id=NULL, cursor_period_id=NULL, attempts=0,
+		    available_at=clock_timestamp(), lease_owner=NULL, lease_expires_at=NULL,
+		    completed_at=NULL, dead_lettered_at=NULL, updated_at=clock_timestamp()
+		FROM component_repo.component_domain_events event
+		WHERE event.id=delivery.event_id AND event.event_seq=$1`, eventSeq); err != nil {
+		t.Fatalf("reset tombstone notification fixture: %v", err)
+	}
+	service := notification.NewService(pool, observability.NewRegistry())
+	claimed, found, err := service.Claim(ctx, "notification-tombstone", time.Minute)
+	if err != nil || !found {
+		t.Fatalf("claim tombstone delivery: found=%v error=%v", found, err)
+	}
+	for {
+		result, processErr := service.ProcessNextBatch(ctx, "notification-tombstone", claimed)
+		if processErr != nil {
+			t.Fatalf("process tombstone delivery: %v", processErr)
+		}
+		if result.Completed {
+			break
+		}
+	}
+	var count, normalCodes, unsafeParams int64
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE notification.code<>'component_repo.notification.version_published_unavailable'
+		                         OR NOT notification.tombstone),
+		       count(*) FILTER (WHERE notification.params ?| ARRAY['name','releaseNote','description'])
+		FROM component_repo.user_notifications notification
+		JOIN component_repo.component_domain_events event ON event.id=notification.event_id
+		WHERE event.event_seq=$1`, eventSeq).Scan(&count, &normalCodes, &unsafeParams); err != nil {
+		t.Fatalf("read tombstone notifications: %v", err)
+	}
+	if count != 251 || normalCodes != 0 || unsafeParams != 0 {
+		t.Fatalf("tombstone notification safety: count=%d normal=%d unsafeParams=%d", count, normalCodes, unsafeParams)
+	}
+}
+
 func testOfficialTranslationSelection(t *testing.T, service *Service, pool *pgxpool.Pool, reviewer pgtype.UUID) {
 	t.Helper()
 	ctx := context.Background()
@@ -384,7 +443,7 @@ func testOfficialTranslationSelection(t *testing.T, service *Service, pool *pgxp
 	}
 }
 
-func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actorB pgtype.UUID, componentID, publishVersionID string) {
+func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actorB pgtype.UUID, componentID, publishVersionID string) int64 {
 	t.Helper()
 	ctx := context.Background()
 	groups, err := service.ListGroups(ctx, actorA)
@@ -691,6 +750,7 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 		t.Fatalf("rewatch periods: total=%d active=%d secondStart=%d firstEnd=%d error=%v",
 			periodCount, activePeriodCount, secondStartedSeq, firstEndedSeq, err)
 	}
+	testNotificationEventTimeAndCrashRecovery(t, service.pool, actorB, mustUUID(t, componentID), watchedEventSeq, firstPeriodID)
 	watchSucceeded, watchFailed, unwatchSucceeded, unwatchFailed := watchMetrics.ComponentWatchMutationCounts()
 	if watchSucceeded != 4 || watchFailed != 2 || unwatchSucceeded != 2 || unwatchFailed != 0 {
 		t.Fatalf("watch mutation metrics = %d %d %d %d", watchSucceeded, watchFailed, unwatchSucceeded, unwatchFailed)
@@ -754,6 +814,105 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 	})
 	if err != nil || actorBRoot.Total != 0 || len(actorBRoot.Items) != 0 {
 		t.Fatalf("unstarred component removed from personal root: %+v, %v", actorBRoot, err)
+	}
+	return watchedEventSeq
+}
+
+func testNotificationEventTimeAndCrashRecovery(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	recipient, componentID pgtype.UUID,
+	watchedEventSeq, firstPeriodID int64,
+) {
+	t.Helper()
+	ctx := context.Background()
+	metrics := observability.NewRegistry()
+	service := notification.NewService(pool, metrics)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO component_repo.component_watch_periods
+			(actor_id, component_id, watch_level, started_seq, watched_at,
+			 notification_locale, notification_timezone, notification_catalog_version)
+		SELECT ('30000000-0000-0000-0000-' || lpad(item::text, 12, '0'))::uuid,
+		       $1, 'releases_only', $2-1, clock_timestamp(),
+		       'en-US', 'Asia/Shanghai', 'frontend-2026.09.06.1'
+		FROM generate_series(1, 250) item`, componentID, watchedEventSeq); err != nil {
+		t.Fatalf("seed notification batch recipients: %v", err)
+	}
+
+	// 第一条发布发生在 Watch 前，因此空页直接完成；第二条发布必须命中已关闭的首个区间，
+	// 而不能因为用户后来 Rewatch 就错误归属到当前 active period。
+	first, found, err := service.Claim(ctx, "notification-integration", time.Minute)
+	if err != nil || !found {
+		t.Fatalf("claim pre-watch delivery: found=%v error=%v", found, err)
+	}
+	firstResult, err := service.ProcessNextBatch(ctx, "notification-integration", first)
+	if err != nil || !firstResult.Completed || firstResult.Recipients != 0 {
+		t.Fatalf("pre-watch delivery result: %+v error=%v", firstResult, err)
+	}
+	second, found, err := service.Claim(ctx, "notification-integration", time.Minute)
+	if err != nil || !found {
+		t.Fatalf("claim watched delivery: found=%v error=%v", found, err)
+	}
+	batch, err := service.ProcessNextBatch(ctx, "notification-integration", second)
+	if err != nil || batch.Completed || batch.Recipients != notification.BatchSize || batch.Created != notification.BatchSize {
+		t.Fatalf("watched delivery first batch: %+v error=%v", batch, err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE component_repo.component_event_deliveries
+		SET lease_expires_at=clock_timestamp()-interval '1 second'
+		WHERE event_id=$1`, second.EventID); err != nil {
+		t.Fatalf("expire notification delivery lease: %v", err)
+	}
+	recovered, err := service.RecoverExpired(ctx)
+	if err != nil || !recovered {
+		t.Fatalf("recover expired delivery: recovered=%v error=%v", recovered, err)
+	}
+	resumed, found, err := service.Claim(ctx, "notification-recovery", time.Minute)
+	if err != nil || !found || resumed.Attempt != second.Attempt+1 {
+		t.Fatalf("reclaim delivery: %+v found=%v error=%v", resumed, found, err)
+	}
+	lastBatch, err := service.ProcessNextBatch(ctx, "notification-recovery", resumed)
+	if err != nil || lastBatch.Completed || lastBatch.Recipients != 1 || lastBatch.Created != 1 {
+		t.Fatalf("resumed delivery last batch: %+v error=%v", lastBatch, err)
+	}
+	completed, err := service.ProcessNextBatch(ctx, "notification-recovery", resumed)
+	if err != nil || !completed.Completed || completed.Recipients != 0 {
+		t.Fatalf("resumed delivery empty-page completion: %+v error=%v", completed, err)
+	}
+
+	var count int64
+	var sourcePeriodID, eventSeq int64
+	var locale, timezone, catalogVersion, code string
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) OVER (), notification.source_watch_period_id, event.event_seq,
+		       notification.locale, notification.timezone,
+		       notification.resource_catalog_version, notification.code
+		FROM component_repo.user_notifications notification
+		JOIN component_repo.component_domain_events event ON event.id=notification.event_id
+		WHERE notification.recipient_id=$1 AND notification.component_id=$2`, recipient, componentID).Scan(
+		&count, &sourcePeriodID, &eventSeq, &locale, &timezone, &catalogVersion, &code,
+	); err != nil {
+		t.Fatalf("read materialized notification: %v", err)
+	}
+	if count != 1 || eventSeq != watchedEventSeq || sourcePeriodID != firstPeriodID ||
+		locale != "zh-CN" || timezone != "UTC" || catalogVersion != "frontend-2026.09.06.1" ||
+		code != "component_repo.notification.version_published" {
+		t.Fatalf("unexpected notification: count=%d event=%d period=%d locale=%q zone=%q catalog=%q code=%q",
+			count, eventSeq, sourcePeriodID, locale, timezone, catalogVersion, code)
+	}
+	var eventRecipientCount int64
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM component_repo.user_notifications notification
+		JOIN component_repo.component_domain_events event ON event.id=notification.event_id
+		WHERE event.event_seq=$1`, watchedEventSeq).Scan(&eventRecipientCount); err != nil || eventRecipientCount != 251 {
+		t.Fatalf("notification batch recipient count = %d, error=%v", eventRecipientCount, err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE component_repo.component_watch_periods
+		SET ended_seq=nextval('component_repo.component_activity_sequence'),
+		    unwatched_at=clock_timestamp(), ended_reason='user_unwatched'
+		WHERE component_id=$1 AND actor_id::text LIKE '30000000-%' AND ended_seq IS NULL`, componentID); err != nil {
+		t.Fatalf("close notification batch fixture periods: %v", err)
 	}
 }
 
@@ -822,23 +981,29 @@ func testPublishedEventRollback(t *testing.T, pool *pgxpool.Pool, actor, compone
 	}); err != nil {
 		t.Fatalf("insert rollback fixture event: %v", err)
 	}
+	if err := q.CreateComponentEventDelivery(ctx, mustUUID(t, "20000000-0000-0000-0000-000000000041")); err != nil {
+		t.Fatalf("insert rollback fixture delivery: %v", err)
+	}
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatalf("rollback publish transaction: %v", err)
 	}
 	var status string
 	var currentVersionID pgtype.UUID
-	var eventCount int64
+	var eventCount, deliveryCount int64
 	if err := pool.QueryRow(ctx, `
 		SELECT version.status, component.current_version_id,
 		       (SELECT count(*) FROM component_repo.component_domain_events event
+		        WHERE event.component_version_id = version.id),
+		       (SELECT count(*) FROM component_repo.component_event_deliveries delivery
+		        JOIN component_repo.component_domain_events event ON event.id=delivery.event_id
 		        WHERE event.component_version_id = version.id)
 		FROM component_repo.component_versions version
 		JOIN component_repo.components component ON component.id = version.component_id
-		WHERE version.id = $1`, versionID).Scan(&status, &currentVersionID, &eventCount); err != nil {
+		WHERE version.id = $1`, versionID).Scan(&status, &currentVersionID, &eventCount, &deliveryCount); err != nil {
 		t.Fatalf("read rolled-back publish state: %v", err)
 	}
-	if status != "draft" || currentVersionID.Valid || eventCount != 0 {
-		t.Fatalf("rolled-back publish leaked state: status=%q current=%s events=%d", status, uuidutil.String(currentVersionID), eventCount)
+	if status != "draft" || currentVersionID.Valid || eventCount != 0 || deliveryCount != 0 {
+		t.Fatalf("rolled-back publish leaked state: status=%q current=%s events=%d deliveries=%d", status, uuidutil.String(currentVersionID), eventCount, deliveryCount)
 	}
 }
 

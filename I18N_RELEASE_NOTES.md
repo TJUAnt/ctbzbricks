@@ -2,6 +2,25 @@
 
 资源版本只追加、不复用。前端资源内容由 SHA-256 锁定，服务端导出版本写入每个正式产物。
 
+## frontend-2026.09.07.1
+
+- 2D 像素任务新增上传、排队、处理、完成、失败和离页恢复提示，以及已保存项目的处理进度入口。
+- 内容哈希：`369c7fe3189d1643ced79283c52eea375718f7fb515eaa5cbba7e7e724aa58c2`
+- `queued`、`running`、`succeeded`、`failed`、`cancelled`、taskId 和 projectId 保持稳定机器值；仅状态说明被本地化。
+
+## frontend-2026.09.06.2
+
+- 新增 2D 预览处理失败提示（zh-CN/en-US）；预览计算转入 Worker，原图和导出上下文不变。
+- 内容哈希：`721090ee3c1217811f9dde45cf792ec85e09d68e0af662a82a7b42fcc3d81b3b`
+- 当前阶段隐藏 DEM 与 3D 工具入口；遥测切换至 Go `/api/v1/i18n`。
+
+## frontend-2026.09.06.1
+
+- 生产语言：`zh-CN`、`en-US`；namespace：10。
+- 内容哈希：`60a2ecb137b2d00122dd60bd0c4aae0a5dcb66a76105c4a816f6df9dfa0f3f56`
+- 导航调整为模型广场、我的模型组件和模型小工具；新增 2D 流程导航，并明确 3D 当前仅提供 GLB 上传及颜色分析。
+- 仅调整前端系统文案；用户内容、官方翻译选择、API 和任务契约不变。
+
 ## frontend-2026.09.04.1
 
 - 生产语言：`zh-CN`、`en-US`
@@ -376,3 +395,7 @@
 - 生产语言：`zh-CN`、`en-US`
 - 覆盖 LEGO LDraw、设计方案、DEM LDraw 和 DEM 报告。
 - 首次记录冻结的 locale、timezone 与 catalog version。
+
+## 2026-09-06：2D Go 运行边界迁移
+
+2D API/Worker 切换 Go，保留现有 code/params、用户原文 contentLocale 与冻结 ExportContext。服务端导出资源字节未变，继续使用 `brickbuilder-export-2026.07.18.1`，Go/Python canonical 副本同步由测试约束，不新增语言或文案键。前端资源版本沿用本日导航重组的 `frontend-2026.09.06.1`。i18n 检查、75 项前端测试、构建、296 项 Python 回归与 Go 测试通过。

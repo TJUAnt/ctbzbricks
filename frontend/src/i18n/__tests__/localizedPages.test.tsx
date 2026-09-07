@@ -6,12 +6,12 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import { ComponentRepoPage } from '../../componentRepo/ComponentRepoPage';
 import { ComponentWatchListPage } from '../../componentRepo/ComponentWatchListPage';
-import { LegoDesignPage } from '../../legoDesign/LegoDesignPage';
-import { LegoTerrainBuilderPage } from '../../legoTerrain/LegoTerrainBuilderPage';
+import { LegoDesignPage } from '../../archive/dem/LegacyLegoDesignPage';
+import { LegoTerrainBuilderPage } from '../../archive/dem/LegoTerrainBuilderPage';
 import { PartSearchPage } from '../../parts/PartSearchPage';
 import { PartViewerPage } from '../../parts/PartViewerPage';
 import { PixelArtProjectsPage } from '../../pixelArt/PixelArtProjectsPage';
-import { TerrainDemPage } from '../../terrain/TerrainDemPage';
+import { TerrainDemPage } from '../../archive/dem/TerrainDemPage';
 import { DashboardPage } from '../../main';
 import i18n from '../index';
 
@@ -21,7 +21,7 @@ const pages = [
   { component: <TerrainDemPage />, english: 'Taiwan DEM Terrain', chinese: '台湾 DEM 地形' },
   { component: <LegoTerrainBuilderPage />, english: 'Terrain to LEGO Heightmap', chinese: '地形转 LEGO 高度图' },
   { component: <LegoDesignPage />, english: 'LEGO Design', chinese: 'LEGO 设计图' },
-  { component: <ComponentRepoPage />, english: 'Component Library', chinese: '组件仓库' },
+  { component: <ComponentRepoPage />, english: 'My models &amp; components', chinese: '我的模型组件' },
   { component: <ComponentWatchListPage />, english: 'My Subscriptions', chinese: '我的订阅' },
   { component: <PartSearchPage />, english: 'Part search', chinese: '零件搜索' },
   { component: <PartViewerPage />, english: '3D Part Viewer', chinese: '零件 3D 查看器' },
@@ -38,6 +38,19 @@ describe('localized page shells', () => {
 
     await i18n.changeLanguage('en-US');
     expect(renderPage(component)).toContain(english);
+  });
+
+  it('separates the public plaza from personal management and hides DEM entry points', async () => {
+    await i18n.changeLanguage('en-US');
+    const plaza = renderPage(<ComponentRepoPage mode="plaza" />);
+    expect(plaza).toContain('Model plaza');
+    expect(plaza).not.toContain('component-library-upload-button');
+    expect(plaza).not.toContain('component-library-tabs');
+    const dashboard = renderPage(<DashboardPage />);
+    expect(dashboard).toContain('/model-plaza');
+    expect(dashboard).not.toContain('/dem-builder');
+    expect(dashboard).not.toContain('/lego-builder');
+    expect(renderPage(<LegoDesignPage />)).not.toContain('Choose DEM');
   });
 
   it('selects the immutable Part detail shell from its library version and number', async () => {

@@ -16,8 +16,8 @@ import (
 
 // TestZZWatchListQueryPlanEnvelope 在显式门禁中分别构造 active 包络与 closed 重评点，验证历史增长不会改变在线查询边界。
 func TestZZWatchListQueryPlanEnvelope(t *testing.T) {
-	if os.Getenv("RUN_WATCH_LIST_PLAN_TEST") != "1" {
-		t.Skip("set RUN_WATCH_LIST_PLAN_TEST=1 to run the Watch list plan gate")
+	if os.Getenv("RUN_WATCH_LIST_PLAN_TEST") != "1" && os.Getenv("RUN_NOTIFICATION_FANOUT_PLAN_TEST") != "1" {
+		t.Skip("set RUN_WATCH_LIST_PLAN_TEST=1 or RUN_NOTIFICATION_FANOUT_PLAN_TEST=1 to run the Watch plan gate")
 	}
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -32,6 +32,9 @@ func TestZZWatchListQueryPlanEnvelope(t *testing.T) {
 
 	seedWatchListPlanEnvelope(t, ctx, pool)
 	assertWatchLedgerEnvelope(t, ctx, pool)
+	if os.Getenv("RUN_NOTIFICATION_FANOUT_PLAN_TEST") == "1" {
+		assertNotificationRecipientPlans(t, ctx, pool)
+	}
 	actor := mustUUID(t, "16000000-0000-0000-0000-000000000001")
 	firstCursorTime := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
 	firstCursorID := mustUUID(t, "ffffffff-ffff-ffff-ffff-ffffffffffff")
@@ -116,20 +119,115 @@ func assertWatchLedgerEnvelope(t *testing.T, ctx context.Context, pool *pgxpool.
 		t.Fatalf("unexpected Watch envelope: active=%d closed=%d", activeCount, closedCount)
 	}
 
-	var totalBytes, heapBytes, primaryBytes, activeUniqueBytes, activeTimeBytes, componentActiveBytes int64
+	var totalBytes, heapBytes, primaryBytes, activeUniqueBytes, activeTimeBytes, componentActiveBytes, eventRangeBytes int64
 	if err := pool.QueryRow(ctx, `
 		SELECT pg_total_relation_size('component_repo.component_watch_periods'::regclass),
 		       pg_relation_size('component_repo.component_watch_periods'::regclass),
 		       pg_relation_size('component_repo.component_watch_periods_pkey'::regclass),
 		       pg_relation_size('component_repo.component_watch_periods_active_unique_idx'::regclass),
 		       pg_relation_size('component_repo.component_watch_periods_actor_active_time_idx'::regclass),
-		       pg_relation_size('component_repo.component_watch_periods_component_active_idx'::regclass)`).Scan(
+		       pg_relation_size('component_repo.component_watch_periods_component_active_idx'::regclass),
+		       pg_relation_size('component_repo.component_watch_periods_closed_event_range_idx'::regclass)`).Scan(
 		&totalBytes, &heapBytes, &primaryBytes, &activeUniqueBytes, &activeTimeBytes, &componentActiveBytes,
+		&eventRangeBytes,
 	); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Watch ledger rows active=%d closed=%d; local bytes total=%d heap=%d primary=%d active_unique=%d active_time=%d component_active=%d",
-		activeCount, closedCount, totalBytes, heapBytes, primaryBytes, activeUniqueBytes, activeTimeBytes, componentActiveBytes)
+	t.Logf("Watch ledger rows active=%d closed=%d; local bytes total=%d heap=%d primary=%d active_unique=%d active_time=%d component_active=%d event_range=%d",
+		activeCount, closedCount, totalBytes, heapBytes, primaryBytes, activeUniqueBytes, activeTimeBytes,
+		componentActiveBytes, eventRangeBytes)
+}
+
+// assertNotificationRecipientPlans 验证真实 event-time SQL 在百万 closed 高密度 Component 上仍由区间/Component 索引驱动，
+// 并覆盖零命中、高 active 命中、历史命中与最深当前包络 cursor。
+func assertNotificationRecipientPlans(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	var componentID pgtype.UUID
+	if err := pool.QueryRow(ctx, "SELECT md5('watch-list-component-1')::uuid").Scan(&componentID); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []struct {
+		name     string
+		eventSeq int64
+	}{
+		{name: "zero-recipient", eventSeq: 1},
+		{name: "closed-history-hit", eventSeq: 3003},
+		{name: "active-high-match", eventSeq: 4_000_000},
+	} {
+		_ = explainNotificationRecipients(t, ctx, pool, componentID, scenario.eventSeq, pgtype.UUID{}, 0)
+		plan := explainNotificationRecipients(t, ctx, pool, componentID, scenario.eventSeq, pgtype.UUID{}, 0)
+		assertNotificationRecipientPlan(t, scenario.name, plan)
+		t.Logf("notification-%s %s", scenario.name, explainTiming(plan))
+	}
+
+	var deepActor pgtype.UUID
+	var deepPeriod int64
+	if err := pool.QueryRow(ctx, `
+		SELECT actor_id, id
+		FROM component_repo.component_watch_periods
+		WHERE component_id=$1 AND int8range(started_seq, ended_seq, '[)') @> 4000000::bigint
+		ORDER BY actor_id, id OFFSET 979 LIMIT 1`, componentID).Scan(&deepActor, &deepPeriod); err != nil {
+		t.Fatalf("read deepest notification cursor: %v", err)
+	}
+	deepPlan := explainNotificationRecipients(t, ctx, pool, componentID, 4_000_000, deepActor, deepPeriod)
+	assertNotificationRecipientPlan(t, "deep-cursor", deepPlan)
+	t.Logf("notification-deep-cursor %s", explainTiming(deepPlan))
+}
+
+func explainNotificationRecipients(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	componentID pgtype.UUID,
+	eventSeq int64,
+	cursorActor pgtype.UUID,
+	cursorPeriod int64,
+) string {
+	t.Helper()
+	if !cursorActor.Valid {
+		cursorActor = mustUUID(t, "00000000-0000-0000-0000-000000000000")
+	}
+	return collectExplain(t, ctx, pool, `
+		EXPLAIN (ANALYZE, BUFFERS, SETTINGS)
+		WITH eligible AS (
+		    (
+		        SELECT watch.id, watch.actor_id, watch.notification_locale,
+		               watch.notification_timezone, watch.notification_catalog_version
+		        FROM component_repo.component_watch_periods watch
+		        WHERE watch.component_id=$1 AND watch.ended_seq IS NULL
+		          AND watch.started_seq <= $2::bigint
+		          AND (watch.actor_id, watch.id) > ($3::uuid, $4::bigint)
+		        ORDER BY watch.actor_id, watch.id LIMIT 250
+		    )
+		    UNION ALL
+		    (
+		        SELECT watch.id, watch.actor_id, watch.notification_locale,
+		               watch.notification_timezone, watch.notification_catalog_version
+		        FROM component_repo.component_watch_periods watch
+		        WHERE watch.component_id=$1 AND watch.ended_seq IS NOT NULL
+		          AND int8range(watch.started_seq, watch.ended_seq, '[)') @> $2::bigint
+		          AND (watch.actor_id, watch.id) > ($3::uuid, $4::bigint)
+		        ORDER BY watch.actor_id, watch.id LIMIT 250
+		    )
+		)
+		SELECT * FROM eligible
+		ORDER BY actor_id, id
+		LIMIT 250`, componentID, eventSeq, cursorActor, cursorPeriod)
+}
+
+func assertNotificationRecipientPlan(t *testing.T, name, plan string) {
+	t.Helper()
+	if strings.Contains(plan, "Seq Scan on component_watch_periods") {
+		t.Fatalf("%s scanned the complete Watch ledger:\n%s", name, plan)
+	}
+	if !strings.Contains(plan, "component_watch_periods_closed_event_range_idx") &&
+		!strings.Contains(plan, "component_watch_periods_component_active_idx") {
+		t.Fatalf("%s did not use an event-time recipient index:\n%s", name, plan)
+	}
+	if strings.Contains(plan, "temp read=") || strings.Contains(plan, "temp written=") ||
+		strings.Contains(plan, "Sort Method: external") {
+		t.Fatalf("%s spilled recipient paging to temporary storage:\n%s", name, plan)
+	}
 }
 
 // explainWatchRewatchMutation 在回滚事务内关闭并重新追加一个 period，确保百万 closed 历史不进入点操作候选集。
@@ -292,7 +390,7 @@ func seedWatchListPlanEnvelope(t *testing.T, ctx context.Context, pool *pgxpool.
 		SELECT CASE WHEN actor = 1
 		            THEN '16000000-0000-0000-0000-000000000001'::uuid
 		            ELSE md5('watch-list-actor-' || actor)::uuid END,
-		       md5('watch-list-component-' || item)::uuid, 'releases_only',
+		       md5('watch-list-component-1')::uuid, 'releases_only',
 		       actor::bigint * 3000 + item::bigint * 3,
 		       actor::bigint * 3000 + item::bigint * 3 + 1,
 		       '2025-09-04 00:00:00+00'::timestamptz - make_interval(secs => item),

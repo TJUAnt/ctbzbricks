@@ -1,0 +1,66 @@
+{
+  "catalogVersion": "brickbuilder-export-2026.07.18.1",
+  "documents": {
+    "legoDesignPlan": {
+      "title": "乐高设计搭建方案",
+      "description": "包含搭建步骤与物料清单的确定性设计方案。"
+    },
+    "demDesignReport": {
+      "title": "DEM 乐高地形设计报告",
+      "description": "包含地形搭建方案、物料清单与验证结果的设计报告。"
+    }
+  },
+  "sections": {
+    "layers": "设计分层",
+    "steps": "搭建步骤",
+    "dimensions": "模型尺寸",
+    "bom": "物料清单",
+    "colorMappings": "颜色映射",
+    "validation": "验证报告"
+  },
+  "fields": {
+    "partId": "零件编号",
+    "partName": "零件名称",
+    "color": "颜色",
+    "quantity": "数量",
+    "width": "宽度",
+    "height": "高度",
+    "depth": "深度",
+    "role": "用途",
+    "stage": "阶段",
+    "status": "状态",
+    "metric": "指标",
+    "value": "数值"
+  },
+  "layers": {
+    "terrainAssembly": "地形总装",
+    "blackSupport": "黑色支撑连接件与边框",
+    "whiteBase": "白色支撑底座",
+    "topDesign": "顶层像素图案"
+  },
+  "steps": {
+    "pixelBase": "底座第 {index} 步",
+    "pixelTop": "顶层第 {start}–{end} 行",
+    "supportBase": "支撑底座第 {index} 步",
+    "structure": "基础结构第 {basePlate} 层",
+    "surfaceConnected": "第 {basePlate} 层连接斜坡替换",
+    "surfaceFinished": "第 {basePlate} 层斜坡装饰",
+    "surfaceSupplement": "第 {basePlate} 层彩色替换补充",
+    "surfaceFill": "第 {basePlate} 层表面填充",
+    "terrainModule": "模块 {moduleId}：{stage}"
+  },
+  "terrainStages": {
+    "wall": "侧壁",
+    "support": "支撑",
+    "cover": "顶部覆盖",
+    "solid": "实体填充",
+    "surface": "彩色表面",
+    "slope": "地形斜坡"
+  },
+  "filenames": {
+    "legoLdraw": "乐高设计-{jobId}.ldr",
+    "legoPlan": "乐高设计-{jobId}-搭建方案.json",
+    "demLdraw": "DEM乐高地形-{modelId}.ldr",
+    "demReport": "DEM乐高地形-{modelId}-设计报告.json"
+  }
+}

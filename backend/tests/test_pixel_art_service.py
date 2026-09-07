@@ -7,8 +7,8 @@ from PIL import Image
 from sqlalchemy import create_engine
 
 from src.api.schemas.pixel_art import PixelArtGenerateSettings
-from src.pixel_art.quantization import create_pixel_art_asset
-from src.services.pixel_art_service import (
+from archive.pixel2d.quantization import create_pixel_art_asset
+from archive.pixel2d.pixel_art_service import (
     ensure_pixel_art_project_table,
     load_pixel_art_project,
     paginated_pixel_art_projects,

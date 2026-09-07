@@ -1,0 +1,329 @@
+{
+  "description": "LEGO pixel design metadata and generation configuration.",
+  "routes": {
+    "metadata": "/api/lego/design/metadata",
+    "candidates": "/api/lego/design/candidates",
+    "jobs": "/api/lego/design/jobs",
+    "job": "/api/lego/design/jobs/{job_id}",
+    "job_ldraw": "/api/lego/design/jobs/{job_id}/ldraw",
+    "job_plan": "/api/lego/design/jobs/{job_id}/plan"
+  },
+  "parts": {
+    "category": "Plate",
+    "logical_height_plate": 1,
+    "geometry_height_plate": 1,
+    "geometry_height_tolerance_plate": 0.001,
+    "minimum_dimension_stud": 1,
+    "maximum_area_stud": 64,
+    "geometry_status": "parsed"
+  },
+  "candidate_features": {
+    "default_footprint": "rectangular",
+    "query_param": "footprint",
+    "name_space_separator": " ",
+    "ldraw_part_suffix": ".dat",
+    "moved_to_pattern": "^~Moved to (?P<target>[A-Za-z0-9]+)$",
+    "moved_target_group": "target",
+    "ranking": {
+      "exact_relation_type": "exact",
+      "direct_exact_rank": 0,
+      "moved_exact_rank": 1,
+      "mapped_rank": 2,
+      "unmapped_rank": 3
+    },
+    "footprints": {
+      "rectangular": {
+        "name_pattern": "^Plate [0-9]+ x [0-9]+$"
+      }
+    }
+  },
+  "colors": {
+    "include_transparent": false,
+    "excluded_ids": [-1, 9999],
+    "excluded_names": [
+      "[Unknown]",
+      "[No Color/Any Color]",
+      "No color",
+      "No Color",
+      "Any color",
+      "Any Color"
+    ]
+  },
+  "algorithm": {
+    "beam_size": 20,
+    "max_candidates_per_cell": 30,
+    "max_region_cells_for_beam": 500,
+    "fragment_penalty": 0.4,
+    "isolated_penalty": 0.8,
+    "rotation_degrees": 90,
+    "no_rotation_degrees": 0,
+    "minimum_empty_dimension": 0,
+    "minimum_area": 1,
+    "hex_radix": 16,
+    "hex_color_length": 6,
+    "hex_color_prefix": "#",
+    "hex_pad_value": "0",
+    "cell_key_separator": ":",
+    "rgb_channels": {
+      "red_start": 0,
+      "red_end": 2,
+      "green_start": 2,
+      "green_end": 4,
+      "blue_start": 4,
+      "blue_end": 6
+    }
+  },
+  "heightmap_design": {
+    "source_type": "heightmap",
+    "module_id_prefix": "terrain-module",
+    "module_id_separator": "-",
+    "module_id_start": 1,
+    "module_types": {
+      "cavity": "cavity",
+      "solid": "solid",
+      "surface": "surface"
+    },
+    "module_stages": {
+      "wall": "wall",
+      "support": "support",
+      "cover": "cover",
+      "solid": "solid",
+      "surface": "surface",
+      "slope": "slope"
+    },
+    "module_step_names": {
+      "wall": "Walls",
+      "support": "Supports",
+      "cover": "Top cover",
+      "solid": "Solid fill",
+      "surface": "Colored surface",
+      "slope": "Terrain slopes"
+    },
+    "module_step_name_template": "{module_id} {stage_name}",
+    "surface_module_id": "terrain-surface",
+    "part_roles": {
+      "plate": "plate",
+      "brick": "brick",
+      "slope": "slope"
+    },
+    "cavity": {
+      "min_width": 3,
+      "min_depth": 3,
+      "min_height_plate": 3,
+      "wall_thickness": 1
+    },
+    "part_rotation": 0,
+    "plate_height_ldu": 8,
+    "height_direction": -1,
+    "part_specs": {
+      "plate": {
+        "role": "plate",
+        "category": "Plate",
+        "logical_height_plate": 1,
+        "geometry_height_plate": 1,
+        "geometry_height_tolerance_plate": 0.001,
+        "name_pattern": "^Plate [0-9]+ x [0-9]+$"
+      },
+      "brick": {
+        "role": "brick",
+        "category": "Brick",
+        "logical_height_plate": 3,
+        "geometry_height_plate": 3,
+        "geometry_height_tolerance_plate": 0.001,
+        "name_pattern": "^Brick [0-9]+ x [0-9]+$"
+      },
+      "slope_1x1": {
+        "role": "slope",
+        "category": "Slope",
+        "logical_height_plate": 2,
+        "geometry_height_plate": 0.667,
+        "geometry_height_tolerance_plate": 0.001,
+        "name_pattern": "^Slope Brick 31 +1 x +1 x +0[.]667$"
+      },
+      "slope_2x1": {
+        "role": "slope",
+        "category": "Slope",
+        "logical_height_plate": 3,
+        "geometry_height_plate": 3,
+        "geometry_height_tolerance_plate": 0.001,
+        "name_pattern": "^Slope Brick 45 +2 x +1$"
+      },
+      "slope_2x2_corner": {
+        "role": "slope",
+        "category": "Slope",
+        "logical_height_plate": 3,
+        "geometry_height_plate": 3,
+        "geometry_height_tolerance_plate": 0.001,
+        "name_pattern": "^Slope Brick 45 +2 x +2 Double Convex$"
+      }
+    },
+    "color_assignment": {
+      "candidate_color_count": 4,
+      "minimum_preserved_cell_count": 1
+    },
+    "slope": {
+      "minimum_height_difference_plate": 1,
+      "corner_height_difference_plate": 3,
+      "dimension_swap_rotations": [90, 270],
+      "part_dimensions": {
+        "single": {"width": 1, "depth": 1},
+        "straight": {"width": 2, "depth": 1},
+        "corner": {"width": 2, "depth": 2}
+      },
+      "corner_rotations": [
+        {"rotation": 0, "high_x": 0, "high_z": 1},
+        {"rotation": 90, "high_x": 0, "high_z": 0},
+        {"rotation": 180, "high_x": 1, "high_z": 0},
+        {"rotation": 270, "high_x": 1, "high_z": 1}
+      ],
+      "directions": [
+        {"rotation": 0, "pair_x": 1, "pair_z": 0, "neighbor_x": 0, "neighbor_z": -1},
+        {"rotation": 90, "pair_x": 0, "pair_z": 1, "neighbor_x": 1, "neighbor_z": 0},
+        {"rotation": 180, "pair_x": 1, "pair_z": 0, "neighbor_x": 0, "neighbor_z": 1},
+        {"rotation": 270, "pair_x": 0, "pair_z": 1, "neighbor_x": -1, "neighbor_z": 0}
+      ]
+    },
+    "terrain_color": {
+      "id": 15,
+      "name": "White",
+      "rgb": "#FFFFFF",
+      "ldraw_code": "15"
+    }
+  },
+  "model_dimensions": {
+    "stud_width_mm": 8,
+    "plate_height_mm": 3.2,
+    "millimeters_per_centimeter": 10,
+    "round_digits": 2
+  },
+  "job_status": {
+    "queued": "queued",
+    "running": "running",
+    "complete": "complete",
+    "failed": "failed"
+  },
+  "progress": {
+    "queued": 0,
+    "metadata_loaded": 10,
+    "components_ready": 20,
+    "complete": 100
+  },
+  "jobs": {
+    "job_id_hex_length": 32
+  },
+  "ldraw": {
+    "include_base_query_param": "include_base",
+    "content_type": "text/plain; charset=utf-8",
+    "content_disposition_header": "Content-Disposition",
+    "line_separator": "\n",
+    "metadata_line_type": 0,
+    "part_line_type": 1,
+    "file_command": "FILE",
+    "name_command": "Name:",
+    "author_command": "Author:",
+    "author": "ctbzbricks",
+    "model_file_name": "pixel-design.ldr",
+    "comment_prefix": "//",
+    "step_command": "STEP",
+    "ldu_per_stud": 20,
+    "top_design_y_ldu": 0,
+    "white_base_y_ldu": 8,
+    "black_support_y_ldu": 16,
+    "seam_connector_before_stud": 1,
+    "seam_connector_after_stud": 1,
+    "border_width_stud": 2,
+    "minimum_support_width_stud": 2,
+    "support_maximum_extra_cells_per_part": 1,
+    "support_minimum_covered_cells_per_part": 2,
+    "part_origin_offset_divisor": 2,
+    "x_origin_grid_width_multiplier": 0,
+    "x_direction": 1,
+    "z_origin_grid_height_multiplier": 1,
+    "z_direction": -1,
+    "direct_color_prefix": "0x2",
+    "support_colors": {
+      "white": {
+        "id": 15,
+        "name": "White",
+        "rgb": "#FFFFFF",
+        "ldraw_code": "15"
+      },
+      "black": {
+        "id": 0,
+        "name": "Black",
+        "rgb": "#000000",
+        "ldraw_code": "0"
+      }
+    },
+    "submodels": {
+      "file_name_template": "{module_id}.ldr",
+      "reference_color_code": "16",
+      "reference_x_ldu": 0,
+      "reference_y_ldu": 0,
+      "reference_z_ldu": 0,
+      "reference_matrix": [1, 0, 0, 0, 1, 0, 0, 0, 1]
+    },
+    "grid_rotation_matrices": {
+      "0": [0, 0, 1, 0, 1, 0, -1, 0, 0],
+      "90": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+      "180": [0, 0, -1, 0, 1, 0, 1, 0, 0],
+      "270": [-1, 0, 0, 0, 1, 0, 0, 0, -1]
+    }
+  },
+  "lego_pixmap_strategy": {
+    "base_step_white_plate_limit": 4,
+    "top_design_step_row_count": 4,
+    "step_index_start": 1,
+    "step_end_inclusive_offset": 1,
+    "step_id_separator": "-",
+    "layers": {
+      "base": "base",
+      "top": "top"
+    },
+    "step_id_prefixes": {
+      "base": "base",
+      "top": "top"
+    },
+    "step_names": {
+      "base": "Base {index}",
+      "top": "Top rows {start}-{end}"
+    }
+  },
+  "plan_export": {
+    "format": "lego-design-plan",
+    "content_type": "application/json; charset=utf-8",
+    "content_disposition_header": "Content-Disposition",
+    "json_indent": 2,
+    "layer_order": {
+      "black_support": 0,
+      "white_base": 1,
+      "top_design": 2
+    },
+    "layer_ids": {
+      "black_support": "blackSupport",
+      "white_base": "whiteBase",
+      "top_design": "topDesign"
+    },
+    "layer_names": {
+      "black_support": "Black support connectors and border",
+      "white_base": "White support base",
+      "top_design": "Top pixel design"
+    }
+  },
+  "errors": {
+    "project_not_found": "lego_design.project_not_found",
+    "job_not_found": "lego_design.job_not_found",
+    "candidate_feature_not_found": "lego_design.candidate_feature_not_found",
+    "design_not_ready": "lego_design.design_not_ready",
+    "design_coverage_failed": "lego_design.design_coverage_failed",
+    "design_part_not_available": "lego_design.design_part_not_available",
+    "support_base_failed": "lego_design.support_base_failed",
+    "heightmap_column_part_not_found": "lego_design.heightmap_column_part_not_found",
+    "heightmap_cover_part_not_found": "lego_design.heightmap_cover_part_not_found",
+    "heightmap_slope_part_not_found": "lego_design.heightmap_slope_part_not_found"
+  },
+  "http_status": {
+    "not_found": 404,
+    "bad_request": 400
+  }
+}

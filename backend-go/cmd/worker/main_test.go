@@ -30,3 +30,17 @@ func TestValidateWorkerConfigRequiresLDrawRootForComponentPreview(t *testing.T) 
 		t.Fatal("expected storage-enabled worker configuration to require LDRAW_ROOT")
 	}
 }
+
+func TestDedicatedPixelWorkerDoesNotRequireLDraw(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Storage.Provider = "supabase"
+	cfg.Storage.ServiceRoleKey = "fixture"
+	cfg.Worker.TaskTypes = []string{"pixel_2d.generate", "pixel_2d.edit", "pixel_2d.design"}
+	if err := validateWorkerConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Worker.TaskTypes = append(cfg.Worker.TaskTypes, "unknown")
+	if err := validateWorkerConfig(cfg); err == nil {
+		t.Fatal("mixed worker must retain preview prerequisites")
+	}
+}

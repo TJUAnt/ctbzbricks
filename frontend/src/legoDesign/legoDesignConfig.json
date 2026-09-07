@@ -1,14 +1,14 @@
 {
-  "metadataApiUrl": "/api/lego/design/metadata",
-  "jobsApiUrl": "/api/lego/design/jobs",
+  "metadataApiUrl": "/api/v1/lego-design/metadata",
+  "jobsApiUrl": "/api/v1/lego-design/jobs",
   "demFinalDesignApiUrl": "/api/dem-lego-design/final-design",
   "demFinalDesignLdrawApiUrl": "/api/dem-lego-design/final-design/ldraw",
   "demFinalDesignReportApiUrl": "/api/dem-lego-design/final-design/report",
-  "jobApiUrl": "/api/lego/design/jobs/{jobId}",
-  "exportApiUrl": "/api/lego/design/jobs/{jobId}/ldraw",
-  "exportPlanApiUrl": "/api/lego/design/jobs/{jobId}/plan",
-  "projectApiUrl": "/api/pixel-art/projects/{projectId}",
-  "projectsApiUrl": "/api/pixel-art/projects",
+  "jobApiUrl": "/api/v1/lego-design/jobs/{jobId}",
+  "exportApiUrl": "/api/v1/lego-design/jobs/{jobId}/ldraw",
+  "exportPlanApiUrl": "/api/v1/lego-design/jobs/{jobId}/plan",
+  "projectApiUrl": "/api/v1/pixel-art/projects/{projectId}",
+  "projectsApiUrl": "/api/v1/pixel-art/projects",
   "routePlaceholders": {
     "projectId": "{projectId}",
     "jobId": "{jobId}"

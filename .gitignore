@@ -53,3 +53,9 @@ design_maps/
 designs/
 .github/
 repo/
+
+!docs/go_pixel_2d_migration.md
+!docs/evidence/
+docs/evidence/*
+!docs/evidence/pixel_2d_pg14_plans.txt
+backend/archive/**/__pycache__/

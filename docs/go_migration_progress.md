@@ -1,6 +1,8 @@
 # Go 后端迁移进度
 
-> 最后更新：2026-09-05（G8 真实 RLS、恢复与发布门禁关闭）
+> 后续领域专项：[2D 像素化与拼接方案 Go 迁移](go_pixel_2d_migration.md)（P2D，独立记录；不计入 Component Repo G0～G8）。
+
+> 最后更新：2026-09-06（WATCH-3 前置容量、渠道、频控、去重/保留、SLO 与指标契约冻结）
 > 状态依据：[go_component_migration_plan.md](./go_component_migration_plan.md)
 > 跟进指南：[go_migration_followup_guide.md](./go_migration_followup_guide.md)
 > 记录规则：本文只保留当前状态、已验证里程碑和未关闭门禁；过程细节由专项文档、测试和 Git 历史承载。
@@ -19,7 +21,8 @@
 | G7 关系、校验和预览 | Completed | relation、interface、可选 validation、BOM 与 GLB preview 均由 Go 执行 |
 | G8 前端切换与 Python 退出 | Completed | Component Repo public API/task consumer 已 Go-only；Python public router 已删除，双语言、双身份 Auth/Storage RLS、恢复/回滚和真实指标门禁通过 |
 
-当前 schema head 为 **v18**。Go API 已覆盖目录、版本、分组、Star、Watch、Artifact、上传、Import、Candidate、
+当前仓库 schema head 为 **v19**（v19 属于独立 P2D 路线；真实 Supabase 的 Component Repo G8 验收点仍为
+v18）。Go API 已覆盖目录、版本、分组、Star、Watch、Artifact、上传、Import、Candidate、
 关系审核、Part Library、任务、BOM、Preview、Search 和 Version Diff。Component Repo 不再新增 Python task；
 `component.import.parse` 与 `component.relations.detect` 已由 Go Worker 执行。
 
@@ -47,7 +50,7 @@ schema head，也不代表浏览器、RLS、冷热缓存或生产 SLO 已验收�
 | Version | Draft/Publish/Deprecate/Archive、历史、source、BOM、Diff | 来源字段由服务端沿 Candidate 链取得 |
 | Group | root/custom、移动、成员管理 | root 仅代表 owned；Star 是独立集合 |
 | Star | 幂等 Star/Unstar、列表、计数、详情/目录投影 | 不授予权限、不通知、不公开 actor 列表 |
-| Watch | 幂等 Watch/Unwatch、筛选/keyset 管理页、详情投影、发布领域事件、mutation 指标 | 尚无 recipient snapshot、fan-out、通知或 Feed |
+| Watch | 幂等 Watch/Unwatch、筛选/keyset 管理页、详情投影、发布领域事件、mutation 指标、WATCH-3 前置容量/SLO/指标契约 | 尚无 recipient snapshot、fan-out Worker、通知或 Feed |
 | Upload/Import | owner-scoped 直传、complete `202`、持久处理链、状态恢复 | complete 是写交互终点，不等待 Worker |
 | Task | logical job、execution/attempt、依赖、租约、重试、取消、事件 | PostgreSQL 是权威状态，不使用进程内队列 |
 | Scene/Candidate | Studio/LDraw 解析、多 root expansion、hash/signature、relation 审核 | source 与 derived Artifact 分离 |
@@ -111,6 +114,12 @@ schema head，也不代表浏览器、RLS、冷热缓存或生产 SLO 已验收�
   事务结果确定后计一次，内部 retry 不重复；指标不包含 actor、Component ID 或用户内容。
 - `/metrics` 同时暴露 `component_watch_mutation_total{action,result}`；action 固定为 `watch/unwatch`，result
   固定为 `succeeded/failed`，幂等重复操作计为 succeeded，全部事务重试结束后每次 Service 调用只计一次。
+- WATCH-3 前置契约已冻结：MVP 仅站内通知；稳态 100 event/日、突发 20 event/5 分钟、单 event 最多按 1,000
+  recipient 规划；批次 250、每进程最多 4 个 delivery lease、固定退避最多 8 次。领域事件/Watch period/delivery
+  当前永久保留，通知保留 365 天且只允许 30 天内运维重放；这些数值均为规划/保留契约，不是 API 静默截断。
+- `/metrics` 已预暴露固定低基数 `component_notification_*` fan-out final/attempt/recipient/dead-letter Counter、
+  lag/batch Histogram 与 backlog/dead-letter Gauge。Worker 未实现前保持零值；WATCH-3 必须由独立 Worker endpoint 记录
+  Counter，并从 PostgreSQL delivery 状态采样 Gauge，不能把 API 进程零值当作真实 backlog。
 - Goose v17 为 Watch 历史增加 `ended_reason` 和 `(component_id,actor_id) WHERE ended_seq IS NULL`。Component
   DELETE 在 exclusive activity lock 内软删除、冻结公共结束边界并原子入队 `component.relationships.cleanup`；
   列表立即隐藏目标，Worker 以 5,000 条 actor-keyset 短事务关闭 Watch 并物理删除 Star。任务重放是空操作，
@@ -301,6 +310,35 @@ Component、G8 临时 Auth、G8 Storage object、无效索引和超过 60 秒的
 最终全量门禁为 Go `make check`、隔离 PostgreSQL `make test-postgres`、前端 15 files / 71 tests + build、
 Python 295 tests、`git diff --check` 全部通过。
 
+### 5.10 WATCH-3 前置契约与 fan-out 指标
+
+2026-09-06 已冻结当前 WATCH-3 实施包络：1,000 用户、1,000 active Watch/actor、单 event 最多按 1,000
+recipient、稳态 100 event/日、突发 20 event/5 分钟规划；MVP 只做站内通知。单批 250 recipients、每进程
+最多 4 个 delivery lease，固定退避最多 8 次。通知保留 365 天、运维重放窗口 30 天；domain event、delivery
+与 Watch period 当前永久保留。详细增长公式、70% 重评线和生产 SLO 见 Watch 路线第 26 节。
+
+执行协议冻结为独立 PostgreSQL `component_event_deliveries` + `user_notifications`：event/delivery 同事务，
+recipient page 写入与 cursor 推进同事务，`FOR UPDATE SKIP LOCKED` claim，event-time Watch 谓词和
+`(actor_id,period_id)` keyset。Task `outbox_events` 未修改且禁止复用。实际表、Worker、索引和通知 API 仍属于
+WATCH-3，不在本前置切片伪实现。
+
+Go observability 已增加固定低基数 fan-out final/attempt/recipient/dead-letter Counter、lag/batch Histogram、
+pending/dead-letter backlog Gauge。非法动态 event/result/error label 被丢弃，批次大于 250 不进入直方图。
+Worker 未实现前 `/metrics` 输出零值只证明指标契约存在，不代表数据库 backlog 为零；WATCH-3 必须提供独立
+Worker scrape endpoint，并用 PostgreSQL delivery 状态刷新 Gauge。
+
+```text
+go test -race ./internal/observability    PASS
+go test ./internal/httpapi                PASS
+backend-go make check                     PASS
+backend-go make test-postgres             PASS（当前仓库 Goose 0 -> v19、down/up、API/Worker 指标启动契约）
+sh -n backend-go/scripts/test-postgres.sh PASS
+git diff --check                          PASS
+```
+
+i18n 影响：无用户可见文案、资源键、locale 分支或内容分类变化；通知 UI、code/params 与冻结 locale/timezone
+将在 WATCH-3/4 实现时按既有 i18n 门禁单独验收。
+
 ## 6. 未关闭门禁
 
 ### 6.1 G8 发布与环境门禁
@@ -329,7 +367,8 @@ Python 295 tests、`git diff --check` 全部通过。
 
 ### 6.3 Watch 路线跟踪
 
-- [ ] WATCH-0：删除/归档关系策略已冻结并由 v17 实现；用户总量 1,000、active Watch 1,000/actor 的当前容量包络已冻结；closed period 永久保留且 1,000,000 条触发重评。通知渠道、频控、去重窗口和生产 SLO 仍待冻结。
+- [x] WATCH-0 前置契约：删除/归档策略、用户 1,000、active Watch 1,000/actor、closed 重评点、站内单渠道、
+  fan-out 频控、去重/保留、生产 SLO 和固定低基数专属指标均已冻结；详细值见 Watch 路线第 26 节。
 - [x] `WATCH-CAPACITY-01`：按 1,000 actor × 1,000 active 与 1,000,000 closed 重评点验证列表、最深 cursor、
   Unwatch 和 Rewatch；closed 容量已按 Rewatch 频率 × 观察窗口建模。本地时间仅作为查询形状证据。
 - [x] WATCH-1：偏好存储、幂等 API、keyset 列表和详情入口。
@@ -338,14 +377,16 @@ Python 295 tests、`git diff --check` 全部通过。
   冻结 `mutationId` 或等价协议，防止跨 Unwatch 的延迟旧 PUT 被解释为 Rewatch。
 - [x] WATCH-2：发布事务、不可变唯一事件、回滚/并发/event-time 门槛和正式
   `component_domain_event_total` Prometheus 指标均完成；发布 Handler 不同步 fan-out watcher。
-- [ ] WATCH-3：closed history 已冻结为永久保留；仍需基于 v15 append-mostly period 与共享 sequence 冻结 event-time fan-out 查询、completion watermark 和 Component 侧索引；随后生成 inbox/delivery，补退订竞态、去重、限流、失败重试，并按 active
-  1,000/actor 与另行估算的历史总量提供生产计划证据。
+- [ ] WATCH-3：closed history 与 event-time keyset/cursor/completion 协议已冻结；仍需落地独立 delivery/notification、
+  用真实计划选择 Component 侧索引、实现 Worker/独立 metrics endpoint，并补退订竞态、去重、失败重试及
+  active 1,000/actor + 100 万 closed 的生产版本计划证据。
 - [ ] WATCH-4：“我的订阅”管理页已完成；通知中心、未读状态、批量标记以及可访问性/双语言真实浏览器验收未完成。
 
 ## 7. 下一步顺序
 
-1. WATCH-3 前冻结容量、通知渠道、频控、去重/保留和 SLO，并补齐 fan-out 专属指标；fan-out 必须使用
-   PostgreSQL 持久执行协议，但不得把 Task `outbox_events` 直接改造成 Component 领域事件或用户通知表。
+1. 按已冻结前置契约实施 WATCH-3：新增独立 PostgreSQL delivery/notification、同事务 event→delivery、
+   event-time keyset recipient 查询、lease/retry/cursor Worker 与独立 metrics endpoint；不得复用或改造 Task
+   `outbox_events`。
 2. 持续采集真实 Rewatch 频率、closed 总量、表/索引大小与 autovacuum/bloat；接近 1,000,000 closed、容量
    包络提高或准备 WATCH-3 event-time 查询时，使用生产 PostgreSQL 版本重新执行计划门禁。本地时间不得作为
    生产 SLO。
@@ -363,3 +404,15 @@ Python 295 tests、`git diff --check` 全部通过。
 ```
 
 专项设计、长执行记录和评审讨论写入对应路线文档；本文只保留指向它们的结论。
+
+## 9. 2D 工具专项（2026-09-07）
+
+P2D-0～P2D-3 代码迁移与本地验证完成；真实环境已升级至 v19 并验证上传、编辑和拼接，剩余发布门禁见 [2D 迁移记录](go_pixel_2d_migration.md)。Go Worker 消费三种 `pixel_2d.*` 任务，FastAPI 2D 入口已移除，前端只使用认证 `/api/v1`。成功修订不长期保存原始图片正文；输入只服务持久任务与重试，完成后幂等删除。页面把 projectId 写入 URL，使用轻量 Task API 显示可恢复进度，关闭页面不取消任务。P2D-RELEASE-01、P2D-SQL-01、P2D-DATA-01、P2D-STORAGE-01 的关闭条件保留在专项文档。
+
+## 2026-09-06 P2D-3 真实运行与预览卡顿修复
+
+详见 [独立 2D 迁移记录](go_pixel_2d_migration.md#2026-09-06-真实运行与卡顿排查p2d-3)。真实库 v19、227 色/27 Plate 目录已导入；Go-only 上传、编辑、拼接均成功，浏览器已显示结果。默认不启动 Python，DEM/3D 工具入口关闭并保留归档。预览计算移出主线程、绕开像素循环的本地化 Proxy，并取消离页轮询。前端 79 项、构建、i18n 与 Python 296 项通过。真实双语言下载、第二身份与修复后照片预览复测仍是门禁，不标记 P2D-3 全部完成。
+
+Go 全包与隔离 PostgreSQL v19 集成复核通过，包含持久任务、进度插值和启动无 DDL。服务端分段延迟仍按 P2D-LATENCY-01 跟进。
+
+2026-09-07：2D 页面改为可离页恢复的异步任务体验，任务状态轮询切换到共享轻量 Task API；成功修订删除临时 source/input 正文，相同内容的并发任务使用独立 UUID。前端 79 项/i18n/build、Go 全包、隔离 PostgreSQL v19 和 Python 296 项通过。上传直传及失败终态/孤儿清理仍由 P2D-LATENCY-01、P2D-STORAGE-01 跟进。

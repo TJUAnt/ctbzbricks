@@ -2,8 +2,8 @@ import React from 'react';
 import { ArrowUp, Compass, Grid3X3, Layers3, Mountain, RotateCcw } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { localizeStructuredMessage } from '../api/client';
-import { formatNumber } from '../i18n/formatters';
+import { localizeStructuredMessage } from '../../api/client';
+import { formatNumber } from '../../i18n/formatters';
 import {
   combineGeojsonFeatureCollections,
   createTerrainJob,
@@ -16,15 +16,15 @@ import {
   saveTerrainModel,
   summarizeGeojsonDocuments,
   type TerrainGeojsonFileInfo,
-} from './terrainApi';
-import terrainConfig from './terrainConfig';
+} from '../../terrain/terrainApi';
+import terrainConfig from '../../terrain/terrainConfig';
 import {
   combinedTerrainBounds,
   createBoundaryLines,
   createTerrainMeshData,
   createTerrainSceneFrame,
-} from './terrainMesh';
-import type { TerrainAsset, TerrainJob, TerrainModelMetadata } from './terrainTypes';
+} from '../../terrain/terrainMesh';
+import type { TerrainAsset, TerrainJob, TerrainModelMetadata } from '../../terrain/terrainTypes';
 
 type TerrainConfig = typeof terrainConfig;
 

@@ -68,7 +68,9 @@ func (h *Handler) watch(c *gin.Context) {
 		h.writeError(c, validationError("body"))
 		return
 	}
-	result, err := h.service.Watch(c.Request.Context(), actor.ID, c.Param("componentId"), input.Level)
+	result, err := h.service.WatchWithContext(c.Request.Context(), actor.ID, c.Param("componentId"), input.Level, NotificationContext{
+		Locale: input.Locale, Timezone: input.Timezone, CatalogVersion: input.CatalogVersion,
+	})
 	h.writeJSON(c, http.StatusOK, result, err)
 }
 

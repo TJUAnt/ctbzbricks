@@ -41,4 +41,8 @@
 - catalog version 一经发布不可原地复用；修正文案也必须创建新版本。
 - 回滚应用时同时回滚对应资源与版本声明，不单独回滚译文文件。
 - 未审核的新增语言只允许作为 `validationLocales`，不得加入 `productLocales` 或语言选择器。
-- 未知 key、未知 API code 和 locale fallback 由 `/api/i18n/metrics` 监控；发布后出现非零新增趋势必须建立修复项。
+- 未知 key、未知 API code 和 locale fallback 由 `/api/v1/i18n/metrics` 监控；发布后出现非零新增趋势必须建立修复项。
+
+### 2D Go 导出资源同步（2026-09-06）
+
+Go `internal/pixel2d/resources/{en-US,zh-CN}.json` 是既有服务端导出目录的构建嵌入副本。`TestEmbeddedResourcesMatchCanonical` 要求与 `backend/src/i18n/export_resources` 字节一致；修改资源必须同时更新两处、目录版本/内容哈希和 release notes，不允许独立维护另一套词典。此次迁移未改服务端文案或 `brickbuilder-export-2026.07.18.1` 版本。

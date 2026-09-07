@@ -20,4 +20,6 @@ echo "Shared env: $([[ -f "${CTBZ_SHARED_ENV_FILE}" ]] && echo loaded || echo mi
 echo "Go env: $([[ -f "${CTBZ_GO_ENV_FILE}" ]] && echo loaded || echo missing)"
 
 cd "${CTBZ_PROJECT_ROOT}/backend-go"
-exec go run ./cmd/api
+# 直接 exec 编译产物，使上层启动器发送的退出信号到达服务本身，避免 go run 子进程残留。
+go build -o "${GOCACHE}/ctbzbricks-api" ./cmd/api
+exec "${GOCACHE}/ctbzbricks-api"

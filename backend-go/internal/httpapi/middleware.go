@@ -85,8 +85,13 @@ func requestTimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 
 func bodyLimitMiddleware(maxBodyBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		limit := maxBodyBytes
+		// 2D 上传/完整像素矩阵使用独立有界 IO 预算；其他业务路由保持原有全局限制。
+		if c.FullPath() == "/api/v1/pixel-art/projects" && c.Request.Method == http.MethodPost || c.FullPath() == "/api/v1/pixel-art/projects/:projectId/pixels" && c.Request.Method == http.MethodPut {
+			limit = 21 * 1024 * 1024
+		}
 		if c.Request.Body != nil {
-			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBodyBytes)
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 		}
 		c.Next()
 	}

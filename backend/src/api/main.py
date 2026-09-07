@@ -14,10 +14,8 @@ from src.api.routes.domain_content import create_domain_content_router
 from src.api.routes.fitting_candidate_recall import (
     create_fitting_candidate_recall_router,
 )
-from src.api.routes.lego_design import create_lego_design_router
 from src.api.routes.mesh_models import create_mesh_model_router
 from src.api.routes.model_fitting import create_model_fitting_router
-from src.api.routes.pixel_art import create_pixel_art_router
 from src.api.routes.model_assets import create_model_asset_router
 from src.api.routes.lego_heightmap import create_lego_heightmap_router
 from src.api.routes.part_search import create_part_search_router
@@ -90,21 +88,6 @@ REQUIRED_TERRAIN_CONFIG_KEYS = (
     "job_status",
     "http_status",
     "errors",
-)
-
-REQUIRED_PIXEL_ART_CONFIG_KEYS = (
-    "asset_schema",
-    "routes",
-    "storage",
-    "image",
-    "quantization",
-    "algorithms",
-    "kmeans",
-    "preprocessing",
-    "feature_analysis",
-    "metadata",
-    "errors",
-    "http_status",
 )
 
 REQUIRED_LEGO_DESIGN_CONFIG_KEYS = (
@@ -189,7 +172,6 @@ def lego_heightmap_config(terrain_config: dict) -> dict:
 def create_app() -> FastAPI:
     config = load_json_config("search_api.json", REQUIRED_SEARCH_API_CONFIG_KEYS)
     terrain_config = load_json_config("taiwan_dem_terrain.json", REQUIRED_TERRAIN_CONFIG_KEYS)
-    pixel_art_config = load_json_config("pixel_art.json", REQUIRED_PIXEL_ART_CONFIG_KEYS)
     lego_design_config = load_json_config("lego_design.json", REQUIRED_LEGO_DESIGN_CONFIG_KEYS)
     dem_lego_design_config = load_json_config(
         "dem_lego_design.json",
@@ -223,7 +205,6 @@ def create_app() -> FastAPI:
     app.state.model_asset_config = config["model_assets"]
     app.state.terrain_config = terrain_config
     app.state.lego_heightmap_config = lego_heightmap_config(terrain_config)
-    app.state.pixel_art_config = pixel_art_config
     app.state.lego_design_config = lego_design_config
     app.state.dem_lego_design_config = dem_lego_design_config
     app.state.mesh_model_config = mesh_model_config
@@ -231,8 +212,6 @@ def create_app() -> FastAPI:
     app.state.model_fitting_config = model_fitting_config
     app.state.fitting_candidate_recall_config = fitting_candidate_recall_config
     app.state.component_repo_config = component_repo_config
-    app.state.lego_design_jobs = {}
-    app.state.lego_design_jobs_lock = Lock()
     app.state.terrain_jobs = {}
     app.state.terrain_jobs_lock = Lock()
     db_engine_options = get_db_engine_options()
@@ -272,11 +251,9 @@ def create_app() -> FastAPI:
             app.state.lego_heightmap_config,
         )
     )
-    app.include_router(create_lego_design_router(lego_design_config))
     app.include_router(create_dem_lego_design_router(dem_lego_design_config))
     app.include_router(create_model_asset_router(config))
     app.include_router(create_mesh_model_router(mesh_model_config))
-    app.include_router(create_pixel_art_router(pixel_art_config))
     app.include_router(create_submodel_router(submodel_config))
     app.include_router(
         create_fitting_candidate_recall_router(

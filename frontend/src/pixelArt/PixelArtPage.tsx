@@ -1,3 +1,5 @@
+import { useSearchParams } from 'react-router-dom';
+import { waitForPixelProject } from './pixelArtApi';
 import React from 'react';
 import {
   Check,
@@ -12,13 +14,15 @@ import {
   Upload,
 } from 'lucide-react';
 import {
-  savePixelArtProject,
+  submitPixelArtProject,
   updatePixelArtProjectPixels,
   type PixelArtProject,
   type PixelArtPreprocessing,
   type PixelArtSettings,
   type PixelCell,
   type PixelPaletteColor,
+  type PixelTaskSnapshot,
+  type PixelWriteAccepted,
 } from './pixelArtApi';
 import pixelArtConfig from './pixelArtConfig';
 
@@ -99,7 +103,16 @@ type SourceDragState = {
   startView: CanvasView;
 };
 
+/** 编排照片裁剪、预览和持久任务；页面卸载仅停止等待，不删除已提交任务。 */
 export function PixelArtPage() {
+  const pageRequests = React.useRef<AbortController | null>(null);
+  React.useEffect(() => {
+    pageRequests.current = new AbortController();
+    return () => { pageRequests.current?.abort(); };
+  }, []);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const resumeProjectId = searchParams.get('project');
+  const acceptedTaskRef = React.useRef<PixelWriteAccepted | null>(null);
   const [sourceImage, setSourceImage] = React.useState<SourceImage | null>(null);
   const [sourceElement, setSourceElement] = React.useState<ImageElementState>({
     element: null,
@@ -144,6 +157,7 @@ export function PixelArtPage() {
   const [isGenerating, setIsGenerating] = React.useState(false);
   const [isSavingEdits, setIsSavingEdits] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
+  const [taskProgress, setTaskProgress] = React.useState<PixelTaskSnapshot | null>(null);
 
   React.useEffect(() => {
     return () => {
@@ -228,6 +242,7 @@ export function PixelArtPage() {
       return;
     }
     setIsGenerating(true);
+    setTaskProgress({ taskId: '', status: 'uploading', percent: null });
     setMessage(null);
     try {
       const settings: PixelArtSettings = {
@@ -238,19 +253,14 @@ export function PixelArtPage() {
         crop: roundedCrop(crop),
         preprocessing,
       };
-      const savedProject = await savePixelArtProject(projectName.trim(), sourceImage.file, settings);
-      setProject(savedProject);
-      setUndoHistory([]);
-      setRedoHistory([]);
-      setSelectedCells(new Set());
-      setPixelView(initialCanvasView());
-      setSourceView(initialCanvasView());
-      setActiveStep(pixelArtConfig.workflow.editStep);
-      setMessage(`${pixelArtConfig.texts.saved}: ${savedProject.name}`);
+      const accepted = await submitPixelArtProject(projectName.trim(), sourceImage.file, settings, pageRequests.current?.signal);
+      acceptedTaskRef.current = accepted;
+      setTaskProgress({ taskId: accepted.taskId, status: 'queued', percent: null });
+      setSearchParams({ project: accepted.modelId }, { replace: true });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : pixelArtConfig.texts.saveFailed);
-    } finally {
       setIsGenerating(false);
+      setTaskProgress(null);
     }
   };
 
@@ -284,7 +294,8 @@ export function PixelArtPage() {
     const previousProject = undoHistory[undoHistory.length - pixelArtConfig.workflow.initialStep];
     setUndoHistory((currentHistory) => currentHistory.slice(pixelArtConfig.emptyFileCount, currentHistory.length - pixelArtConfig.workflow.initialStep));
     setRedoHistory((currentHistory) => limitedHistory([...currentHistory, cloneProject(project)]));
-    setProject(previousProject);
+    // 撤销只恢复像素内容，保存并发基线仍使用最近一次已提交修订。
+    setProject({ ...previousProject, revisionId: project.revisionId });
   };
 
   const redoEdit = () => {
@@ -294,7 +305,7 @@ export function PixelArtPage() {
     const nextProject = redoHistory[redoHistory.length - pixelArtConfig.workflow.initialStep];
     setRedoHistory((currentHistory) => currentHistory.slice(pixelArtConfig.emptyFileCount, currentHistory.length - pixelArtConfig.workflow.initialStep));
     setUndoHistory((currentHistory) => limitedHistory([...currentHistory, cloneProject(project)]));
-    setProject(nextProject);
+    setProject({ ...nextProject, revisionId: project.revisionId });
   };
 
   const saveEditedProject = async () => {
@@ -304,7 +315,7 @@ export function PixelArtPage() {
     setIsSavingEdits(true);
     setMessage(null);
     try {
-      const savedProject = await updatePixelArtProjectPixels(project);
+      const savedProject = await updatePixelArtProjectPixels(project, pageRequests.current?.signal);
       setProject(savedProject);
       setMessage(`${pixelArtConfig.texts.editsSaved}: ${savedProject.name}`);
     } catch (error) {
@@ -313,6 +324,34 @@ export function PixelArtPage() {
       setIsSavingEdits(false);
     }
   };
+
+  React.useEffect(() => {
+    if (!resumeProjectId) return;
+    let active = true;
+    const controller = new AbortController();
+    const accepted = acceptedTaskRef.current?.modelId === resumeProjectId ? acceptedTaskRef.current : null;
+    setIsGenerating(true);
+    setActiveStep(pixelArtConfig.workflow.gridStep);
+    if (!accepted) setTaskProgress({ taskId: '', status: 'queued', percent: null });
+    void waitForPixelProject(resumeProjectId, controller.signal, accepted?.taskId, (progress) => {
+      if (active) setTaskProgress(progress);
+    }).then((saved) => {
+      if (!active) return;
+      acceptedTaskRef.current = null;
+      setProject(saved);
+      setGridWidth(saved.gridWidth);
+      setGridHeight(saved.gridHeight);
+      setActiveStep(pixelArtConfig.workflow.editStep);
+      setTaskProgress((current) => ({ taskId: current?.taskId ?? accepted?.taskId ?? '', status: 'succeeded', percent: 100 }));
+      setMessage(`${pixelArtConfig.texts.saved}: ${saved.name}`);
+    }).catch((error: Error) => {
+      if (!active) return;
+      setTaskProgress((current) => ({ taskId: current?.taskId ?? '', status: 'failed', percent: 100 }));
+      setMessage(error.message);
+    })
+      .finally(() => { if (active) setIsGenerating(false); });
+    return () => { active = false; controller.abort(); };
+  }, [resumeProjectId]);
 
   const totalCells = gridWidth * gridHeight;
   const candidateColors = sampledColor
@@ -350,6 +389,8 @@ export function PixelArtPage() {
         <StepBadge active={activeStep === pixelArtConfig.workflow.gridStep} label={pixelArtConfig.texts.stepGrid} />
         <StepBadge active={activeStep === pixelArtConfig.workflow.editStep} label={pixelArtConfig.texts.stepEdit} />
       </section>
+
+      {taskProgress ? <PixelTaskProgressView progress={taskProgress} /> : null}
 
       {activeStep === pixelArtConfig.workflow.uploadStep ? (
         <section className="pixel-art-stage-layout">
@@ -750,6 +791,28 @@ function StepBadge({ active, label }: { active: boolean; label: string }) {
   return <div className={active ? 'pixel-art-step pixel-art-step-active' : 'pixel-art-step'}>{label}</div>;
 }
 
+/** 展示可恢复任务的阶段进度；taskId 是机器标识，状态说明来自多语言资源。 */
+function PixelTaskProgressView({ progress }: { progress: PixelTaskSnapshot }) {
+  const labels = {
+    uploading: pixelArtConfig.texts.taskUploading,
+    queued: pixelArtConfig.texts.taskQueued,
+    running: pixelArtConfig.texts.taskProcessing,
+    succeeded: pixelArtConfig.texts.taskCompleted,
+    failed: pixelArtConfig.texts.taskFailed,
+    cancelled: pixelArtConfig.texts.taskFailed,
+  };
+  return (
+    <section aria-live="polite" className="pixel-art-task-progress">
+      <div>
+        <strong>{labels[progress.status]}</strong>
+        {progress.percent !== null ? <span>{Math.round(progress.percent)}%</span> : null}
+      </div>
+      <progress aria-label={labels[progress.status]} max={100} value={progress.percent ?? undefined} />
+      {progress.taskId ? <small>{pixelArtConfig.texts.safeToClose}</small> : null}
+    </section>
+  );
+}
+
 function PreprocessingPreviewCanvas({
   crop,
   image,
@@ -764,6 +827,7 @@ function PreprocessingPreviewCanvas({
   preprocessing: PixelArtPreprocessing;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const [previewFailed, setPreviewFailed] = React.useState(false);
 
   React.useEffect(() => {
     loadCanvasImage(image.objectUrl, imageElement, onImageElementChange);
@@ -779,14 +843,26 @@ function PreprocessingPreviewCanvas({
     if (!context) {
       return;
     }
-    const draw = () => drawPreprocessingPreview(canvas, context, loadedImage, crop, preprocessing);
+    // 参数变化终止旧 Worker，拖动滑块不堆积过期任务，也不把邻域循环留在 UI 线程。
+    const worker = new Worker(new URL('./preview.worker.ts', import.meta.url), { type: 'module' });
+    let requestId = 0;
+    let frame = 0;
+    setPreviewFailed(false);
+    worker.onerror = () => { setPreviewFailed(true); worker.terminate(); };
+    const draw = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => drawPreprocessingPreview(canvas, context, loadedImage, crop, preprocessing, worker, ++requestId));
+    };
     draw();
     const resizeObserver = new ResizeObserver(draw);
     resizeObserver.observe(canvas);
-    return () => resizeObserver.disconnect();
+    return () => { cancelAnimationFrame(frame); resizeObserver.disconnect(); worker.terminate(); };
   }, [crop, imageElement.element, preprocessing]);
 
-  return <canvas className="pixel-art-canvas pixel-art-preview-canvas" ref={canvasRef} />;
+  return <>
+    {previewFailed && <p role="alert">{pixelArtConfig.texts.previewFailed}</p>}
+    <canvas className="pixel-art-canvas pixel-art-preview-canvas" ref={canvasRef} />
+  </>;
 }
 
 function CropCanvas({
@@ -1218,9 +1294,11 @@ function drawPreprocessingPreview(
   image: HTMLImageElement,
   crop: CropBox,
   preprocessing: PixelArtPreprocessing,
+  worker: Worker,
+  requestId: number,
 ): void {
   const viewport = prepareCanvas(canvas, context, pixelArtConfig.canvas.cropCanvasFallbackWidth, pixelArtConfig.canvas.cropCanvasFallbackHeight);
-  const previewScale = Math.min(viewport.width / crop.width, viewport.height / crop.height);
+  const previewScale = Math.min(viewport.width / crop.width, viewport.height / crop.height, 640 / Math.max(crop.width, crop.height));
   const previewWidth = Math.max(pixelArtConfig.canvas.minimumCanvasPixels, Math.round(crop.width * previewScale));
   const previewHeight = Math.max(pixelArtConfig.canvas.minimumCanvasPixels, Math.round(crop.height * previewScale));
   const previewCanvas = document.createElement('canvas');
@@ -1242,125 +1320,23 @@ function drawPreprocessingPreview(
     previewWidth,
     previewHeight,
   );
-  applyPreviewPixelProcessing(previewContext, previewWidth, previewHeight, preprocessing);
-  context.drawImage(
-    previewCanvas,
-    (viewport.width - previewWidth) / pixelArtConfig.canvas.screenCenterDivisor,
-    (viewport.height - previewHeight) / pixelArtConfig.canvas.screenCenterDivisor,
-  );
+  const displayScale = Math.min(viewport.width / previewWidth, viewport.height / previewHeight);
+  const drawPreview = () => context.drawImage(previewCanvas,
+    (viewport.width - previewWidth * displayScale) / 2, (viewport.height - previewHeight * displayScale) / 2,
+    previewWidth * displayScale, previewHeight * displayScale);
+  if (preprocessing.sharpness === 1 && preprocessing.localContrast === 0) { drawPreview(); return; }
+  const pixels = previewContext.getImageData(0, 0, previewWidth, previewHeight);
+  worker.onmessage = (event: MessageEvent<{ id: number; data: ArrayBuffer }>) => {
+    if (event.data.id !== requestId) return;
+    previewContext.putImageData(new ImageData(new Uint8ClampedArray(event.data.data), previewWidth, previewHeight), 0, 0);
+    drawPreview();
+  };
+  // 上传保持原始文件；这里只降低交互预览分辨率，最终 Go 计算仍读取完整裁剪区域。
+  worker.postMessage({ id: requestId, data: pixels.data.buffer, width: previewWidth, height: previewHeight, preprocessing }, [pixels.data.buffer]);
 }
 
 function preprocessingFilter(preprocessing: PixelArtPreprocessing): string {
   return `brightness(${preprocessing.brightness}) contrast(${preprocessing.contrast}) saturate(${preprocessing.saturation})`;
-}
-
-function applyPreviewPixelProcessing(
-  context: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  preprocessing: PixelArtPreprocessing,
-): void {
-  const imageData = context.getImageData(
-    pixelArtConfig.emptyFileCount,
-    pixelArtConfig.emptyFileCount,
-    width,
-    height,
-  );
-  const source = new Uint8ClampedArray(imageData.data);
-  for (let y = pixelArtConfig.emptyFileCount; y < height; y += pixelArtConfig.grid.dimensionStep) {
-    for (let x = pixelArtConfig.emptyFileCount; x < width; x += pixelArtConfig.grid.dimensionStep) {
-      applyPreviewPixel(source, imageData.data, x, y, width, height, preprocessing);
-    }
-  }
-  context.putImageData(imageData, pixelArtConfig.emptyFileCount, pixelArtConfig.emptyFileCount);
-}
-
-function applyPreviewPixel(
-  source: Uint8ClampedArray,
-  target: Uint8ClampedArray,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  preprocessing: PixelArtPreprocessing,
-): void {
-  const pixelIndex = previewPixelIndex(x, y, width, height);
-  const luminance = previewLuminance(source, pixelIndex);
-  const neighborLuminance = previewNeighborLuminance(source, x, y, width, height);
-  for (
-    let channel = pixelArtConfig.previewProcessing.redChannelIndex;
-    channel <= pixelArtConfig.previewProcessing.blueChannelIndex;
-    channel += pixelArtConfig.grid.dimensionStep
-  ) {
-    const sharpened = previewSharpenedChannel(source, x, y, width, height, channel, preprocessing);
-    const lightDetailScale = preprocessing.preserveLightDetails
-      ? (pixelArtConfig.previewProcessing.rgbMaximum - luminance) / pixelArtConfig.previewProcessing.rgbMaximum
-      : pixelArtConfig.previewProcessing.identityValue;
-    target[pixelIndex + channel] = clamp(
-      sharpened + (luminance - neighborLuminance) * preprocessing.localContrast * lightDetailScale,
-      pixelArtConfig.previewProcessing.rgbMinimum,
-      pixelArtConfig.previewProcessing.rgbMaximum,
-    );
-  }
-}
-
-function previewSharpenedChannel(
-  source: Uint8ClampedArray,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  channel: number,
-  preprocessing: PixelArtPreprocessing,
-): number {
-  const center = previewChannel(source, x, y, width, height, channel);
-  const edge =
-    center * pixelArtConfig.previewProcessing.sharpnessCenterWeight
-    - previewChannel(source, x - pixelArtConfig.grid.dimensionStep, y, width, height, channel)
-    - previewChannel(source, x + pixelArtConfig.grid.dimensionStep, y, width, height, channel)
-    - previewChannel(source, x, y - pixelArtConfig.grid.dimensionStep, width, height, channel)
-    - previewChannel(source, x, y + pixelArtConfig.grid.dimensionStep, width, height, channel);
-  return center + ((preprocessing.sharpness - pixelArtConfig.previewProcessing.identityValue) * edge) / pixelArtConfig.previewProcessing.neighborCount;
-}
-
-function previewNeighborLuminance(
-  source: Uint8ClampedArray,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-): number {
-  return (
-    previewLuminance(source, previewPixelIndex(x - pixelArtConfig.grid.dimensionStep, y, width, height))
-    + previewLuminance(source, previewPixelIndex(x + pixelArtConfig.grid.dimensionStep, y, width, height))
-    + previewLuminance(source, previewPixelIndex(x, y - pixelArtConfig.grid.dimensionStep, width, height))
-    + previewLuminance(source, previewPixelIndex(x, y + pixelArtConfig.grid.dimensionStep, width, height))
-  ) / pixelArtConfig.previewProcessing.neighborCount;
-}
-
-function previewChannel(
-  source: Uint8ClampedArray,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  channel: number,
-): number {
-  return source[previewPixelIndex(x, y, width, height) + channel];
-}
-
-function previewLuminance(source: Uint8ClampedArray, index: number): number {
-  return (
-    source[index + pixelArtConfig.previewProcessing.redChannelIndex] * pixelArtConfig.previewProcessing.luminanceRedWeight
-    + source[index + pixelArtConfig.previewProcessing.greenChannelIndex] * pixelArtConfig.previewProcessing.luminanceGreenWeight
-    + source[index + pixelArtConfig.previewProcessing.blueChannelIndex] * pixelArtConfig.previewProcessing.luminanceBlueWeight
-  );
-}
-
-function previewPixelIndex(x: number, y: number, width: number, height: number): number {
-  const boundedX = clamp(x, pixelArtConfig.emptyFileCount, width - pixelArtConfig.grid.dimensionStep);
-  const boundedY = clamp(y, pixelArtConfig.emptyFileCount, height - pixelArtConfig.grid.dimensionStep);
-  return (boundedY * width + boundedX) * pixelArtConfig.previewProcessing.channelStride;
 }
 
 function isSideMixedAlgorithm(algorithm: string): boolean {
@@ -1521,8 +1497,8 @@ function prepareCanvas(
   const pixelRatio = Math.min(window.devicePixelRatio, pixelArtConfig.canvas.pixelRatioLimit);
   const width = Math.max(pixelArtConfig.canvas.minimumCanvasPixels, canvas.clientWidth || fallbackWidth);
   const height = Math.max(pixelArtConfig.canvas.minimumCanvasPixels, canvas.clientHeight || fallbackHeight);
-  canvas.width = width * pixelRatio;
-  canvas.height = height * pixelRatio;
+  if (canvas.width !== Math.round(width * pixelRatio)) canvas.width = Math.round(width * pixelRatio);
+  if (canvas.height !== Math.round(height * pixelRatio)) canvas.height = Math.round(height * pixelRatio);
   context.setTransform(pixelRatio, pixelArtConfig.emptyFileCount, pixelArtConfig.emptyFileCount, pixelRatio, pixelArtConfig.emptyFileCount, pixelArtConfig.emptyFileCount);
   context.fillStyle = pixelArtConfig.canvas.backgroundColor;
   context.fillRect(pixelArtConfig.emptyFileCount, pixelArtConfig.emptyFileCount, width, height);

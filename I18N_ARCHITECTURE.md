@@ -360,7 +360,7 @@ error_params_json
 - CI 校验全部生产语言的 namespace/key/插值参数集合、语义 key、非法 HTML、内容 SHA-256 和发布说明。
 - 未审核语言只登记在 `validationLocales`；加入 `productLocales` 前必须补齐资源、服务端导出词典和官方领域翻译。
 - 前端对未知 key、未知 API code 和不支持 locale 回退做会话内去重上报。
-- 服务端限制单字段长度和最大维度数，按 UTC 小时聚合；`/api/i18n/metrics` 返回总量、维度和趋势，Dashboard 展示核心健康指标。
+- 服务端限制单字段长度和最大维度数，按 UTC 小时聚合；`/api/v1/i18n/metrics` 返回总量、维度和趋势，Dashboard 展示核心健康指标。
 - catalog version 发布后不可复用；资源变更必须升级版本、hash 和发布说明。
 
 ## 5. 测试与质量门禁
@@ -422,3 +422,7 @@ CI 必须包含：
 - 后台任务不保存最终错误译文。
 - 中英文关键业务流程通过自动化和视觉验收。
 - 新增语言只需新增资源、领域翻译数据和 locale 配置，不修改业务流程代码。
+
+### Go 2D 执行边界（2026-09-06）
+
+图片像素化与平面 LEGO 拼接由 Go `pixel2d` 持久任务执行；API 传递并冻结 locale/timezone，导出复用 `brickbuilder-export-2026.07.18.1` 的双语言服务端资源。Go 嵌入副本属于同一资源发布面，必须与 `backend` 版本资源同步，不形成独立翻译机制。目录名称为原始官方源内容，声明 en-US；用户名称原文保存。API/Task code+params 和既有前端 typed keys 不变。详见 `docs/go_pixel_2d_migration.md`。

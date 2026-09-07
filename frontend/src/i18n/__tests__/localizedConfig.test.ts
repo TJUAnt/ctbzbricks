@@ -28,8 +28,8 @@ describe('semantic i18n resources', () => {
     await i18n.changeLanguage('en-US');
     expect(resolvedLocale()).toBe('en-US');
     expect(appConfig.texts.appSubtitle).toBe('3D LEGO Modeling Workbench');
-    expect(appConfig.menuGroups[0].title).toBe('Asset Management');
-    expect(appConfig.dashboard.sections[0].cards[0].action).toBe('Open Management');
+    expect(appConfig.menuGroups[0].title).toBe('Model plaza');
+    expect(appConfig.dashboard.sections[0].cards[0].action).toBe('Open');
     expect(appConfig.routePaths.dashboard).toBe('/dashboard');
     expect(legoDesignConfig.demGenerationStrategy.options[0].value).toBe('surface-plan');
 

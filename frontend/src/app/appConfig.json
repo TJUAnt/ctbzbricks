@@ -166,7 +166,8 @@
     "componentRepoImportStatus": "componentRepoImportStatus",
     "componentRepoCandidate": "componentRepoCandidate",
     "componentRepoWatches": "componentRepoWatches",
-    "componentRepoDetail": "componentRepoDetail"
+    "componentRepoDetail": "componentRepoDetail",
+    "modelPlaza": "modelPlaza"
   },
   "router": {
     "rootPath": "/",
@@ -189,7 +190,8 @@
     "componentRepoImportStatus": "/component-repo/imports/:importId",
     "componentRepoCandidate": "/component-repo/candidates/:candidateId",
     "componentRepoWatches": "/component-repo/watches",
-    "componentRepoDetail": "/component-repo/components/:componentId"
+    "componentRepoDetail": "/component-repo/components/:componentId",
+    "modelPlaza": "/model-plaza"
   },
   "topbar": {
     "homeLabel": "app:topbar.homeLabel",
@@ -202,88 +204,50 @@
   },
   "menuGroups": [
     {
-      "id": "assetManagement",
-      "title": "app:menuGroups.assetManagement.title",
-      "icon": "box",
+      "id": "modelPlaza",
+      "title": "app:navigation.modelPlaza",
+      "icon": "boxes",
       "tone": "blue",
       "items": [
         {
-          "id": "pixelAssetManagement",
-          "label": "app:menuGroups.assetManagement.items.pixelAssetManagement.label",
-          "icon": "image",
-          "page": "pixelArt"
-        },
-        {
-          "id": "demAssetManagement",
-          "label": "app:menuGroups.assetManagement.items.demAssetManagement.label",
-          "icon": "map",
-          "page": "demBuilder"
-        },
-        {
-          "id": "meshAssetManagement",
-          "label": "app:menuGroups.assetManagement.items.meshAssetManagement.label",
-          "icon": "cube",
-          "page": "directImport"
+          "id": "modelPlaza",
+          "label": "app:navigation.modelPlaza",
+          "icon": "boxes",
+          "page": "modelPlaza"
         }
       ]
     },
     {
-      "id": "legoBuild",
-      "title": "app:menuGroups.legoBuild.title",
-      "icon": "boxes",
-      "tone": "green",
-      "items": [
-        {
-          "id": "pixelLegoBuild",
-          "label": "app:menuGroups.legoBuild.items.pixelLegoBuild.label",
-          "icon": "image",
-          "page": "legoDesign"
-        },
-        {
-          "id": "terrainLegoBuild",
-          "label": "app:menuGroups.legoBuild.items.terrainLegoBuild.label",
-          "icon": "map",
-          "page": "legoBuilder"
-        },
-        {
-          "id": "meshLegoBuild",
-          "label": "app:menuGroups.legoBuild.items.meshLegoBuild.label",
-          "icon": "wand",
-          "page": "directImport"
-        }
-      ]
-    },
-    {
-      "id": "modelView",
-      "title": "app:menuGroups.modelView.title",
+      "id": "myModels",
+      "title": "app:navigation.myModels",
       "icon": "database",
       "tone": "amber",
       "items": [
         {
-          "id": "legoModelManagement",
-          "label": "app:menuGroups.modelView.items.legoModelManagement.label",
-          "icon": "database",
-          "page": "modelAssets"
-        },
-        {
-          "id": "componentRepo",
-          "label": "app:menuGroups.modelView.items.componentRepo.label",
+          "id": "myModels",
+          "label": "app:navigation.myModels",
           "icon": "boxes",
           "page": "componentRepo"
+        },
+        {
+          "id": "partSearch",
+          "label": "app:navigation.partSearch",
+          "icon": "search",
+          "page": "partSearch"
         }
       ]
     },
     {
-      "id": "partLookup",
-      "title": "app:menuGroups.partLookup.title",
-      "icon": "search",
-      "tone": "purple",
+      "id": "modelTools",
+      "title": "app:navigation.modelTools",
+      "icon": "wand",
+      "tone": "green",
       "items": [
         {
-          "id": "partSearch",
-          "label": "app:menuGroups.partLookup.items.partSearch.label",
-          "icon": "search",
-          "page": "partSearch"
+          "id": "model2d",
+          "label": "app:navigation.model2d",
+          "icon": "image",
+          "page": "pixelArt"
         }
       ]
     }
@@ -294,159 +258,73 @@
     "heroIcon": "box",
     "sections": [
       {
-        "id": "assetManagement",
-        "title": "app:dashboard.sections.assetManagement.title",
-        "icon": "box",
+        "id": "modelPlaza",
+        "title": "app:navigation.modelPlaza",
+        "icon": "boxes",
         "tone": "blue",
         "cards": [
           {
-            "id": "pixelAssetManagement",
-            "title": "app:dashboard.sections.assetManagement.cards.pixelAssetManagement.title",
-            "icon": "image",
-            "visual": "pixel",
+            "id": "modelPlaza",
+            "title": "app:navigation.modelPlaza",
+            "icon": "boxes",
+            "visual": "castle",
             "tone": "blue",
-            "page": "pixelArt",
-            "action": "app:dashboard.sections.assetManagement.cards.pixelAssetManagement.action",
+            "page": "modelPlaza",
+            "action": "app:navigation.open",
             "features": [
-              "app:dashboard.sections.assetManagement.cards.pixelAssetManagement.features.0",
-              "app:dashboard.sections.assetManagement.cards.pixelAssetManagement.features.1",
-              "app:dashboard.sections.assetManagement.cards.pixelAssetManagement.features.2"
-            ]
-          },
-          {
-            "id": "demAssetManagement",
-            "title": "app:dashboard.sections.assetManagement.cards.demAssetManagement.title",
-            "icon": "map",
-            "visual": "mountain",
-            "tone": "slate",
-            "page": "demBuilder",
-            "action": "app:dashboard.sections.assetManagement.cards.demAssetManagement.action",
-            "features": [
-              "app:dashboard.sections.assetManagement.cards.demAssetManagement.features.0",
-              "app:dashboard.sections.assetManagement.cards.demAssetManagement.features.1",
-              "app:dashboard.sections.assetManagement.cards.demAssetManagement.features.2"
-            ]
-          },
-          {
-            "id": "meshAssetManagement",
-            "title": "app:dashboard.sections.assetManagement.cards.meshAssetManagement.title",
-            "icon": "cube",
-            "visual": "vehicle",
-            "tone": "sand",
-            "page": "directImport",
-            "action": "app:dashboard.sections.assetManagement.cards.meshAssetManagement.action",
-            "features": [
-              "app:dashboard.sections.assetManagement.cards.meshAssetManagement.features.0",
-              "app:dashboard.sections.assetManagement.cards.meshAssetManagement.features.1",
-              "app:dashboard.sections.assetManagement.cards.meshAssetManagement.features.2"
+              "app:navigation.modelPlazaDescription"
             ]
           }
         ]
       },
       {
-        "id": "legoBuild",
-        "title": "app:dashboard.sections.legoBuild.title",
-        "icon": "boxes",
-        "tone": "green",
-        "cards": [
-          {
-            "id": "pixelLegoBuild",
-            "title": "app:dashboard.sections.legoBuild.cards.pixelLegoBuild.title",
-            "icon": "image",
-            "visual": "portrait",
-            "tone": "green",
-            "page": "legoDesign",
-            "action": "app:dashboard.sections.legoBuild.cards.pixelLegoBuild.action",
-            "features": [
-              "app:dashboard.sections.legoBuild.cards.pixelLegoBuild.features.0",
-              "app:dashboard.sections.legoBuild.cards.pixelLegoBuild.features.1",
-              "app:dashboard.sections.legoBuild.cards.pixelLegoBuild.features.2"
-            ]
-          },
-          {
-            "id": "terrainLegoBuild",
-            "title": "app:dashboard.sections.legoBuild.cards.terrainLegoBuild.title",
-            "icon": "map",
-            "visual": "terrain",
-            "tone": "mint",
-            "page": "legoBuilder",
-            "action": "app:dashboard.sections.legoBuild.cards.terrainLegoBuild.action",
-            "features": [
-              "app:dashboard.sections.legoBuild.cards.terrainLegoBuild.features.0",
-              "app:dashboard.sections.legoBuild.cards.terrainLegoBuild.features.1",
-              "app:dashboard.sections.legoBuild.cards.terrainLegoBuild.features.2"
-            ]
-          },
-          {
-            "id": "meshLegoBuild",
-            "title": "app:dashboard.sections.legoBuild.cards.meshLegoBuild.title",
-            "icon": "wand",
-            "visual": "house",
-            "tone": "green",
-            "page": "directImport",
-            "action": "app:dashboard.sections.legoBuild.cards.meshLegoBuild.action",
-            "features": [
-              "app:dashboard.sections.legoBuild.cards.meshLegoBuild.features.0",
-              "app:dashboard.sections.legoBuild.cards.meshLegoBuild.features.1",
-              "app:dashboard.sections.legoBuild.cards.meshLegoBuild.features.2"
-            ]
-          }
-        ]
-      },
-      {
-        "id": "modelView",
-        "title": "app:dashboard.sections.modelView.title",
+        "id": "myModels",
+        "title": "app:navigation.myModels",
         "icon": "database",
         "tone": "amber",
         "cards": [
           {
-            "id": "legoModelManagement",
-            "title": "app:dashboard.sections.modelView.cards.legoModelManagement.title",
-            "icon": "database",
-            "visual": "castle",
-            "tone": "amber",
-            "page": "modelAssets",
-            "action": "app:dashboard.sections.modelView.cards.legoModelManagement.action",
-            "features": [
-              "app:dashboard.sections.modelView.cards.legoModelManagement.features.0",
-              "app:dashboard.sections.modelView.cards.legoModelManagement.features.1",
-              "app:dashboard.sections.modelView.cards.legoModelManagement.features.2"
-            ]
-          },
-          {
-            "id": "componentRepo",
-            "title": "app:dashboard.sections.modelView.cards.componentRepo.title",
+            "id": "myModels",
+            "title": "app:navigation.myModels",
             "icon": "boxes",
             "visual": "castle",
             "tone": "amber",
             "page": "componentRepo",
-            "action": "app:dashboard.sections.modelView.cards.componentRepo.action",
+            "action": "app:navigation.open",
             "features": [
-              "app:dashboard.sections.modelView.cards.componentRepo.features.0",
-              "app:dashboard.sections.modelView.cards.componentRepo.features.1",
-              "app:dashboard.sections.modelView.cards.componentRepo.features.2"
+              "app:navigation.myModelsDescription"
+            ]
+          },
+          {
+            "id": "partSearch",
+            "title": "app:navigation.partSearch",
+            "icon": "search",
+            "visual": "castle",
+            "tone": "amber",
+            "page": "partSearch",
+            "action": "app:navigation.open",
+            "features": [
+              "app:navigation.partSearchDescription"
             ]
           }
         ]
       },
       {
-        "id": "partLookup",
-        "title": "app:dashboard.sections.partLookup.title",
-        "icon": "search",
-        "tone": "purple",
+        "id": "modelTools",
+        "title": "app:navigation.modelTools",
+        "icon": "wand",
+        "tone": "green",
         "cards": [
           {
-            "id": "partSearch",
-            "title": "app:dashboard.sections.partLookup.cards.partSearch.title",
-            "icon": "search",
-            "visual": "search",
-            "tone": "purple",
-            "page": "partSearch",
-            "action": "app:dashboard.sections.partLookup.cards.partSearch.action",
+            "id": "model2d",
+            "title": "app:navigation.model2d",
+            "icon": "image",
+            "visual": "pixel",
+            "tone": "green",
+            "page": "pixelArt",
+            "action": "app:navigation.open",
             "features": [
-              "app:dashboard.sections.partLookup.cards.partSearch.features.0",
-              "app:dashboard.sections.partLookup.cards.partSearch.features.1",
-              "app:dashboard.sections.partLookup.cards.partSearch.features.2"
+              "app:navigation.model2dDescription"
             ]
           }
         ]
