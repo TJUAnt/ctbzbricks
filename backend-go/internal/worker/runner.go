@@ -12,6 +12,7 @@ import (
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/database"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 )
 
 type UploadMaintenance interface {
@@ -45,6 +46,8 @@ func Run(
 		taskTypes = append(taskTypes, taskType)
 	}
 	sort.Strings(taskTypes)
+	// 启动日志必须给出实际可领取的能力，避免 API 正常但独立 Worker 缺失时只能从 pending 任务反推原因。
+	logger.InfoContext(ctx, "Worker task capabilities ready", "workerId", workerID, "taskTypes", taskTypes)
 
 	checkMaintenance(ctx, workerID, options.MaintenanceInterval, databasePinger, maintenance, logger)
 	semaphore := make(chan struct{}, options.Concurrency)
@@ -116,6 +119,11 @@ func execute(
 	claimed task.ClaimedTask,
 	logger *slog.Logger,
 ) {
+	startedAt := time.Now()
+	taskID := uuidutil.String(claimed.ID)
+	logger.InfoContext(parent, "task execution started",
+		"workerId", workerID, "taskId", taskID, "taskType", claimed.TaskType, "attempt", claimed.Attempt,
+	)
 	handlerCtx, cancel := context.WithCancel(parent)
 	defer cancel()
 	var cancellationRequested atomic.Bool
@@ -157,12 +165,18 @@ func execute(
 		defer finishCancel()
 		if finishErr := queue.FinishFailure(finishCtx, workerID, claimed, failure, options.RetryDelay); finishErr != nil {
 			logger.Warn("task cancellation finalization failed", "workerId", workerID, "taskType", claimed.TaskType, "errorCode", "common.internal_error")
+		} else {
+			logger.Warn("task execution cancelled", "workerId", workerID, "taskId", taskID,
+				"taskType", claimed.TaskType, "attempt", claimed.Attempt, "durationMs", time.Since(startedAt).Milliseconds())
 		}
 		return
 	}
 	if err == nil {
 		if completeErr := queue.Complete(parent, workerID, claimed, result); completeErr != nil {
 			logger.WarnContext(parent, "task completion failed", "workerId", workerID, "taskType", claimed.TaskType, "errorCode", "common.internal_error")
+		} else {
+			logger.InfoContext(parent, "task execution succeeded", "workerId", workerID, "taskId", taskID,
+				"taskType", claimed.TaskType, "attempt", claimed.Attempt, "durationMs", time.Since(startedAt).Milliseconds())
 		}
 		return
 	}
@@ -172,6 +186,11 @@ func execute(
 	}
 	if finishErr := queue.FinishFailure(parent, workerID, claimed, failure, options.RetryDelay); finishErr != nil {
 		logger.WarnContext(parent, "task failure finalization failed", "workerId", workerID, "taskType", claimed.TaskType, "errorCode", "common.internal_error")
+	} else {
+		// 失败日志只记录稳定 code 和机器标识，不泄露底层对象存储、SQL 或用户内容。
+		logger.WarnContext(parent, "task execution attempt failed", "workerId", workerID, "taskId", taskID,
+			"taskType", claimed.TaskType, "attempt", claimed.Attempt, "failureCode", failure.Code,
+			"retryable", failure.Retryable, "durationMs", time.Since(startedAt).Milliseconds())
 	}
 }
 

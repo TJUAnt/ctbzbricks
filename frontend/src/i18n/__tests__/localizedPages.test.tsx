@@ -22,7 +22,7 @@ const pages = [
   { component: <LegoTerrainBuilderPage />, english: 'Terrain to LEGO Heightmap', chinese: '地形转 LEGO 高度图' },
   { component: <LegoDesignPage />, english: 'LEGO Design', chinese: 'LEGO 设计图' },
   { component: <ComponentRepoPage />, english: 'My models &amp; components', chinese: '我的模型组件' },
-  { component: <ComponentWatchListPage />, english: 'My Subscriptions', chinese: '我的订阅' },
+  { component: <ComponentWatchListPage />, english: 'Manage subscriptions', chinese: '管理订阅' },
   { component: <PartSearchPage />, english: 'Part search', chinese: '零件搜索' },
   { component: <PartViewerPage />, english: '3D Part Viewer', chinese: '零件 3D 查看器' },
 ];
@@ -45,7 +45,9 @@ describe('localized page shells', () => {
     const plaza = renderPage(<ComponentRepoPage mode="plaza" />);
     expect(plaza).toContain('Model plaza');
     expect(plaza).not.toContain('component-library-upload-button');
-    expect(plaza).not.toContain('component-library-tabs');
+    expect(plaza).toContain('component-library-tabs');
+    expect(plaza).toContain('Public');
+    expect(plaza).toContain('Subscriptions');
     const dashboard = renderPage(<DashboardPage />);
     expect(dashboard).toContain('/model-plaza');
     expect(dashboard).not.toContain('/dem-builder');
@@ -76,12 +78,32 @@ describe('localized page shells', () => {
     await i18n.changeLanguage('en-US');
     expect(renderPage(<ComponentRepoPage />)).toContain('Occupied size');
   });
+
+  it('renders the Watch Feed in the plaza subscription tab and keeps the management page separate', async () => {
+    await i18n.changeLanguage('zh-CN');
+    const chinese = renderPage(<ComponentRepoPage mode="plaza" />, '/model-plaza?tab=subscriptions');
+    expect(chinese).toContain('个人订阅');
+    expect(chinese).toContain('订阅更新');
+    expect(chinese).toContain('最近 7 天');
+    expect(chinese).toContain('最近 30 天');
+    expect(chinese).toContain('最近 90 天');
+    expect(renderPage(<ComponentWatchListPage />)).not.toContain('订阅更新');
+
+    await i18n.changeLanguage('en-US');
+    const english = renderPage(<ComponentRepoPage mode="plaza" />, '/model-plaza?tab=subscriptions');
+    expect(english).toContain('Subscription Updates');
+    expect(english).toContain('Last 7 days');
+    expect(english).toContain('Last 30 days');
+    expect(english).toContain('Last 90 days');
+    expect(english).toContain('Manage subscriptions');
+    expect(renderPage(<ComponentWatchListPage />)).not.toContain('Subscription Updates');
+  });
 });
 
-function renderPage(component: React.ReactElement): string {
+function renderPage(component: React.ReactElement, initialEntry = '/'): string {
   return renderToStaticMarkup(
     <I18nextProvider i18n={i18n}>
-      <MemoryRouter>{component}</MemoryRouter>
+      <MemoryRouter initialEntries={[initialEntry]}>{component}</MemoryRouter>
     </I18nextProvider>,
   );
 }

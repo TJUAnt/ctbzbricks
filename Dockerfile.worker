@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1.7
+
+ARG GO_VERSION=1.26.0
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS build
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src/backend-go
+
+COPY backend-go/go.mod backend-go/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY backend-go/ ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
+
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS gltfpack
+ARG TARGETARCH
+ARG GLTFPACK_VERSION=v1.2
+ARG GLTFPACK_SHA256=ebc236f5f6c08c7e5c5750476a187d24805d44d8c680449c4b7369c333f817b1
+RUN test "${TARGETARCH}" = "amd64" && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl unzip && \
+    rm -rf /var/lib/apt/lists/* && \
+    curl --fail --location --retry 3 --retry-all-errors \
+      --output /tmp/gltfpack.zip \
+      "https://github.com/zeux/meshoptimizer/releases/download/${GLTFPACK_VERSION}/gltfpack-ubuntu.zip" && \
+    echo "${GLTFPACK_SHA256}  /tmp/gltfpack.zip" | sha256sum --check - && \
+    unzip /tmp/gltfpack.zip -d /tmp/gltfpack && \
+    install -m 0755 "$(find /tmp/gltfpack -type f -name gltfpack -print -quit)" /usr/local/bin/gltfpack
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates libstdc++6 procps tzdata && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 10001 brickbuilder && \
+    useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin brickbuilder
+
+WORKDIR /app
+COPY --from=build --chown=10001:10001 /out/worker /app/worker
+COPY --from=gltfpack --chown=10001:10001 /usr/local/bin/gltfpack /usr/local/bin/gltfpack
+
+USER 10001:10001
+ENTRYPOINT ["/app/worker"]
+

@@ -15,6 +15,12 @@ import {
 } from '../componentRepo/componentRepoApi';
 import { resolvedLocale, useAppTranslation } from '../i18n';
 import { formatNumber } from '../i18n/formatters';
+import {
+  addStudioLights,
+  configureStudioRenderer,
+  installStudioEnvironment,
+  tuneStudioMaterial,
+} from '../preview/studioPreviewRendering';
 
 type ResetRegistration = (reset: (() => void) | null) => void;
 export type ComponentSceneConnector = {
@@ -28,8 +34,8 @@ type ViewerState =
   | { status: 'error'; preview: null; error: string };
 
 const CREASE_ANGLE_RADIANS = Math.PI / 3;
-const EDGE_THRESHOLD_DEGREES = 42;
 
+/** PartViewerPage 读取版本化 Part Preview，并提供可重置的交互式摄影棚视图。 */
 export function PartViewerPage() {
   const tr = useAppTranslation();
   const locale = resolvedLocale();
@@ -231,6 +237,7 @@ function DimensionRow({
   );
 }
 
+/** ComponentScene 加载不可变 GLB，并用统一摄影棚材质与灯光展示 Component 或 Part。 */
 export function ComponentScene({
   preview,
   registerReset,
@@ -269,7 +276,7 @@ export function ComponentScene({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    configureStudioRenderer(renderer);
     mount.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -278,15 +285,8 @@ export function ComponentScene({
     controls.rotateSpeed = 0.75;
     controls.zoomSpeed = 0.8;
 
-    scene.add(new THREE.HemisphereLight('#ffffff', '#718096', 2.1));
-    const keyLight = new THREE.DirectionalLight('#ffffff', 3.2);
-    keyLight.position.set(6, 9, 7);
-    keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(1024, 1024);
-    scene.add(keyLight);
-    const fillLight = new THREE.DirectionalLight('#a6c8ff', 1.4);
-    fillLight.position.set(-5, 3, -4);
-    scene.add(fillLight);
+    const disposeStudioEnvironment = installStudioEnvironment(renderer, scene);
+    addStudioLights(scene, true);
 
     let component: THREE.Object3D | null = null;
     let floor: THREE.Mesh | null = null;
@@ -362,6 +362,7 @@ export function ComponentScene({
         floor.geometry.dispose();
         disposeMaterial(floor.material);
       }
+      disposeStudioEnvironment();
       renderer.dispose();
       renderer.domElement.remove();
     };
@@ -409,16 +410,7 @@ function prepareLoadedComponent(component: THREE.Object3D): THREE.Object3D {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach((material) => {
-      material.side = THREE.DoubleSide;
-      material.needsUpdate = true;
-    });
-    mesh.add(
-      new THREE.LineSegments(
-        new THREE.EdgesGeometry(geometry, EDGE_THRESHOLD_DEGREES),
-        new THREE.LineBasicMaterial({ color: '#24303d', transparent: true, opacity: 0.2 }),
-      ),
-    );
+    materials.forEach(tuneStudioMaterial);
   });
   return component;
 }

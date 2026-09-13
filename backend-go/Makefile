@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check generate sqlc-vet test test-postgres vet check run-api run-worker run-notification-worker migrate-help studio-manifest studio-import
+.PHONY: fmt fmt-check generate sqlc-vet test test-postgres vet check run-api run-worker migrate-help studio-manifest studio-import
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './db/generated/*')
@@ -28,9 +28,6 @@ run-api:
 
 run-worker:
 	go run ./cmd/worker
-
-run-notification-worker:
-	go run ./cmd/notification-worker
 
 migrate-help:
 	go run ./cmd/migrate --help

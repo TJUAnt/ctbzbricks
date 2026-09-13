@@ -7,13 +7,13 @@ import { authenticatedRequestJson } from '../api/authenticatedClient';
 import { useAppTranslation } from '../i18n';
 import { formatNumber } from '../i18n/formatters';
 import appConfig from '../app/appConfig';
-import { loadPartThumbnailBlob, type PartThumbnailModel } from './partThumbnailRenderer';
+import { loadGlbThumbnailBlob, type GlbThumbnailModel } from '../preview/glbThumbnailRenderer';
 
 type PartSearchItem = {
   ldrawPartNum: string;
   name: string;
   imageUrl: string | null;
-  previewModel: PartThumbnailModel | null;
+  previewModel: GlbThumbnailModel | null;
 };
 
 type RecallColumnCount = 2 | 3 | 4 | 5 | 6;
@@ -218,7 +218,7 @@ function CandidateCard({
 }
 
 /** CandidateImage 进入视口附近才下载 GLB，并只展示共享渲染器生成的静态图像。 */
-function CandidateImage({ alt, model, src }: { alt: string; model: PartThumbnailModel | null; src: string | null }) {
+function CandidateImage({ alt, model, src }: { alt: string; model: GlbThumbnailModel | null; src: string | null }) {
   const mountRef = React.useRef<HTMLDivElement | null>(null);
   const [visible, setVisible] = React.useState(false);
   const [generatedURL, setGeneratedURL] = React.useState<string | null>(null);
@@ -250,7 +250,7 @@ function CandidateImage({ alt, model, src }: { alt: string; model: PartThumbnail
     if (src || !model || !visible) return undefined;
     const controller = new AbortController();
     let objectURL: string | null = null;
-    void loadPartThumbnailBlob(model, controller.signal)
+    void loadGlbThumbnailBlob(model, controller.signal)
       .then((blob) => {
         if (controller.signal.aborted) return;
         objectURL = URL.createObjectURL(blob);

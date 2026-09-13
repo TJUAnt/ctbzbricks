@@ -156,9 +156,17 @@ WHERE version.id = sqlc.arg(version_id)
   AND version.component_id = sqlc.arg(component_id);
 
 -- name: LockOwnedComponentVersion :one
-SELECT v.id, v.component_id, v.status
+SELECT v.id, v.component_id, v.status, c.content_locale,
+       v.preview_artifact_id, v.preview_task_id,
+       preview_task.status AS preview_task_status,
+       COALESCE(preview_artifact.sha256, v.preview_task_id::text, 'preview-unavailable')::text AS preview_identity
 FROM component_repo.component_versions v
 JOIN component_repo.components c ON c.id = v.component_id
+LEFT JOIN component_repo.tasks preview_task ON preview_task.id = v.preview_task_id
+LEFT JOIN component_repo.artifacts preview_artifact
+  ON preview_artifact.id = v.preview_artifact_id
+ AND preview_artifact.verification_status = 'verified'
+ AND preview_artifact.deleted_at IS NULL
 WHERE v.id = sqlc.arg(version_id)
   AND v.deleted_at IS NULL
   AND c.owner_id = sqlc.arg(actor_id)

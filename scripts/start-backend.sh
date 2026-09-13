@@ -18,6 +18,7 @@ echo "Environment: ${APP_ENV}"
 echo "Storage provider: ${STORAGE_PROVIDER}"
 echo "Shared env: $([[ -f "${CTBZ_SHARED_ENV_FILE}" ]] && echo loaded || echo missing)"
 echo "Go env: $([[ -f "${CTBZ_GO_ENV_FILE}" ]] && echo loaded || echo missing)"
+echo "Worker: not started by this launcher; use scripts/start-go-worker.sh or scripts/start-dev.sh"
 
 cd "${CTBZ_PROJECT_ROOT}/backend-go"
 # 直接 exec 编译产物，使上层启动器发送的退出信号到达服务本身，避免 go run 子进程残留。

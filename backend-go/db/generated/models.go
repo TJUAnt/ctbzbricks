@@ -111,25 +111,18 @@ type ComponentRepoComponentDomainEvent struct {
 	CreatedAt          pgtype.Timestamptz
 }
 
-type ComponentRepoComponentEventDelivery struct {
-	EventID                  pgtype.UUID
-	Status                   string
-	CursorActorID            pgtype.UUID
-	CursorPeriodID           *int64
-	Attempts                 int16
-	MaxAttempts              int16
-	AvailableAt              pgtype.Timestamptz
-	LeaseOwner               *string
-	LeaseExpiresAt           pgtype.Timestamptz
-	LastErrorCode            *string
-	LastErrorParams          []byte
-	StartedAt                pgtype.Timestamptz
-	CompletedAt              pgtype.Timestamptz
-	DeadLetteredAt           pgtype.Timestamptz
-	DeadLetterAcknowledgedAt pgtype.Timestamptz
-	DeadLetterAcknowledgedBy pgtype.UUID
-	CreatedAt                pgtype.Timestamptz
-	UpdatedAt                pgtype.Timestamptz
+type ComponentRepoComponentFeedEntry struct {
+	EventID            pgtype.UUID
+	ComponentID        pgtype.UUID
+	ComponentVersionID pgtype.UUID
+	RenderTaskID       pgtype.UUID
+	RenderProfile      string
+	RendererVersion    string
+	RenderStatus       string
+	ImageArtifactID    pgtype.UUID
+	AvailableAt        pgtype.Timestamptz
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
 }
 
 type ComponentRepoComponentGroup struct {
@@ -214,18 +207,15 @@ type ComponentRepoComponentVersion struct {
 }
 
 type ComponentRepoComponentWatchPeriod struct {
-	ID                         int64
-	ActorID                    pgtype.UUID
-	ComponentID                pgtype.UUID
-	WatchLevel                 string
-	StartedSeq                 int64
-	EndedSeq                   *int64
-	WatchedAt                  pgtype.Timestamptz
-	UnwatchedAt                pgtype.Timestamptz
-	EndedReason                *string
-	NotificationLocale         string
-	NotificationTimezone       string
-	NotificationCatalogVersion string
+	ID          int64
+	ActorID     pgtype.UUID
+	ComponentID pgtype.UUID
+	WatchLevel  string
+	StartedSeq  int64
+	EndedSeq    *int64
+	WatchedAt   pgtype.Timestamptz
+	UnwatchedAt pgtype.Timestamptz
+	EndedReason *string
 }
 
 type ComponentRepoConnectorAnalysis struct {
@@ -593,25 +583,6 @@ type ComponentRepoUploadSessionFile struct {
 	Status           string
 	CreatedAt        pgtype.Timestamptz
 	CompletedAt      pgtype.Timestamptz
-}
-
-type ComponentRepoUserNotification struct {
-	ID                     pgtype.UUID
-	RecipientID            pgtype.UUID
-	EventID                pgtype.UUID
-	SourceWatchPeriodID    int64
-	NotificationType       string
-	Code                   string
-	Params                 []byte
-	ComponentID            pgtype.UUID
-	ComponentVersionID     pgtype.UUID
-	Locale                 string
-	Timezone               string
-	ResourceCatalogVersion string
-	Tombstone              bool
-	CreatedAt              pgtype.Timestamptz
-	ReadAt                 pgtype.Timestamptz
-	DeletedAt              pgtype.Timestamptz
 }
 
 type ComponentRepoValidationReport struct {

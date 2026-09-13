@@ -18,7 +18,7 @@ import {
   type ComponentImportRecordResponse,
   type ComponentImportHistoryResponse,
 } from './componentRepoApi';
-import { routeFor, StatusPill } from './ComponentRepoPage';
+import { routeFor, StatusPill } from './ComponentRepoPresenters';
 
 type ImportFilter = 'all' | ComponentImportRecordResponse['processingStatus'];
 

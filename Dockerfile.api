@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1.7
+
+ARG GO_VERSION=1.26.0
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS build
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src/backend-go
+
+COPY backend-go/go.mod backend-go/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY backend-go/ ./
+
+# API 启动不执行迁移；migrate 作为同镜像内显式运维入口，避免服务启动时隐式修改 schema。
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl tzdata && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 10001 brickbuilder && \
+    useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin brickbuilder
+
+WORKDIR /app
+COPY --from=build --chown=10001:10001 /out/api /app/api
+COPY --from=build --chown=10001:10001 /out/migrate /app/migrate
+
+USER 10001:10001
+EXPOSE 8080
+ENTRYPOINT ["/app/api"]
+

@@ -30,8 +30,8 @@ snapshot. An already active and relation-ready manifest is a no-op; `FORCE_STUDI
 deliberate rebuild. Collider rows default to `metadata-only` because expanding the 145 MB Studio collider source
 into roughly 1.88 million PostgreSQL rows exceeds the intended metadata boundary and small Supabase quotas.
 
-From the repository root, `scripts/start-backend.sh` starts the Go API for
-local development. The independent `start-go-worker` and
+From the repository root, `scripts/start-backend.sh` starts only the Go API for
+local development and prints that task processing is not active. The independent `start-go-worker` and
 `start-legacy-backend` launchers start the remaining G8 topology.
 They load shared connection values from `backend/.env`, then optional Go-only
 overrides from `backend-go/.env`; already-exported shell variables take
@@ -43,6 +43,12 @@ process boundaries on Windows.
 
 Environment files are not loaded implicitly. Export the variables through the shell, a development runner, or the deployment environment.
 
+Production Linux deployment uses the repository-root `Dockerfile.api`, `Dockerfile.worker`,
+`Dockerfile.feed-render`, and `compose.production.yml`. The API, general/GLB Worker, and serial Feed Render
+Worker are separate containers; Goose migrations remain an explicit one-shot operation. Secrets are split so
+the API does not receive the Worker-only Supabase server credential. Build, startup, resource, healthcheck, and
+rollback instructions are in [`../docs/deployment/docker_production.md`](../docs/deployment/docker_production.md).
+
 The API exposes:
 
 ```text
@@ -51,10 +57,9 @@ GET /health/ready
 GET /metrics
 ```
 
-`/metrics` 输出 Prometheus 文本格式的低基数机器指标，包括发布事件结果、固定 action/result 的 Watch mutation
-以及 WATCH-3 预冻结的 Component notification fan-out Counter/Histogram/Gauge。Notification Worker 尚未实现时
-这些 fan-out 序列保持零值，不能解释为数据库 backlog 为零；Worker 上线后必须提供独立内部 scrape endpoint，
-并从 PostgreSQL delivery 状态采样 backlog Gauge。完整标签、bucket、容量和 SLO 契约见 Watch 路线第 26 节。
+`/metrics` 输出 Prometheus 文本格式的低基数机器指标，包括发布事件结果、固定 action/result 的 Watch mutation，
+以及动态 Feed 的固定 result 请求计数和耗时直方图。Watch Feed 由当前 active Watch 在读取时动态聚合，不存在
+notification fan-out Worker 或 backlog 指标。完整容量和查询门禁见 Watch 方案与路线文档。
 该端点不要求业务 Bearer token；生产反向代理或网络策略必须只允许监控系统访问。指标不包含 actor、
 Component ID、用户内容、Storage 定位符或凭据。
 
@@ -110,9 +115,13 @@ go run ./cmd/worker
 
 The Go Worker claims `component.import.parse` after its Artifact verification dependencies have succeeded, reads verified source objects with the server-only Storage credential, and commits SceneSnapshot, BOM, structured parse issues, Candidate, and draft ComponentVersion before the shared task runner marks the task succeeded. Snapshot schema `component-repo-v2` stores explicit ordered `rootInstances`; the shared Go scene expander computes BOM, summary, validation, relations, and Component GLB from actual root/submodel instances rather than model definitions. Studio `.io` imports materialize a verified derived LDraw Artifact with explicit `derived_from_artifact_id` lineage. Parser version, snapshot schema, part-library version, locale, and timezone are frozen when upload completion creates the Import. The Worker stores stable codes/params only; it does not store translated messages, raw exception text, SQL, stack traces, or service credentials in public task/import fields.
 
-`WORKER_TASK_TYPES` can restrict a maintenance Worker to a comma-separated capability list. A restricted Worker only claims those durable task types and does not run generic upload maintenance; this is used by the Part prebuild script/runtime so queued Import tasks remain untouched. The provided prebuild launcher also uses one PostgreSQL session and a five-minute lease because small Supabase session pools and remote batch preparation must not cause lease churn.
+`WORKER_TASK_TYPES` can restrict a maintenance Worker to a comma-separated capability list. A restricted Worker only claims those durable task types and does not run generic upload maintenance; this is used by the Part prebuild script/runtime so queued Import tasks remain untouched. `WORKER_EXCLUDED_TASK_TYPES` is the mutually exclusive production split: it removes named heavy capabilities from a general Worker while preserving upload maintenance. The provided prebuild launcher also uses one PostgreSQL session and a five-minute lease because small Supabase session pools and remote batch preparation must not cause lease churn.
 
 Component soft deletion atomically enqueues `component.relationships.cleanup`. The Component becomes invisible immediately; a Go Worker then closes active Watch periods with the transaction-frozen lifecycle boundary and physically deletes Star rows in 5,000-row actor-keyset batches. This task does not require object storage and is registered even when `STORAGE_PROVIDER=disabled`.
+
+Publishing a user Component atomically creates its immutable domain event, a pending Feed entry, and `component.feed_render.materialize`. The Go Worker reads the verified Component Preview GLB and generates a 1200×800 studio PNG. Renderer v3 launches pinned Blender 4.1 Cycles in an isolated temporary directory for 128-sample CPU path tracing, fitted to 52%×46%, with LDraw material classes, micro bevels, soft-box lights, transparent contact shadows, glass transmission, denoising, and bounded PNG validation. Go owns the durable task, timeout, cancellation, fallback, storage, and metadata; Blender's embedded adapter cannot access the database or object store, and its allowlisted environment excludes Worker database, JWT, and Storage credentials. Missing or failed Cycles falls back to `go_raster_v2` in the same attempt and records the actual engine. The final PNG hash participates in the Artifact ID and Storage key so a retry cannot overwrite an immutable object with different bytes. Component Preview GLB v5 writes NORMAL and classified PBR material fields for new previews; Feed v3 remains able to reconstruct these semantics from existing v4 material names. Pending entries are omitted from the public Feed; success enters as `ready`, while permanent failure, cancellation, or exhausted retries enters as `fallback` without rolling back the published Version. The handler remains registered when storage is disabled so the durable task reaches a terminal fallback instead of staying pending forever.
+
+The API never executes durable tasks. Development must run `scripts/start-dev.sh` or a separate `scripts/start-go-worker.sh`; starting only `scripts/start-backend.sh` intentionally leaves tasks queued. Worker startup logs the exact claimable task-type list, and each attempt logs start plus a safe success/failure result with task ID, type, attempt, and duration. These logs exclude user content, SQL, object keys, credentials, and raw provider errors. `scripts/start-feed-render-worker.sh` and `.ps1` start a serial dedicated Feed renderer without claiming unrelated queued tasks; this process does not require `LDRAW_ROOT` because it consumes a verified Preview GLB. Set `FEED_RENDER_BLENDER_PATH` to pinned Blender 4.1 and tune the hard timeout with `FEED_RENDER_TIMEOUT` (default `5m`).
 
 Relation detection runs in the independent Go Worker together with validation and preview materialization. It reads connector definitions from the Candidate's frozen Part Library version, verifies the connector source hash and parser version included in the task input hash, and atomically materializes relation candidates, connector analysis, and external interfaces.
 

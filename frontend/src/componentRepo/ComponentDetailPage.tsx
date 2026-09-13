@@ -26,30 +26,9 @@ import { useAuth } from '../auth/AuthContext';
 import { resolvedLocale, useAppTranslation, useDynamicTranslation, type TranslationKey } from '../i18n';
 import { ComponentScene, type ComponentSceneConnector } from '../parts/PartViewerPage';
 import {
-  deleteComponent,
-  getComponent,
-  getConnectorAnalysis,
-  getValidationReport,
-  listComponentGroupIds,
-  listComponentGroups,
-  listComponentVersions,
-  listRelations,
   loadComponentVersionDiff,
-  loadComponentVersionParts,
   loadComponentVersionPreview,
-  publishVersion,
-  starComponent,
-  unstarComponent,
-  unwatchComponent,
-  validateCandidate,
-  watchComponent,
-  type ComponentConnectorAnalysisResponse,
   type ComponentConnectorResponse,
-  type ComponentGroupTreeResponse,
-  type ComponentRelationCandidateResponse,
-  type ComponentValidationReportResponse,
-  type ComponentResponse,
-  type ComponentVersionPartsResponse,
   type ComponentVersionDiffChangeKind,
   type ComponentVersionDiffResponse,
   type ComponentVersionPreviewModelResponse,
@@ -58,43 +37,15 @@ import {
 import { ComponentVersionActions } from './ComponentVersionActions';
 import { ComponentDiffScene, type ComponentDiffFocus } from './ComponentDiffScene';
 import { ComponentImportHistoryList } from './ComponentImportHistoryPage';
-import { routeFor, StatusPill } from './ComponentRepoPage';
-
-type ComponentDetailState = {
-  component: ComponentResponse | null;
-  version: ComponentVersionResponse | null;
-  versions: ComponentVersionResponse[];
-  preview: ComponentVersionPreviewModelResponse | null;
-  partDetails: ComponentVersionPartsResponse | null;
-  connectorAnalysis: ComponentConnectorAnalysisResponse | null;
-  relations: ComponentRelationCandidateResponse[];
-  validationReport: ComponentValidationReportResponse | null;
-  groupTree: ComponentGroupTreeResponse | null;
-  groupIds: string[];
-  loading: boolean;
-  previewLoading: boolean;
-  connectorLoading: boolean;
-  partsLoading: boolean;
-  validationLoading: boolean;
-  error: string | null;
-  previewError: string | null;
-  connectorError: string | null;
-};
-
-type PartSummary = {
-  key: string;
-  partRef: string;
-  name: string;
-  quantity: number;
-  partLibraryVersionId: string | null;
-  geometryStatus: 'ready' | 'failed' | 'missing';
-};
-
-type ConnectorPartGroup = {
-  partInstanceId: string;
-  partRef: string;
-  connectors: ComponentConnectorResponse[];
-};
+import {
+  DetailMetric,
+  DiffMetric,
+  groupConnectorsByPart,
+  PartSummaryCard,
+} from './ComponentDetailPresenters';
+import { routeFor, StatusPill } from './ComponentRepoPresenters';
+import { useComponentDetailData } from './useComponentDetailData';
+import { useComponentDetailMutations } from './useComponentDetailMutations';
 
 type ComponentDiffViewState = {
   afterPreview: ComponentVersionPreviewModelResponse | null;
@@ -112,17 +63,6 @@ const connectorGroupLabelKeys: Record<ComponentConnectorResponse['state'], Trans
   unsupported: 'componentRepo:connectorGroupUnsupported',
   unresolved: 'componentRepo:connectorGroupUnresolved',
 };
-const connectorStateOrder: ComponentConnectorResponse['state'][] = [
-  'external',
-  'internal',
-  'blocked',
-  'unsupported',
-  'unresolved',
-];
-const connectorStateRank = new Map(
-  connectorStateOrder.map((state, index) => [state, index]),
-);
-
 const diffChangeLabelKeys: Record<ComponentVersionDiffChangeKind, TranslationKey> = {
   part_added: 'componentRepo:diffAdded',
   part_removed: 'componentRepo:diffRemoved',
@@ -142,14 +82,6 @@ export function ComponentDetailPage() {
   const componentId = params.componentId ?? '';
   const resetViewRef = React.useRef<(() => void) | null>(null);
   const [refreshToken, setRefreshToken] = React.useState(0);
-  const [actionNotice, setActionNotice] = React.useState<string | null>(null);
-  const [actionError, setActionError] = React.useState<string | null>(null);
-  const [publishing, setPublishing] = React.useState(false);
-  const [validating, setValidating] = React.useState(false);
-  const [starring, setStarring] = React.useState(false);
-  const [watchMutating, setWatchMutating] = React.useState(false);
-  const [confirmingDeleteComponent, setConfirmingDeleteComponent] = React.useState(false);
-  const [deletingComponent, setDeletingComponent] = React.useState(false);
   const [activeConnectorPartId, setActiveConnectorPartId] = React.useState<string | null>(null);
   const [selectedConnectorId, setSelectedConnectorId] = React.useState<string | null>(null);
   const [historyTab, setHistoryTab] = React.useState<'versions' | 'imports'>('versions');
@@ -166,25 +98,12 @@ export function ComponentDetailPage() {
   });
   const trRef = React.useRef(tr);
   trRef.current = tr;
-  const [state, setState] = React.useState<ComponentDetailState>({
-    component: null,
-    version: null,
-    versions: [],
-    preview: null,
-    partDetails: null,
-    connectorAnalysis: null,
-    relations: [],
-    validationReport: null,
-    groupTree: null,
-    groupIds: [],
-    loading: true,
-    previewLoading: true,
-    connectorLoading: true,
-    partsLoading: true,
-    validationLoading: true,
-    error: null,
-    previewError: null,
-    connectorError: null,
+  const [state, setState] = useComponentDetailData({
+    componentId,
+    contentLocale,
+    noVersionsMessage: tr('componentRepo:noComponentVersions'),
+    refreshToken,
+    unknownErrorMessage: tr('errors:common.unknown'),
   });
 
   React.useEffect(() => {
@@ -202,143 +121,6 @@ export function ComponentDetailPage() {
     });
   }, [componentId]);
 
-  React.useEffect(() => {
-    // 详情错误由 API 在请求时按 locale 翻译；语言切换后必须重取，避免跨 owner 404 等旧译文滞留。
-    let active = true;
-    const load = async () => {
-      setState((current) => ({
-        ...current,
-        loading: true,
-        previewLoading: true,
-        connectorLoading: true,
-        partsLoading: true,
-        validationLoading: true,
-        error: null,
-        previewError: null,
-        connectorError: null,
-      }));
-      try {
-        const [component, versions] = await Promise.all([
-          getComponent(componentId),
-          listComponentVersions(componentId),
-        ]);
-        // 分组关系属于 owner 私有数据；公开详情只读取 Component 和版本，不探测他人的分组。
-        const [groupTree, groupIds] = component.ownedByActor
-          ? await Promise.all([listComponentGroups(), listComponentGroupIds(componentId)])
-          : [null, [] as string[]];
-        const version = preferredDetailVersion(component, versions);
-        if (!version) throw new Error(trRef.current('componentRepo:noComponentVersions'));
-        // Relation/Connector 是 Candidate owner 的审核数据；公开详情只读取 Version 级公开投影。
-        const connectorAnalysisPromise = component.ownedByActor && version.componentCandidateId
-          ? getConnectorAnalysis(version.componentCandidateId)
-          .then((connectorAnalysis) => ({
-            connectorAnalysis,
-            connectorError: null as string | null,
-          }))
-          .catch((analysisError: unknown) => ({
-            connectorAnalysis: null,
-            connectorError: analysisError instanceof Error
-              ? analysisError.message
-              : appConfig.texts.loadFailed,
-          }))
-          : Promise.resolve({ connectorAnalysis: null, connectorError: null });
-        const partDetailsPromise = loadComponentVersionParts(version.id)
-          .then((partDetails) => ({ partDetails, failed: false }))
-          .catch(() => ({ partDetails: null, failed: true }));
-        const validationReportPromise = version.validationReportId
-          ? getValidationReport(version.validationReportId)
-            .then((validationReport) => ({ validationReport }))
-            .catch(() => ({ validationReport: null }))
-          : Promise.resolve({ validationReport: null });
-        if (!active) return;
-        setState((current) => ({
-          ...current,
-          component,
-          version,
-          versions,
-          groupTree,
-          groupIds,
-          loading: false,
-        }));
-        // Preview 是可重建派生数据。历史 generator stale 或几何暂不可用时只降级预览区域，
-        // 不能清空已加载的 Component，也不能阻断 owner 的发布、验证和删除操作。
-        const [previewResult, relations] = await Promise.all([
-          loadComponentVersionPreview(version.id)
-            .then((preview) => ({ preview, previewError: null as string | null }))
-            .catch((previewError: unknown) => ({
-              preview: null,
-              previewError: previewError instanceof Error
-                ? previewError.message
-                : trRef.current('errors:common.unknown'),
-            })),
-          component.ownedByActor && version.componentCandidateId
-            ? listRelations(version.componentCandidateId)
-            : Promise.resolve([]),
-        ]);
-        if (!active) return;
-        setState({
-          component,
-          version,
-          versions,
-          preview: previewResult.preview,
-          partDetails: null,
-          connectorAnalysis: null,
-          relations,
-          validationReport: null,
-          groupTree,
-          groupIds,
-          loading: false,
-          previewLoading: false,
-          connectorLoading: true,
-          partsLoading: true,
-          validationLoading: true,
-          error: null,
-          previewError: previewResult.previewError,
-          connectorError: null,
-        });
-
-        const { connectorAnalysis, connectorError } = await connectorAnalysisPromise;
-        if (!active) return;
-        setState((current) => ({
-          ...current,
-          connectorAnalysis,
-          connectorLoading: false,
-          connectorError,
-        }));
-
-        const { partDetails } = await partDetailsPromise;
-        if (!active) return;
-        setState((current) => ({
-          ...current,
-          partDetails,
-          partsLoading: false,
-        }));
-
-        const { validationReport } = await validationReportPromise;
-        if (!active) return;
-        setState((current) => ({
-          ...current,
-          validationReport,
-          validationLoading: false,
-        }));
-      } catch (error) {
-        if (!active) return;
-        setState((current) => ({
-          ...current,
-          loading: false,
-          previewLoading: false,
-          connectorLoading: false,
-          partsLoading: false,
-          validationLoading: false,
-          error: error instanceof Error ? error.message : appConfig.texts.loadFailed,
-        }));
-      }
-    };
-    if (componentId) void load();
-    return () => {
-      active = false;
-    };
-  }, [componentId, contentLocale, refreshToken]);
 
   const partSummaries = React.useMemo(
     () => (state.partDetails?.parts ?? []).map((part) => ({
@@ -380,46 +162,37 @@ export function ComponentDetailPage() {
   const registerPreviewReset = React.useCallback((reset: (() => void) | null) => {
     resetViewRef.current = reset;
   }, []);
-  // 所有权由已鉴权的 Go API 投影，避免浏览器 auth 对象尚未同步或格式漂移时误隐藏管理操作。
-  // ownedByActor 缺失时仅为兼容尚未重启的旧开发 API，回退到原 ownerId 判断。
-  const componentOwnedByActor = Boolean(
-    state.component
-      && (
-        state.component.ownedByActor
-        ?? (!isAuthConfigured || state.component.ownerId === user?.id)
-      ),
-  );
-  const componentOwnershipResolved = Boolean(
-    state.component
-      && (typeof state.component.ownedByActor === 'boolean' || !isAuthLoading),
-  );
-  const canPublish = Boolean(
-    state.component
-      && state.version?.status === 'draft'
-      && state.component.contentKind === 'user'
-      && componentOwnershipResolved
-      && componentOwnedByActor,
-  );
-  const canValidate = Boolean(
-    state.component
-      && state.version?.componentCandidateId
-      && (state.version.status === 'draft' || state.version.status === 'published')
-      && state.component.contentKind === 'user'
-      && componentOwnershipResolved
-      && componentOwnedByActor,
-  );
-  const canDeleteComponent = Boolean(
-    state.component
-      && state.component.contentKind === 'user'
-      && componentOwnershipResolved
-      && componentOwnedByActor,
-  );
-  const canStarComponent = Boolean(
-    state.component
-      && componentOwnershipResolved
-      && !componentOwnedByActor,
-  );
-  const canWatchComponent = canStarComponent;
+  const {
+    actionError,
+    actionNotice,
+    canDeleteComponent,
+    canPublish,
+    canStarComponent,
+    canValidate,
+    canWatchComponent,
+    componentOwnedByActor,
+    confirmingDeleteComponent,
+    confirmDeleteComponent,
+    deletingComponent,
+    publish,
+    publishing,
+    setActionError,
+    setActionNotice,
+    setConfirmingDeleteComponent,
+    starring,
+    toggleStar,
+    toggleWatch,
+    validate,
+    validating,
+    watchMutating,
+  } = useComponentDetailMutations({
+    isAuthConfigured,
+    isAuthLoading,
+    requestRefresh: () => setRefreshToken((current) => current + 1),
+    setState,
+    state,
+    userId: user?.id,
+  });
   // Version Diff 是 owner-only 只读能力；前端只并行读取两个已有 GLB，不触发 Preview 物化。
   const compareVersion = async (version: ComponentVersionResponse) => {
     const requestID = diffRequestRef.current + 1;
@@ -478,129 +251,6 @@ export function ComponentDetailPage() {
       loading: false,
       targetVersion: null,
     });
-  };
-  const publish = async () => {
-    if (!state.version || !canPublish) return;
-    setPublishing(true);
-    setActionError(null);
-    setActionNotice(null);
-    try {
-      await publishVersion(state.version.id);
-      setActionNotice(tr('componentRepo:componentVersionPublished'));
-      setRefreshToken((current) => current + 1);
-    } catch (publishError) {
-      setActionError(
-        publishError instanceof Error
-          ? publishError.message
-          : tr('errors:common.unknown'),
-      );
-    } finally {
-      setPublishing(false);
-    }
-  };
-  // 详情页只触发持久化异步验证；发布按钮与验证任务保持两个独立动作。
-  const validate = async () => {
-    if (!state.version?.componentCandidateId || !canValidate) return;
-    setValidating(true);
-    setActionError(null);
-    setActionNotice(null);
-    try {
-      const validationReport = await validateCandidate(state.version.componentCandidateId);
-      setState((current) => ({ ...current, validationReport, validationLoading: false }));
-      setActionNotice(tr('componentRepo:validationComplete'));
-    } catch (validationError) {
-      setActionError(
-        validationError instanceof Error
-          ? validationError.message
-          : tr('errors:common.unknown'),
-      );
-    } finally {
-      setValidating(false);
-    }
-  };
-  const confirmDeleteComponent = async () => {
-    if (!state.component || !canDeleteComponent) return;
-    setDeletingComponent(true);
-    setActionError(null);
-    setActionNotice(null);
-    try {
-      await deleteComponent(state.component.id);
-      navigate(routeFor('componentRepo'));
-    } catch (deleteError) {
-      setActionError(
-        deleteError instanceof Error
-          ? deleteError.message
-          : tr('errors:common.unknown'),
-      );
-      setConfirmingDeleteComponent(false);
-    } finally {
-      setDeletingComponent(false);
-    }
-  };
-  const toggleStar = async () => {
-    if (!state.component || !canStarComponent || starring) return;
-    const componentID = state.component.id;
-    const wasStarred = state.component.starredByActor;
-    setStarring(true);
-    setActionError(null);
-    setActionNotice(null);
-    setState((current) => current.component ? {
-      ...current,
-      component: {
-        ...current.component,
-        starredByActor: !wasStarred,
-        starCount: Math.max(0, current.component.starCount + (wasStarred ? -1 : 1)),
-      },
-    } : current);
-    try {
-      if (wasStarred) await unstarComponent(componentID);
-      else await starComponent(componentID);
-      setActionNotice(tr(wasStarred ? 'componentRepo:componentUnstarred' : 'componentRepo:componentStarred'));
-    } catch (starError) {
-      setActionError(starError instanceof Error ? starError.message : tr('errors:common.unknown'));
-      setRefreshToken((current) => current + 1);
-    } finally {
-      setStarring(false);
-    }
-  };
-  // Watch 是独立偏好：乐观更新只改变 watch 投影，失败时重新读取服务端权威状态。
-  const toggleWatch = async () => {
-    if (!state.component || !canWatchComponent || watchMutating) return;
-    const componentID = state.component.id;
-    const wasWatching = Boolean(state.component.watch?.watching);
-    setWatchMutating(true);
-    setActionError(null);
-    setActionNotice(null);
-    setState((current) => current.component ? {
-      ...current,
-      component: {
-        ...current.component,
-        watch: wasWatching
-          ? { watching: false, level: null, watchedAt: null }
-          : { watching: true, level: 'releases_only', watchedAt: null },
-      },
-    } : current);
-    try {
-      if (wasWatching) {
-        await unwatchComponent(componentID);
-        setActionNotice(tr('componentRepo:componentUnwatched'));
-      } else {
-        const watch = await watchComponent(componentID);
-        setState((current) => current.component ? {
-          ...current,
-          component: {
-            ...current.component,
-            watch: { watching: true, level: watch.level, watchedAt: watch.watchedAt },
-          },
-        } : current);
-        setActionNotice(tr('componentRepo:componentWatched'));
-      }
-    } catch (watchError) {
-      setActionError(watchError instanceof Error ? watchError.message : tr('errors:common.unknown'));
-      setRefreshToken((current) => current + 1);
-    } finally {
-      setWatchMutating(false);
-    }
   };
   const diffBaseVersion = diffView.diff?.baseVersionId
     ? state.versions.find((version) => version.id === diffView.diff?.baseVersionId) ?? null
@@ -1140,125 +790,5 @@ export function ComponentDetailPage() {
         </article>
       </section>
     </section>
-  );
-}
-
-function preferredDetailVersion(
-  component: ComponentResponse,
-  versions: ComponentVersionResponse[],
-): ComponentVersionResponse | undefined {
-  const current = versions.find((item) => item.id === component.currentVersionId);
-  const currentCreatedAt = current ? Date.parse(current.createdAt) : Number.NEGATIVE_INFINITY;
-  const newerDraft = versions.find(
-    (item) => item.status === 'draft' && Date.parse(item.createdAt) > currentCreatedAt,
-  );
-  return newerDraft ?? current ?? versions[0];
-}
-
-function DiffMetric({ label, value }: { label: string; value: number }) {
-  return (
-    <article>
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </article>
-  );
-}
-
-function DetailMetric({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number;
-}) {
-  return (
-    <article>
-      <span>{icon}</span>
-      <div><strong>{value}</strong><small>{label}</small></div>
-    </article>
-  );
-}
-
-function PartSummaryCard({
-  part,
-  missingGeometryLabel,
-}: {
-  part: PartSummary;
-  missingGeometryLabel: string;
-}) {
-  const geometryAvailable = part.geometryStatus === 'ready';
-  const content = (
-    <>
-      <PartCardImage src={null} />
-      <span className="component-detail-part-card-copy">
-        <strong>{part.name}</strong>
-        <small>{part.partRef}</small>
-        {!geometryAvailable ? (
-          <span className="component-detail-part-card-availability">{missingGeometryLabel}</span>
-        ) : null}
-        <em>×{part.quantity}</em>
-      </span>
-    </>
-  );
-  if (!part.partLibraryVersionId) {
-    return (
-      <article className={`component-detail-part-card${geometryAvailable ? '' : ' is-unavailable'}`}>
-        {content}
-      </article>
-    );
-  }
-  return (
-    <Link
-      className={`component-detail-part-card${geometryAvailable ? '' : ' is-unavailable'}`}
-      to={`/parts/${encodeURIComponent(part.partLibraryVersionId)}/${encodeURIComponent(part.partRef)}`}
-    >
-      {content}
-    </Link>
-  );
-}
-
-function groupConnectorsByPart(
-  connectors: ComponentConnectorResponse[],
-): ConnectorPartGroup[] {
-  const groups = new Map<string, ConnectorPartGroup>();
-  for (const connector of connectors) {
-    const group = groups.get(connector.partInstanceId) ?? {
-      partInstanceId: connector.partInstanceId,
-      partRef: connector.partRef,
-      connectors: [],
-    };
-    group.connectors.push(connector);
-    groups.set(connector.partInstanceId, group);
-  }
-  return [...groups.values()]
-    .filter((group) => group.connectors.length > 0)
-    .map((group) => ({
-      ...group,
-      connectors: [...group.connectors].sort(
-        (left, right) => (
-          (connectorStateRank.get(left.state) ?? Number.MAX_SAFE_INTEGER)
-          - (connectorStateRank.get(right.state) ?? Number.MAX_SAFE_INTEGER)
-        ) || left.connectorId.localeCompare(right.connectorId),
-      ),
-    }));
-}
-
-function PartCardImage({ src }: { src: string | null }) {
-  const [failed, setFailed] = React.useState(false);
-  React.useEffect(() => setFailed(false), [src]);
-  return (
-    <span className="component-detail-part-card-image">
-      {src && !failed ? (
-        <img
-          alt=""
-          decoding="async"
-          loading="lazy"
-          onError={() => setFailed(true)}
-          src={src}
-        />
-      ) : <Boxes aria-hidden="true" />}
-    </span>
   );
 }

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/ldrawmaterial"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/scene"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
@@ -298,7 +299,8 @@ func (h *PreviewTaskHandler) Handle(ctx context.Context, claimed task.ClaimedTas
 			Sha256: digest, FileSize: int64(len(glb)), UploadedBy: claimed.OwnerID,
 			Metadata: mustJSON(map[string]any{
 				"derivedBy": PreviewMaterializeType, "generatorVersion": payload.GeneratorVersion,
-				"versionId": payload.VersionID, "partLibraryVersionId": uuidutil.String(input.PartLibraryVersionID),
+				"materialProfileVersion": ldrawmaterial.ProfileVersion,
+				"versionId":              payload.VersionID, "partLibraryVersionId": uuidutil.String(input.PartLibraryVersionID),
 				"partLibrarySourceHash": input.PartLibrarySourceHash, "omittedPartRefs": omittedPartRefs,
 				"complete": len(omittedPartRefs) == 0,
 			}),
@@ -435,9 +437,15 @@ func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]
 				materialIndexByColor[part.colorCode] = materialIndex
 				materials = append(materials, ldrawMaterial(part.colorCode))
 			}
-			positions, indices, minimum, maximum := ldrawTrianglesToBuffers(triangles)
+			positions, normals, indices, minimum, maximum := ldrawTrianglesToBuffers(triangles)
 			positionOffset := bin.Len()
 			for _, value := range positions {
+				if err := binary.Write(bin, binary.LittleEndian, value); err != nil {
+					return nil, nil, err
+				}
+			}
+			normalOffset := bin.Len()
+			for _, value := range normals {
 				if err := binary.Write(bin, binary.LittleEndian, value); err != nil {
 					return nil, nil, err
 				}
@@ -452,6 +460,10 @@ func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]
 			bufferViews = append(bufferViews, map[string]any{
 				"buffer": 0, "byteOffset": positionOffset, "byteLength": len(positions) * 4, "target": 34962,
 			})
+			normalView := len(bufferViews)
+			bufferViews = append(bufferViews, map[string]any{
+				"buffer": 0, "byteOffset": normalOffset, "byteLength": len(normals) * 4, "target": 34962,
+			})
 			indexView := len(bufferViews)
 			bufferViews = append(bufferViews, map[string]any{
 				"buffer": 0, "byteOffset": indexOffset, "byteLength": len(indices) * 4, "target": 34963,
@@ -461,6 +473,10 @@ func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]
 				"bufferView": positionView, "componentType": 5126, "count": len(positions) / 3,
 				"type": "VEC3", "min": minimum, "max": maximum,
 			})
+			normalAccessor := len(accessors)
+			accessors = append(accessors, map[string]any{
+				"bufferView": normalView, "componentType": 5126, "count": len(normals) / 3, "type": "VEC3",
+			})
 			indexAccessor := len(accessors)
 			accessors = append(accessors, map[string]any{
 				"bufferView": indexView, "componentType": 5125, "count": len(indices), "type": "SCALAR",
@@ -468,7 +484,7 @@ func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]
 			meshIndex = len(meshes)
 			meshIndexByKey[meshKey] = meshIndex
 			meshes = append(meshes, map[string]any{"name": part.partRef, "primitives": []any{map[string]any{
-				"attributes": map[string]any{"POSITION": positionAccessor}, "indices": indexAccessor, "material": materialIndex,
+				"attributes": map[string]any{"POSITION": positionAccessor, "NORMAL": normalAccessor}, "indices": indexAccessor, "material": materialIndex,
 			}}})
 		}
 		matrix := make([]float64, 16)
@@ -490,6 +506,7 @@ func buildComponentGLB(parts []componentWorldPart, trianglesByPart map[string][]
 	if bin.Len() > 0 {
 		gltf["meshes"] = meshes
 		gltf["materials"] = materials
+		gltf["extensionsUsed"] = materialExtensionsUsed(materials)
 		gltf["buffers"] = []any{map[string]any{"byteLength": bin.Len()}}
 		gltf["bufferViews"] = bufferViews
 		gltf["accessors"] = accessors
@@ -545,44 +562,96 @@ func boolPointer(value bool) *bool {
 	return &value
 }
 
-func ldrawTrianglesToBuffers(triangles []ldrawTriangle) ([]float32, []uint32, [3]float64, [3]float64) {
+func ldrawTrianglesToBuffers(triangles []ldrawTriangle) ([]float32, []float32, []uint32, [3]float64, [3]float64) {
 	positions := make([]float32, 0, len(triangles)*9)
+	normals := make([]float32, 0, len(triangles)*9)
 	indices := make([]uint32, 0, len(triangles)*3)
 	minimum := [3]float64{math.Inf(1), math.Inf(1), math.Inf(1)}
 	maximum := [3]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1)}
-	for _, triangle := range triangles {
+	faceNormals := make([]ldrawVector, len(triangles))
+	positionNormals := map[[3]uint64][]ldrawVector{}
+	for index, triangle := range triangles {
+		normal := normalizedCross(triangle[1], triangle[0], triangle[2])
+		faceNormals[index] = normal
+		for _, vertex := range triangle {
+			positionNormals[ldrawPositionKey(vertex)] = append(positionNormals[ldrawPositionKey(vertex)], normal)
+		}
+	}
+	for faceIndex, triangle := range triangles {
 		for _, vertex := range triangle {
 			indices = append(indices, uint32(len(indices)))
 			positions = append(positions, float32(vertex.x), float32(vertex.y), float32(vertex.z))
+			normal := creasedNormal(faceNormals[faceIndex], positionNormals[ldrawPositionKey(vertex)])
+			normals = append(normals, float32(normal.x), float32(normal.y), float32(normal.z))
 			for axis, value := range []float64{vertex.x, vertex.y, vertex.z} {
 				minimum[axis] = math.Min(minimum[axis], value)
 				maximum[axis] = math.Max(maximum[axis], value)
 			}
 		}
 	}
-	return positions, indices, minimum, maximum
+	return positions, normals, indices, minimum, maximum
 }
 
 func ldrawMaterial(colorCode string) map[string]any {
-	r, g, b := ldrawColor(colorCode)
-	return map[string]any{"name": "LDraw " + colorCode, "doubleSided": true, "pbrMetallicRoughness": map[string]any{
-		"baseColorFactor": []float64{r, g, b, 1}, "metallicFactor": 0, "roughnessFactor": 0.72,
-	}}
+	definition := ldrawmaterial.Lookup(colorCode)
+	material := map[string]any{
+		"name": "LDraw " + colorCode, "doubleSided": true,
+		"extras": map[string]any{
+			"ldrawColorCode": colorCode, "materialClass": definition.Class,
+			"materialProfileVersion": ldrawmaterial.ProfileVersion,
+		},
+		"pbrMetallicRoughness": map[string]any{
+			"baseColorFactor": []float64{definition.BaseColor[0], definition.BaseColor[1], definition.BaseColor[2], definition.Alpha},
+			"metallicFactor":  definition.Metallic, "roughnessFactor": definition.Roughness,
+		},
+	}
+	extensions := map[string]any{
+		"KHR_materials_ior":      map[string]any{"ior": definition.IOR},
+		"KHR_materials_specular": map[string]any{"specularFactor": definition.Specular},
+	}
+	if definition.Clearcoat > 0 {
+		extensions["KHR_materials_clearcoat"] = map[string]any{
+			"clearcoatFactor": definition.Clearcoat, "clearcoatRoughnessFactor": definition.ClearcoatRoughness,
+		}
+	}
+	if definition.Transmission > 0 {
+		extensions["KHR_materials_transmission"] = map[string]any{"transmissionFactor": definition.Transmission}
+	}
+	if definition.EmissiveStrength > 0 {
+		material["emissiveFactor"] = []float64{definition.BaseColor[0], definition.BaseColor[1], definition.BaseColor[2]}
+		extensions["KHR_materials_emissive_strength"] = map[string]any{"emissiveStrength": definition.EmissiveStrength}
+	}
+	material["extensions"] = extensions
+	if definition.Alpha < 1 {
+		material["alphaMode"] = "BLEND"
+	}
+	return material
+}
+
+// materialExtensionsUsed 从本次实际写入的材质收集扩展，避免声明 GLB 中不存在的能力。
+func materialExtensionsUsed(materials []any) []string {
+	used := map[string]struct{}{}
+	for _, raw := range materials {
+		material, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		extensions, _ := material["extensions"].(map[string]any)
+		for name := range extensions {
+			used[name] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(used))
+	for name := range used {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func ldrawColor(colorCode string) (float64, float64, float64) {
-	colors := map[string][3]float64{
-		"0": {0.02, 0.02, 0.02}, "1": {0.00, 0.13, 0.55}, "2": {0.00, 0.45, 0.16},
-		"3": {0.00, 0.52, 0.58}, "4": {0.80, 0.00, 0.05}, "5": {0.75, 0.00, 0.45},
-		"6": {0.36, 0.20, 0.10}, "7": {0.60, 0.62, 0.64}, "8": {0.28, 0.30, 0.32},
-		"9": {0.35, 0.55, 0.85}, "10": {0.30, 0.70, 0.20}, "11": {0.00, 0.70, 0.78},
-		"12": {0.95, 0.36, 0.24}, "13": {1.00, 0.55, 0.75}, "14": {0.96, 0.82, 0.08},
-		"15": {0.95, 0.95, 0.92}, "16": {0.72, 0.74, 0.78},
-	}
-	if value, ok := colors[colorCode]; ok {
-		return value[0], value[1], value[2]
-	}
-	return 0.72, 0.74, 0.78
+	value := ldrawmaterial.Lookup(colorCode).BaseColor
+	return value[0], value[1], value[2]
 }
 
 func componentPreviewInputHash(versionID, sceneSnapshotID, structureHash, geometryHash, partLibraryVersionID, partLibrarySourceHash, generator string) string {

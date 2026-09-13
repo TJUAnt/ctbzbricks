@@ -1,7 +1,7 @@
 # Component Repo Go API
 
 > 状态：Current implementation contract；目标漂移均显式标注为尚未实现
-> 更新日期：2026-09-05
+> 更新日期：2026-09-12
 > 范围：`backend-go` 当前注册的认证与 Component Repo HTTP API；不包含旧 FastAPI 路由
 > 长期原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)
 > 任务协议：[go_task_protocol.md](./go_task_protocol.md)
@@ -69,6 +69,7 @@ panic recovery。
 ### 1.4 分页与 locale
 
 - 通用分页参数为 `page`、`pageSize`，默认 `1/20`，`pageSize` 最大为 `100`。
+- Feed 接口使用 `limit/cursor`，`limit` 默认 20、最大 100；cursor 是服务端不透明 keyset 边界，调用方不得解析或改写。
 - 展示 locale 规范化为 `zh-CN` 或 `en-US`；未提供或非法的只读展示 locale 当前回落到
   `zh-CN`。用户内容写入接口要求有效的 `contentLocale`。
 - 异步任务创建时冻结 locale 和 IANA timezone；Worker 不读取浏览器后续语言状态。
@@ -97,6 +98,7 @@ Execution。
 | `component.preview.materialize` | Go Worker | Go Worker |
 | `component.part_preview.materialize` | Go Worker | Go Worker |
 | `component.part_preview.prebuild` | Go Worker | Go Worker |
+| `component.feed_render.materialize` | Go Worker | Go Worker |
 | `component.relationships.cleanup` | Go Worker | Go Worker |
 
 Component Repo 的上述任务全部由 Go Worker 执行；不得新增 Component Repo Python task type。
@@ -117,13 +119,14 @@ session；网络或 provider 暂不可用只隐藏未经确认的用户信息并
 |---|---|---|---|
 | `GET /health/live` | 进程存活检查 | `200 {status:"ok",traceId}` | 不访问数据库或 Storage，只证明 Gin 进程能够响应。 |
 | `GET /health/ready` | 依赖就绪检查 | `200 {status:"ready",checks:{database:"ok"},traceId}` | 在独立超时内 Ping PostgreSQL；失败返回 `503` 和机器状态 `database=unavailable`，不暴露连接错误。 |
-| `GET /metrics` | Prometheus 0.0.4 文本指标 | `200 text/plain` | 输出固定低基数 `component_domain_event_total{event_type,result}`、`component_watch_mutation_total{action,result}` 与 WATCH-3 预冻结的 `component_notification_*` Counter/Histogram/Gauge。Watch action 只允许 `watch/unwatch`，result 只允许 `succeeded/failed`；fan-out 标签集合见 Watch 路线第 26.6 节。所有指标拒绝请求值、actor、Component/event ID、错误正文或用户内容。fan-out Worker 尚未实现，因此通知指标当前只是零值契约，不代表真实 backlog 为零；WATCH-3 必须由独立 Worker scrape endpoint 暴露 Counter，并从 PostgreSQL delivery 状态采样 Gauge。 |
+| `GET /metrics` | Prometheus 0.0.4 文本指标 | `200 text/plain` | 输出固定低基数 `component_domain_event_total{event_type,result}`、`component_watch_mutation_total{action,result}`、`component_watch_feed_requests_total{result}` 与 `component_watch_feed_duration_seconds`。Watch action 只允许 `watch/unwatch`，result 只允许 `succeeded/failed`；所有指标拒绝请求值、actor、Component/event ID、错误正文或用户内容。动态 Feed 是同步只读 API，不存在 notification backlog。 |
 
 ## 3. Component
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
 | `GET /api/v1/components` | Query：`page/pageSize/locale/query/category/status`；`200 {items,page,pageSize,total,totalPages}` | 查询 actor 可见的公开/自有 Component 目录。 | 过滤未删除记录，并要求至少存在一个未删除 Version；owner 可见自己的记录，其他用户只见 `active` 且存在非 draft Version 的记录；按 reviewed translation 选择展示内容，返回 `ownedByActor/starredByActor/starCount/watch`，按 `updatedAt DESC,id` 稳定排序。Watch 只在当前页按 `(actor_id,component_id)` 索引投影，不公开计数。`query` 同时匹配展示名称和 Component ID。查询先固定当前页，再按页内 Component ID 一次聚合 Star 数，不逐行执行收藏计数。`total/totalPages` 复用与列表相同的授权和过滤条件。`logicalSize` 投影当前发布 Version 的 Preview Box；尚未发布、`currentVersionId` 为空时投影最新 Draft，旧 `components.logical_*` 仅为历史兼容回退。公开 `status` 筛选只允许 `draft/active`；`archived` 是 soft delete 内部状态，不属于正常组件列表。 |
+| `GET /api/v1/component-public-feed` | Query：`limit/cursor/query`；`query` 最长 200；`200 {items,nextCursor}`；每项含 `publisher:{id}` 和 `render:{status,availableAt,image}` | 读取组件库广场已达到图片终态的用户 Component 发布事件。 | 发布事务原子创建 pending Feed entry 和 `component.feed_render.materialize` 持久任务；API 不等待图片，pending 本次不返回。Go Worker 优先在隔离目录调用 Blender 4.1 Cycles 生成 renderer v4 图片，失败时使用 Go raster v2；两者写相同 `component_feed_image` 契约并在内部 metadata 记录实际 engine 和 `ldraw-studio-pbr-v1` 材质 Profile。任务成功且图片 Artifact 可签名时 `render.status=ready`、`image={artifactId,url,format:"png",sha256,byteLength,width:1200,height:800}`；任务失败/取消/重试耗尽或签名失败时发布仍有效，终态事件以 `fallback,image:null` 返回。按 `available_at DESC,event_id DESC` keyset 分页，卡片另行展示 `occurredAt`；不执行 exact count。Watch 不参与成员筛选，actor 只用于 `ownedByActor/starredByActor/starCount/watch`。SQL 先从终态部分索引固定页面，再做 Star 聚合、个人关系和图片连接。`query` 匹配用户原始名称或精确 ID并绑定 cursor。内部 Storage key、渲染器路径和进程错误不返回。v23 将已有用户发布事件登记为 fallback；v16 前没有事件的版本不推断。 |
 | `POST /api/v1/components` | Body：`name,description?,tags,category?,contentLocale`；`201 Component` | 创建用户 Component 元数据。 | 校验名称、tag 数量和 locale；生成 UUID，在事务中写入 owner/creator；初始 Component 尚无结构版本，因此创建后可按 ID 读取，但在产生首个 Version 前不会进入 Component 列表投影。 |
 | `GET /api/v1/components/:componentId` | Query：`locale`；`200 Component` | 读取单个可见 Component。 | 校验 UUID，通过 actor/active 可见性查询；返回 `ownedByActor/starredByActor/starCount/watch`，其中所有权是稳定管理权限投影，前端不得依赖浏览器缓存用户对象自行推断；`watch={watching,level,watchedAt}` 只描述当前 actor 的 active 订阅。官方内容只选 reviewed translation，否则返回源内容及缺失标记。Preview stale/failed 不改变 Component 可见性、所有权或删除权限。 |
 | `PATCH /api/v1/components/:componentId` | Partial Body：`name,description,tags,category,contentLocale`；`200 Component` | 修改 owner 的 Component 展示元数据。 | 至少提交一个字段；`description/category` 可显式传 `null` 清空；只更新 owner、未删除的用户 Component，并返回更新后的可见投影。 |
@@ -139,7 +142,7 @@ session；网络或 provider 暂不可用只隐藏未经确认的用户信息并
 | `GET /api/v1/component-versions/:versionId/diff` | `200 VersionDiff` | 计算 owner 当前版本相对本次导入基准版本的 BOM 与实例级结构差异。 | 只认 `Version -> Candidate -> Import.base_version_id` 的声明 lineage，不按创建时间猜父版本；首个版本与空树比较。读取两侧不可变 SceneSnapshot，在 Go `componentdiff` 内同步但严格有界地展开全部 root，返回 BOM 变化、确定匹配的实例变化和歧义组；不读取 GLB/Storage、不写数据库、不创建 Task。任一侧最多 50,000 个展开实例，明细最多 10,000 条，超限使用既有 `request.validation_failed`。即使 Version 已公开，本接口当前仍只允许 Component owner。 |
 | `PATCH /api/v1/component-versions/:versionId` | Partial Body：`version,revision,releaseNote,releaseNoteLocale`；`200 ComponentVersion` | 修改 owner Draft Version 的展示元数据。 | 只允许未删除 draft；release note 与 locale 必须同时设置或同时清空；结构、hash、Artifact 和 Part Library 不可通过本接口修改。 |
 | `DELETE /api/v1/component-versions/:versionId` | `204` | 删除未发布的 Draft Version。 | 只对 owner 用户 Component 的非 current draft 写 `deleted_at/deleted_by`；不删除已发布/废弃/归档版本。 |
-| `POST /api/v1/component-versions/:versionId/publish` | 无 Body；`200 ComponentVersion` | 直接发布 owner 的 Draft。 | serializable transaction 锁定 owner Version，并取得同 Component 的 exclusive activity lock；随后 deprecated 其他 published Version、发布目标、设置 current version，同时刷新当前公开 Version 的轴无关规范化尺寸投影，并追加唯一 `component.version.published.v1` 领域事件。状态、尺寸投影与事件原子提交，重复/并发 publish 最多产生一个事件。ValidationReport 是可选质量信息，不参与发布门禁。 |
+| `POST /api/v1/component-versions/:versionId/publish` | 无 Body；`200 ComponentVersion` | 直接发布 owner 的 Draft。 | serializable transaction 锁定 owner Version，并取得同 Component 的 exclusive activity lock；随后 deprecated 其他 published Version、发布目标、设置 current version、刷新规范化尺寸、追加唯一 `component.version.published.v1`，并原子创建 pending Feed entry 与 `component.feed_render.materialize`。Preview 任务仍执行时建立持久依赖。重复/并发 publish 最多产生一个事件、entry 和 logical task。ValidationReport 与 Feed 图片都不是发布门禁；图片成功或重试终结只决定公共 Feed 的 ready/fallback 展示。 |
 | `POST /api/v1/component-versions/:versionId/deprecate` | 无 Body；`200 ComponentVersion` | 将 published Version 标记为 deprecated。 | 仅 owner；只允许 `published -> deprecated`，非法状态返回 conflict。 |
 | `POST /api/v1/component-versions/:versionId/archive` | 无 Body；`200 ComponentVersion` | 归档 published/deprecated Version。 | 仅 owner；允许 `published -> archived` 或 `deprecated -> archived`，不修改版本的不可变结构字段。 |
 
@@ -230,15 +233,16 @@ Goose `00014_component_stars.sql` 将旧 `component_subscriptions` 一次迁移�
 
 ### 5.3 Watch
 
-Watch 与 Star 使用独立表、API 和产品语义。WATCH-1 保存订阅偏好；WATCH-2 已让 Version 首次发布同步写入
-不可变领域事件。当前仍不在 Handler 中遍历 watcher，也不创建 recipient、通知或 Feed；这些副作用只能由
-后续 WATCH-3 的持久 fan-out Worker 实现。
+Watch 与 Star 使用独立表、API 和产品语义。WATCH-1 保存订阅偏好；WATCH-2 让 Version 首次发布同步写入
+不可变领域事件；WATCH-3 在读取时以当前 active Watch 聚合这些事件。系统不枚举 recipient，不创建通知，
+也不启动 Watch 专属 Worker。
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
 | `PUT /api/v1/components/:componentId/watch` | Body：`{level:"releases_only"}`；`200 {componentId,watching,level,watchedAt}` | 显式订阅公开非本人 Component 的新版本更新。 | serializable transaction 使用轻量目标投影检查未删除、非本人、`active` 和存在非 draft Version；存在 active period 时重复 PUT 直接返回且不修改开始边界，关闭后重新 Watch 会向 `component_watch_periods` 追加新 period。并发创建由 active partial unique 收敛，只保存偏好，不创建 Star、事件或通知。 |
 | `DELETE /api/v1/components/:componentId/watch` | `204` | 取消当前 actor 的更新订阅。 | actor-scoped 单条 UPDATE 使用共享数据库 sequence 分配 `ended_seq`，并写 `unwatched_at/ended_reason=user_unwatched`；只允许关闭仍处于 active Component 生命周期的当前 period 一次。目标已不可见或关系不存在时仍幂等成功，但不会抢写删除事务已冻结的生命周期边界；不删除或重新打开历史 period，不改变 Star、Group、Fork 或资源权限。 |
-| `GET /api/v1/component-watches` | Query：`locale/limit/cursor/query/category`；`query` 最长 200、`category` 最长 128；`200 {items,nextCursor}` | 读取 actor 当前仍公开可见的 active Watch。 | 从 `component_watch_periods` active-time 部分索引驱动，以 `watched_at DESC,component_id DESC` 做 row-value keyset；名称/ID leading-wildcard 搜索及 category 精确匹配只运行在当前 actor 的有界 active 候选集。搜索启用时才探测候选 reviewed translation，筛选后先固定 `limit+1` 页面，再读取展示翻译和 current published Version；不返回 exact count、watcher 身份或 watchCount。cursor 只可在相同筛选条件下继续使用。 |
+| `GET /api/v1/component-watches` | Query：`locale/limit/cursor/query/category`；`query` 最长 200、`category` 最长 128；`200 {items,nextCursor}` | 读取 actor 当前仍公开可见的 active Watch。 | 从 `component_watch_periods` active-time 部分索引驱动，以 `watched_at DESC,component_id DESC` 做 row-value keyset；名称/ID leading-wildcard 搜索及 category 精确匹配只运行在当前 actor 的有界 active 候选集。搜索启用时才探测候选 reviewed translation，筛选后先固定 `limit+1` 页面，再读取展示翻译和 current published Version；不返回 exact count、watcher 身份或 watchCount。cursor 绑定规范化后的 `locale/query/category`，任一条件变化均返回 `request.validation_failed`。 |
+| `GET /api/v1/component-watch-feed` | Query：`locale/limit/cursor/since`；`since` 为 RFC 3339；默认最近 30 天；`200 {items,nextCursor,windowStart}` | 从当前订阅动态读取发布更新，当前前端入口为组件广场“个人订阅”页签。 | 先以 actor active partial index 限定最多约 1,000 个当前订阅，再按 `(component_id,occurred_at DESC,id DESC)` 读取 `since` 后的发布事件；按 `occurred_at DESC,event_id DESC` keyset 分页，不返回 exact count。首次响应把窗口起点写入 cursor，后续页沿用该起点；发布早于 Watch 但位于窗口内时可以出现，Unwatch 后下一次读取立即消失。页面固定后才读取 Version 和 Component 展示字段；Release Note 保持作者原文与 locale，official Component 名称只选 reviewed translation。 |
 
 当前 Web 契约采用数据库操作顺序的 last-write-wins：active period 存在时 PUT 是重复 Watch；没有 active period
 时 PUT 是首次 Watch 或 Rewatch。API 尚未接收 `mutationId`，因此跨越一次 DELETE 后才抵达的旧 PUT 会按新的
@@ -246,22 +250,24 @@ Rewatch 处理；引入离线队列或自动网络重放前必须先冻结强意
 
 Watch/Unwatch transaction 使用 Component UUID 稳定派生 key 的 PostgreSQL shared advisory xact lock。共享锁
 不串行化同一 Component 的多个 watcher；Publish transaction 复用同一 key 获取 exclusive advisory xact lock，
-并通过领域事件 INSERT 在锁内分配 `event_seq`。这样发布边界会等待已在途的偏好事务提交或回滚，后续 Watch
-也不会越过事件边界，Worker 无需在发布事务中枚举 recipient。
+并通过领域事件 INSERT 在锁内分配 `event_seq`。Feed 资格不再使用 started/ended sequence：该顺序域只保留
+关系审计和生命周期一致性意义，发布路径始终不枚举 watcher。
 
 Component 删除复用同一 exclusive activity lock。删除事务只做有界的状态写入、公共结束边界分配和持久任务
 入队，不在 HTTP Handler 中遍历关系。清理任务将 active period 写为同一 `ended_seq/unwatched_at`，并记录稳定
 机器值 `ended_reason=component_deleted`；已关闭的用户退订周期保持不变。Star 没有审计历史语义，因此分批物理
-删除。该任务只负责关系生命周期收敛，不生成发布事件、recipient snapshot、通知或 Feed。
+删除。该任务只负责关系生命周期收敛，不生成发布事件或通知；Component 失效后 Feed 的可见性联接会立即排除它。
 
-所有 closed Watch period 当前永久保留，不设 TTL 或按 actor 裁剪。达到 1,000,000 条只触发容量重评；在
-WATCH-3 定义并验证 fan-out completion watermark 或 recipient snapshot 之前，任何维护流程不得删除或合并历史区间。
+所有 closed Watch period 当前永久保留，不设 TTL 或按 actor 裁剪。达到 1,000,000 条只触发容量重评；
+它们不参与管理列表或 Feed 在线查询，因此不是 Feed 完整性账本。
 
 `component_domain_events` 是独立的 Component 领域事实表，不复用 Task 执行协议的 `outbox_events`。v1 payload
 固定为空 JSON object，Component/Version/actor/event sequence 由结构化列保存；不复制 Release Note、Component
-名称、Artifact 路径或最终译文。数据库约束拒绝非 owner actor、非 published/mismatched Version、重复 Version 事件以及任何
-UPDATE/DELETE。当前没有领域事件查询 API、exact count、分页或 fan-out 索引。
-v16 不回填迁移前已发布的 Version；只有迁移后首次成功发生的 Draft -> Published 状态迁移会产生事件。
+名称、Artifact 路径或最终译文。数据库约束要求 user Component 的事件 actor 是 owner，official Component 的事件 actor
+是该不可变 Version 的 `created_by`；同时拒绝非 published/mismatched Version、重复 Version 事件以及任何
+UPDATE/DELETE。Feed 只通过 actor-scoped API 暴露领域事件的展示投影，不开放领域事件通用查询、exact count 或 recipient 数据。
+v16 不回填迁移前已发布的 Version；v21 补齐 official 发布来源约束。只有迁移后首次成功发生的 Draft -> Published
+状态迁移会产生事件。
 
 `component_domain_event_total` 在发布事务最终返回后记录一次逻辑结果：确认提交后增加 `committed`；已经进入
 事件 INSERT 阶段但最终未提交时增加 `failed`。serializable transaction 的内部重试不会重复计数；不可见、
@@ -440,7 +446,12 @@ parser v1 / snapshot v1 已有记录保持不可变，不在 GET 中静默改写
   Draft 任务直接覆盖 Component 当前发布版本的尺寸。
 - `logicalWidthStud=(maxX-minX)/20`、`logicalDepthStud=(maxZ-minZ)/20`、
   `logicalHeightPlate=(maxY-minY)/8`，统一保留四位小数。
-- 生成器 `component-preview-studio-ldraw-glb-v4` 开始产出上述字段。历史 ready Preview 通过
+- 生成器 `component-preview-studio-ldraw-glb-v6` 继续产出上述字段，并为每个 primitive 写入 `NORMAL`。材质使用
+  固定 `ldraw-studio-pbr-v1` Profile：提交的 Studio `LDConfig.ldr` 快照覆盖 148 个 code，输出线性 base color、
+  alpha、metallic/roughness，以及 `KHR_materials_ior/specular/clearcoat/transmission/emissive_strength` 中实际使用的
+  扩展；extras 保留 `ldrawColorCode/materialClass/materialProfileVersion`。分类覆盖 plastic、glass、rubber、chrome、
+  pearl、metal、luminous、glitter 和 speckle。扩展不是 `extensionsRequired`，不支持它们的读取器仍可使用核心 PBR/alpha。
+  历史 ready Preview 因 generator version 不同返回 stale，通过
   `backend-go/scripts/backfill-component-preview-bounds.sh` 受控调度新的 durable execution；脚本先核对精确
   数据库目标并执行 Goose，再由 Go Worker 重建，不在维护进程中同步解析文件或直接写尺寸。
 
@@ -530,6 +541,13 @@ GET Candidate / Draft Version
 - PostgreSQL 是 Component、Import、Candidate、Task、ValidationReport 和 Artifact metadata 的事实来源。
 - Object Storage 是上传源文件和大型派生 Artifact 正文的事实来源。
 - API/Worker 启动不执行 Goose migration、DDL、数据修复或 Studio snapshot 导入。
+- 生产 Compose 把 API、通用/GLB Worker 和 Feed Render Worker 分为三个容器。通用 Worker 通过
+  `WORKER_EXCLUDED_TASK_TYPES=component.feed_render.materialize` 移交 Feed 任务但保留上传维护；Feed Worker
+  通过 `WORKER_TASK_TYPES` 只领取该类型并固定并发 1。allowlist 与 exclude list 互斥，未知类型或同时配置会
+  使 Worker 启动失败。该部署过滤不改变任务 API、状态机、lease 或 PostgreSQL 权威边界。
+- API 与 `migrate` 只加载公共环境文件；Worker 额外加载 server-side Storage 密钥。迁移仍由 `ops` profile
+  的一次性命令显式运行，不是任一长期服务的启动步骤。完整运行手册见
+  [`deployment/docker_production.md`](deployment/docker_production.md)。
 
 ## 14. 当前明确未提供的接口
 

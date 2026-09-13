@@ -112,51 +112,32 @@ func (q *Queries) CloseActiveComponentWatchesForLifecycleBatch(ctx context.Conte
 }
 
 const createActiveComponentWatchPeriod = `-- name: CreateActiveComponentWatchPeriod :one
-INSERT INTO component_repo.component_watch_periods (
-    actor_id, component_id, watch_level,
-    notification_locale, notification_timezone, notification_catalog_version
-) VALUES (
-    $1, $2, $3,
-    $4, $5, $6
-)
+INSERT INTO component_repo.component_watch_periods (actor_id, component_id, watch_level)
+VALUES ($1, $2, $3)
 ON CONFLICT (actor_id, component_id) WHERE ended_seq IS NULL DO NOTHING
-RETURNING id, actor_id, component_id, watch_level, started_seq, ended_seq, watched_at, unwatched_at,
-          notification_locale, notification_timezone, notification_catalog_version
+RETURNING id, actor_id, component_id, watch_level, started_seq, ended_seq, watched_at, unwatched_at
 `
 
 type CreateActiveComponentWatchPeriodParams struct {
-	ActorID                    pgtype.UUID
-	ComponentID                pgtype.UUID
-	WatchLevel                 string
-	NotificationLocale         string
-	NotificationTimezone       string
-	NotificationCatalogVersion string
+	ActorID     pgtype.UUID
+	ComponentID pgtype.UUID
+	WatchLevel  string
 }
 
 type CreateActiveComponentWatchPeriodRow struct {
-	ID                         int64
-	ActorID                    pgtype.UUID
-	ComponentID                pgtype.UUID
-	WatchLevel                 string
-	StartedSeq                 int64
-	EndedSeq                   *int64
-	WatchedAt                  pgtype.Timestamptz
-	UnwatchedAt                pgtype.Timestamptz
-	NotificationLocale         string
-	NotificationTimezone       string
-	NotificationCatalogVersion string
+	ID          int64
+	ActorID     pgtype.UUID
+	ComponentID pgtype.UUID
+	WatchLevel  string
+	StartedSeq  int64
+	EndedSeq    *int64
+	WatchedAt   pgtype.Timestamptz
+	UnwatchedAt pgtype.Timestamptz
 }
 
 // 没有 active period 时追加新周期；并发重复 PUT 命中部分唯一索引时不更新任何既有行，由 Service 重试读取。
 func (q *Queries) CreateActiveComponentWatchPeriod(ctx context.Context, arg CreateActiveComponentWatchPeriodParams) (CreateActiveComponentWatchPeriodRow, error) {
-	row := q.db.QueryRow(ctx, createActiveComponentWatchPeriod,
-		arg.ActorID,
-		arg.ComponentID,
-		arg.WatchLevel,
-		arg.NotificationLocale,
-		arg.NotificationTimezone,
-		arg.NotificationCatalogVersion,
-	)
+	row := q.db.QueryRow(ctx, createActiveComponentWatchPeriod, arg.ActorID, arg.ComponentID, arg.WatchLevel)
 	var i CreateActiveComponentWatchPeriodRow
 	err := row.Scan(
 		&i.ID,
@@ -167,9 +148,6 @@ func (q *Queries) CreateActiveComponentWatchPeriod(ctx context.Context, arg Crea
 		&i.EndedSeq,
 		&i.WatchedAt,
 		&i.UnwatchedAt,
-		&i.NotificationLocale,
-		&i.NotificationTimezone,
-		&i.NotificationCatalogVersion,
 	)
 	return i, err
 }
@@ -204,10 +182,7 @@ SELECT component.id, component.owner_id, component.status,
        existing_watch.watch_level,
        existing_watch.id AS watch_period_id,
        existing_watch.started_seq,
-       existing_watch.watched_at,
-       existing_watch.notification_locale,
-       existing_watch.notification_timezone,
-       existing_watch.notification_catalog_version
+       existing_watch.watched_at
 FROM component_repo.components component
 LEFT JOIN component_repo.component_watch_periods existing_watch
   ON existing_watch.actor_id = $1
@@ -224,17 +199,14 @@ type GetComponentWatchTargetParams struct {
 }
 
 type GetComponentWatchTargetRow struct {
-	ID                         pgtype.UUID
-	OwnerID                    pgtype.UUID
-	Status                     string
-	PublicVersionAvailable     bool
-	WatchLevel                 *string
-	WatchPeriodID              *int64
-	StartedSeq                 *int64
-	WatchedAt                  pgtype.Timestamptz
-	NotificationLocale         *string
-	NotificationTimezone       *string
-	NotificationCatalogVersion *string
+	ID                     pgtype.UUID
+	OwnerID                pgtype.UUID
+	Status                 string
+	PublicVersionAvailable bool
+	WatchLevel             *string
+	WatchPeriodID          *int64
+	StartedSeq             *int64
+	WatchedAt              pgtype.Timestamptz
 }
 
 // Watch 资格检查只读取目标可用性与当前 actor 的关系；不加载 Component 详情、翻译或聚合。
@@ -250,9 +222,6 @@ func (q *Queries) GetComponentWatchTarget(ctx context.Context, arg GetComponentW
 		&i.WatchPeriodID,
 		&i.StartedSeq,
 		&i.WatchedAt,
-		&i.NotificationLocale,
-		&i.NotificationTimezone,
-		&i.NotificationCatalogVersion,
 	)
 	return i, err
 }
@@ -389,6 +358,147 @@ func (q *Queries) ListActiveComponentWatches(ctx context.Context, arg ListActive
 			&i.PublishedAt,
 			&i.WatchLevel,
 			&i.WatchedAt,
+			&i.TranslationMissing,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCurrentComponentWatchFeed = `-- name: ListCurrentComponentWatchFeed :many
+WITH active_watches AS MATERIALIZED (
+    SELECT watch.component_id
+    FROM component_repo.component_watch_periods watch
+    WHERE watch.actor_id = $2
+      AND watch.ended_seq IS NULL
+), feed_page AS MATERIALIZED (
+    SELECT event.id AS event_id,
+           event.event_type,
+           event.component_id,
+           event.component_version_id,
+           event.occurred_at
+    FROM active_watches watch
+    JOIN component_repo.components component
+      ON component.id = watch.component_id
+     AND component.deleted_at IS NULL
+     AND component.status = 'active'
+    -- 全局一页不可能包含同一 Component 排名超过 page_size 的事件；先对每个 active Watch
+    -- 截断到一页保持结果等价，同时强制历史增长时仍按 Component/time 索引做有界探测。
+    JOIN LATERAL (
+        SELECT item.id, item.event_type, item.component_id, item.component_version_id, item.occurred_at
+        FROM component_repo.component_domain_events item
+        WHERE item.component_id = watch.component_id
+          AND item.occurred_at >= $3::timestamptz
+          AND (item.occurred_at, item.id) < (
+              COALESCE($4::timestamptz, 'infinity'::timestamptz),
+              COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+          )
+        ORDER BY item.occurred_at DESC, item.id DESC
+        LIMIT $6
+    ) event ON true
+    ORDER BY event.occurred_at DESC, event.id DESC
+    LIMIT $6
+)
+SELECT page.event_id,
+       page.event_type,
+       page.occurred_at,
+       page.component_id,
+       component.content_kind,
+       (CASE WHEN translation.id IS NULL THEN component.content_locale ELSE translation.locale END)::text
+           AS selected_content_locale,
+       (CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END)::text AS selected_name,
+       component.category,
+       page.component_version_id,
+       version.version_label,
+       version.revision,
+       version.published_at,
+       version.release_note,
+       version.release_note_locale,
+       (component.content_kind = 'official' AND component.content_locale <> $1
+        AND translation.id IS NULL)::boolean AS translation_missing
+FROM feed_page page
+JOIN component_repo.components component ON component.id = page.component_id
+JOIN component_repo.component_versions version
+  ON version.id = page.component_version_id
+ AND version.deleted_at IS NULL
+LEFT JOIN LATERAL (
+    SELECT item.id, item.locale, item.name
+    FROM component_repo.component_translations item
+    WHERE component.content_kind = 'official'
+      AND item.component_id = component.id
+      AND item.locale = $1
+      AND item.translation_status = 'reviewed'
+    LIMIT 1
+) translation ON true
+ORDER BY page.occurred_at DESC, page.event_id DESC
+`
+
+type ListCurrentComponentWatchFeedParams struct {
+	Locale           string
+	ActorID          pgtype.UUID
+	WindowStart      pgtype.Timestamptz
+	CursorOccurredAt pgtype.Timestamptz
+	CursorEventID    pgtype.UUID
+	PageSize         int32
+}
+
+type ListCurrentComponentWatchFeedRow struct {
+	EventID               pgtype.UUID
+	EventType             string
+	OccurredAt            pgtype.Timestamptz
+	ComponentID           pgtype.UUID
+	ContentKind           string
+	SelectedContentLocale string
+	SelectedName          string
+	Category              *string
+	ComponentVersionID    pgtype.UUID
+	VersionLabel          string
+	Revision              int32
+	PublishedAt           pgtype.Timestamptz
+	ReleaseNote           *string
+	ReleaseNoteLocale     *string
+	TranslationMissing    bool
+}
+
+// Feed 成员资格在读取时按当前 active Watch 计算：发布早于 Watch 也可出现，Unwatch 后立即消失。
+// actor-scoped active partial index 先把候选限定为当前规划的最多 1,000 个 Component；页面固定后才读取
+// Component 翻译与 Version 展示字段，closed Watch 历史不参与任何执行节点。
+func (q *Queries) ListCurrentComponentWatchFeed(ctx context.Context, arg ListCurrentComponentWatchFeedParams) ([]ListCurrentComponentWatchFeedRow, error) {
+	rows, err := q.db.Query(ctx, listCurrentComponentWatchFeed,
+		arg.Locale,
+		arg.ActorID,
+		arg.WindowStart,
+		arg.CursorOccurredAt,
+		arg.CursorEventID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCurrentComponentWatchFeedRow{}
+	for rows.Next() {
+		var i ListCurrentComponentWatchFeedRow
+		if err := rows.Scan(
+			&i.EventID,
+			&i.EventType,
+			&i.OccurredAt,
+			&i.ComponentID,
+			&i.ContentKind,
+			&i.SelectedContentLocale,
+			&i.SelectedName,
+			&i.Category,
+			&i.ComponentVersionID,
+			&i.VersionLabel,
+			&i.Revision,
+			&i.PublishedAt,
+			&i.ReleaseNote,
+			&i.ReleaseNoteLocale,
 			&i.TranslationMissing,
 		); err != nil {
 			return nil, err

@@ -35,7 +35,7 @@ type WatchFilters = {
 
 const emptyFilters: WatchFilters = { query: '', category: '' };
 
-/** ComponentWatchListPage 展示当前用户的 active Watch，并始终通过服务端 cursor 继续分页。 */
+/** ComponentWatchListPage 只管理 active Watch；发布动态已迁入组件广场的个人订阅页签。 */
 export function ComponentWatchListPage() {
   const tr = useAppTranslation();
   const contentLocale = resolvedLocale();
@@ -132,8 +132,8 @@ export function ComponentWatchListPage() {
         <div className="component-library-heading">
           <span className="component-library-heading-icon"><Bell aria-hidden="true" /></span>
           <div>
-            <h1>{tr('componentRepo:mySubscriptions')}</h1>
-            <p>{tr('componentRepo:mySubscriptionsDescription')}</p>
+            <h1>{tr('componentRepo:manageSubscriptions')}</h1>
+            <p>{tr('componentRepo:manageSubscriptionsDescription')}</p>
           </div>
         </div>
         <nav aria-label={tr('componentRepo:componentLibrarySections')} className="component-library-tabs">
@@ -143,7 +143,7 @@ export function ComponentWatchListPage() {
           </Link>
           <span aria-current="page" className="component-library-tab component-library-tab-active">
             <Bell aria-hidden="true" />
-            {tr('componentRepo:mySubscriptions')}
+            {tr('componentRepo:manageSubscriptions')}
           </span>
         </nav>
       </header>
@@ -290,7 +290,8 @@ export function ComponentWatchListPage() {
   );
 }
 
-function mergeWatchItems(
+/** 合并 Watch cursor 页面并保留服务端顺序；重复 Component 只保留首次出现的权威投影。 */
+export function mergeWatchItems(
   existing: ComponentWatchListItemResponse[],
   incoming: ComponentWatchListItemResponse[],
 ): ComponentWatchListItemResponse[] {

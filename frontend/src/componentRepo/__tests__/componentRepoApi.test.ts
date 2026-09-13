@@ -3,8 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addComponentToGroup,
   deleteComponent,
+  listComponentGroupComponents,
+  listComponentGroupMembershipCandidates,
   listComponentGroups,
   listComponentImports,
+  listComponentPublicFeed,
   listComponents,
   searchComponentGroupComponents,
   deleteComponentVersion,
@@ -15,8 +18,10 @@ import {
   loadComponentVersionParts,
   loadComponentVersionPreview,
   loadPartPreview,
+  listComponentVersions,
   publishVersion,
   listComponentStars,
+  listComponentWatchFeed,
   listComponentWatches,
   starComponent,
   unstarComponent,
@@ -105,6 +110,74 @@ describe('Component Repo Go API adapter', () => {
     );
   });
 
+  it('reads every group-member page instead of treating the first 100 rows as complete', async () => {
+    vi.stubGlobal('window', { location: { origin: 'http://localhost' } });
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({ id: `component-${index + 1}` }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ items: firstPage }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ id: 'component-101' }] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const members = await listComponentGroupComponents('group-1');
+
+    expect(members).toHaveLength(101);
+    expect(members[members.length - 1]?.id).toBe('component-101');
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get('page')).toBe('1');
+    expect(new URL(String(fetchMock.mock.calls[1]?.[0])).searchParams.get('page')).toBe('2');
+  });
+
+  it('merges paged owned, starred, and existing group candidates and exposes continuation', async () => {
+    vi.stubGlobal('window', { location: { origin: 'http://localhost' } });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        items: [{ id: 'owned-1' }], total: 21, page: 1, pageSize: 20, totalPages: 2, statusCounts: {},
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        items: [{ id: 'shared-1' }], total: 1, page: 1, pageSize: 20, totalPages: 1, relationshipTotal: 1,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        items: [{ id: 'shared-1' }, { id: 'member-1' }], total: 2, page: 1, pageSize: 20,
+        totalPages: 1, statusCounts: {},
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await listComponentGroupMembershipCandidates({
+      rootGroupId: 'root-1', groupId: 'group-1', query: 'car', page: 1, pageSize: 20,
+    });
+
+    expect(result.items.map((item) => item.id)).toEqual(['owned-1', 'shared-1', 'member-1']);
+    expect(result.hasMore).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get('query')).toBe('car');
+    expect(new URL(String(fetchMock.mock.calls[1]?.[0])).searchParams.get('query')).toBe('car');
+    expect(new URL(String(fetchMock.mock.calls[2]?.[0])).searchParams.get('query')).toBe('car');
+  });
+
+  it('reads the 101st version before applying the optional status filter', async () => {
+    vi.stubGlobal('window', { location: { origin: 'http://localhost' } });
+    const version = (index: number, status: string) => ({
+      id: `version-${index}`, componentId: 'component-1', componentCandidateId: null,
+      version: `1.0.${index}`, revision: index, status, sourceArtifactId: 'artifact-1',
+      exchangeArtifactId: null, sceneSnapshotId: 'snapshot-1', parserVersion: 'parser-v1',
+      partLibraryVersionId: null, validationReportId: null, interfaceSignature: '',
+      structureHash: '', geometryHash: '', previewArtifactId: null, previewStatus: 'pending',
+      previewGeneratorVersion: null, previewFailureCode: null, previewFailureParams: {},
+      releaseNote: null, releaseNoteLocale: null, metadata: {},
+      createdAt: '2026-08-12T00:00:00Z', publishedAt: null,
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        items: Array.from({ length: 100 }, (_, index) => version(index + 1, 'published')),
+      }))
+      .mockResolvedValueOnce(jsonResponse({ items: [version(101, 'draft')] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const drafts = await listComponentVersions('component-1', 'draft');
+
+    expect(drafts.map((item) => item.id)).toEqual(['version-101']);
+    expect(new URL(String(fetchMock.mock.calls[1]?.[0])).searchParams.get('page')).toBe('2');
+  });
+
   it('uses the Go Star contract for list, star, and unstar', async () => {
     vi.stubGlobal('window', {
       location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
@@ -145,8 +218,10 @@ describe('Component Repo Go API adapter', () => {
       location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
     });
     const watchPage = { items: [], nextCursor: 'next-watch-cursor' };
+    const feedPage = { items: [], nextCursor: 'next-feed-cursor', windowStart: '2026-08-01T00:00:00Z' };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse(watchPage))
+      .mockResolvedValueOnce(jsonResponse(feedPage))
       .mockResolvedValueOnce(jsonResponse({
         componentId: 'component-1', watching: true, level: 'releases_only', watchedAt: '2026-08-31T00:00:00Z',
       }))
@@ -166,21 +241,27 @@ describe('Component Repo Go API adapter', () => {
     expect(listURL.searchParams.get('query')).toBe('castle');
     expect(listURL.searchParams.get('category')).toBe('building');
 
+    await expect(listComponentWatchFeed({
+      since: '2026-08-01T00:00:00Z', limit: 20, cursor: 'previous-feed-cursor',
+    })).resolves.toEqual(feedPage);
+    const feedURL = new URL(String(fetchMock.mock.calls[1]?.[0]));
+    expect(feedURL.pathname).toBe('/api/v1/component-watch-feed');
+    expect(feedURL.searchParams.get('since')).toBe('2026-08-01T00:00:00Z');
+    expect(feedURL.searchParams.get('limit')).toBe('20');
+    expect(feedURL.searchParams.get('cursor')).toBe('previous-feed-cursor');
+
     await watchComponent('component-1');
     expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
+      3,
       '/api/v1/components/component-1/watch',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({
-          level: 'releases_only', locale: 'zh-CN', timezone: 'UTC',
-          catalogVersion: 'frontend-2026.09.06.1',
-        }),
+        body: JSON.stringify({ level: 'releases_only' }),
       }),
     );
     await unwatchComponent('component-1');
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
+      4,
       '/api/v1/components/component-1/watch',
       expect.objectContaining({ method: 'DELETE' }),
     );
@@ -200,6 +281,22 @@ describe('Component Repo Go API adapter', () => {
     expect(url.searchParams.get('query')).toBe('train');
     expect(url.searchParams.get('status')).toBe('active');
     expect(url.searchParams.get('page')).toBe('2');
+  });
+
+  it('reads the public Component event feed with an opaque cursor', async () => {
+    vi.stubGlobal('window', {
+      location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
+    });
+    const page = { items: [], nextCursor: 'next-feed-cursor' };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(page));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listComponentPublicFeed({ limit: 20, cursor: 'cursor-1', query: 'train' })).resolves.toEqual(page);
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe('/api/v1/component-public-feed');
+    expect(url.searchParams.get('limit')).toBe('20');
+    expect(url.searchParams.get('cursor')).toBe('cursor-1');
+    expect(url.searchParams.get('query')).toBe('train');
   });
 
   it('reads owner-scoped import history with component and aggregate status filters', async () => {

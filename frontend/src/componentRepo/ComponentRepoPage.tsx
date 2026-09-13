@@ -7,80 +7,88 @@ import {
   ChevronDown,
   ChevronRight,
   FileClock,
-  FileUp,
   Folder,
   FolderOpen,
   Layers3,
   LoaderCircle,
   PackageCheck,
-  Pencil,
-  Plus,
   RefreshCw,
   Search,
   Star,
-  Trash2,
   Upload,
   X,
 } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import appConfig from '../app/appConfig';
 import { resolvedLocale, useAppTranslation, useDynamicTranslation, type TranslationKey } from '../i18n';
-import { formatDateTime, formatNumber } from '../i18n/formatters';
+import { formatNumber } from '../i18n/formatters';
 import {
-  addComponentToGroup,
-  createComponentGroup,
-  createComponentImportWithProgress,
-  type ComponentImportUploadCompleteResponse,
   deleteComponentGroup,
-  listComponentGroupComponents,
-  listComponentGroupIds,
   listComponentGroups,
+  listComponentPublicFeed,
   listComponentStars,
-  listComponents,
   listComponentVersions,
   moveComponentGroup,
-  removeComponentFromGroup,
   searchComponentGroupComponents,
   starComponent,
   unstarComponent,
-  updateComponentGroup,
   type ComponentGroupResponse,
   type ComponentGroupTreeResponse,
   type ComponentResponse,
   type ComponentVersionResponse,
 } from './componentRepoApi';
-import { ComponentVersionActions } from './ComponentVersionActions';
+import {
+  ComponentGroupDialog,
+  ComponentGroupMembershipDialog,
+  ComponentGroupSidebar,
+  GroupComponentMembershipDialog,
+} from './ComponentGroupControls';
+import { ComponentPublicFeedCard } from './ComponentPublicFeedCard';
+import {
+  buildLibraryItems,
+  ComponentLogicalSize,
+  formatDate,
+  routeFor,
+  shortId,
+  StatusPill,
+  statusesForFilter,
+  SummaryCard,
+  sumStatuses,
+  VersionDropdown,
+  type LibraryFilter,
+} from './ComponentRepoPresenters';
+import { ComponentUploadDialog } from './ComponentUploadDialog';
+import { ComponentWatchFeedPanel } from './ComponentWatchFeedPanel';
+import {
+  appendPublicFeedItems,
+  projectPublicFeedItems,
+  type PublicFeedComponentResponse,
+} from './componentPublicFeed';
 
 type ComponentRepoListState = {
   status: 'loading' | 'ready' | 'error';
-  components: ComponentResponse[];
+  components: PublicFeedComponentResponse[];
   error: string | null;
   total: number;
   page: number;
   totalPages: number;
   statusCounts: Record<string, number>;
   relationshipTotal: number;
+  nextCursor: string | null;
+  loadingMore: boolean;
 };
 
-type UploadState = 'idle' | 'uploading' | 'error';
-type LibraryFilter = 'all' | 'draft' | 'published';
 type LibraryView = 'library' | 'starred' | 'community';
 
 const componentSearchPageSize = 20;
 const componentSearchDebounceMs = 300;
 
-type LibraryItem = {
-  id: string;
-  name: string;
-  status: string;
-  createdAt: string;
-  starredAt?: string;
-  data: ComponentResponse;
-};
-
 /** 复用分页列表展示公开广场或个人仓库；广场不加载个人分组，也不提供导入入口。 */
 export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }) {
   const isPlaza = mode === 'plaza';
+  const [searchParams] = useSearchParams();
+  const plazaTab = isPlaza && searchParams.get('tab') === 'subscriptions' ? 'subscriptions' : 'public';
+  const isPlazaSubscriptions = isPlaza && plazaTab === 'subscriptions';
   const navigate = useNavigate();
   const tr = useAppTranslation();
   const trDynamic = useDynamicTranslation();
@@ -94,6 +102,8 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
     totalPages: 0,
     statusCounts: {},
     relationshipTotal: 0,
+    nextCursor: null,
+    loadingMore: false,
   });
   const [queries, setQueries] = React.useState<string[]>([]);
   const [queryDraft, setQueryDraft] = React.useState('');
@@ -106,6 +116,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionNotice, setActionNotice] = React.useState<string | null>(null);
   const [selectedComponent, setSelectedComponent] = React.useState<ComponentResponse | null>(null);
+  const [selectedComponentKey, setSelectedComponentKey] = React.useState<string | null>(null);
   const [versions, setVersions] = React.useState<ComponentVersionResponse[]>([]);
   const [versionState, setVersionState] = React.useState<'idle' | 'loading' | 'error'>('idle');
   const [groupTree, setGroupTree] = React.useState<ComponentGroupTreeResponse | null>(null);
@@ -113,6 +124,8 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
   const selectedGroupIdRef = React.useRef<string | null>(null);
   const groupRequestIdRef = React.useRef(0);
   const searchRequestIdRef = React.useRef(0);
+  const feedSentinelRef = React.useRef<HTMLDivElement | null>(null);
+  const feedLoadingRef = React.useRef(false);
   const [groupEditor, setGroupEditor] = React.useState<{
     mode: 'create' | 'edit';
     group?: ComponentGroupResponse;
@@ -149,9 +162,9 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
   }, []);
 
   const refreshLibrary = React.useCallback(() => {
-    void loadLibrary();
+    if (!isPlaza) void loadLibrary();
     setRefreshRevision((current) => current + 1);
-  }, [loadLibrary]);
+  }, [isPlaza, loadLibrary]);
 
   const selectGroup = React.useCallback((groupId: string) => {
     selectedGroupIdRef.current = groupId;
@@ -169,10 +182,19 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
   }, [contentLocale, isPlaza, loadLibrary]);
 
   React.useEffect(() => {
+    if (isPlazaSubscriptions) return undefined;
     if (libraryView === 'library' && !selectedGroupId) return undefined;
     const requestId = ++searchRequestIdRef.current;
     const timeoutId = window.setTimeout(() => {
-      setState((current) => ({ ...current, status: 'loading', error: null }));
+      feedLoadingRef.current = false;
+      setState((current) => ({
+        ...current,
+        status: 'loading',
+        components: libraryView === 'community' ? [] : current.components,
+        error: null,
+        nextCursor: libraryView === 'community' ? null : current.nextCursor,
+        loadingMore: false,
+      }));
       const request = libraryView === 'starred'
         ? listComponentStars({
           page,
@@ -185,15 +207,17 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
           statusCounts: { active: result.total },
         }))
         : libraryView === 'community'
-          ? listComponents({
-            page,
-            pageSize: componentSearchPageSize,
+          ? listComponentPublicFeed({
+            limit: componentSearchPageSize,
             query: queries.join(' '),
-            status: 'active',
           }).then((result) => ({
-            ...result,
-            statusCounts: { active: result.total, draft: 0 },
+            items: projectPublicFeedItems(result.items),
+            total: result.items.length,
+            page: 1,
+            totalPages: 0,
+            statusCounts: { active: result.items.length, draft: 0 },
             relationshipTotal: 0,
+            nextCursor: result.nextCursor,
           }))
           : searchComponentGroupComponents(selectedGroupId!, {
           queries,
@@ -213,6 +237,8 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
             totalPages: result.totalPages,
             statusCounts: result.statusCounts,
             relationshipTotal: result.relationshipTotal,
+            nextCursor: 'nextCursor' in result ? result.nextCursor : null,
+            loadingMore: false,
           });
         })
         .catch((error: Error) => {
@@ -228,7 +254,61 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
       window.clearTimeout(timeoutId);
       searchRequestIdRef.current += 1;
     };
-  }, [category, contentLocale, filter, libraryView, page, queries, refreshRevision, selectedGroupId]);
+  }, [category, contentLocale, filter, isPlazaSubscriptions, libraryView, page, queries, refreshRevision, selectedGroupId]);
+
+  // 广场使用事件游标增量追加；请求完成前保持单飞，搜索或刷新会使旧请求 ID 失效。
+  const loadMoreCommunity = React.useCallback(async () => {
+    if (libraryView !== 'community' || !state.nextCursor || feedLoadingRef.current || state.status !== 'ready') return;
+    const requestId = searchRequestIdRef.current;
+    const cursor = state.nextCursor;
+    feedLoadingRef.current = true;
+    setState((current) => ({ ...current, loadingMore: true }));
+    try {
+      const result = await listComponentPublicFeed({
+        limit: componentSearchPageSize,
+        cursor,
+        query: queries.join(' '),
+      });
+      if (requestId !== searchRequestIdRef.current) {
+        feedLoadingRef.current = false;
+        return;
+      }
+      feedLoadingRef.current = false;
+      setState((current) => {
+        if (current.nextCursor !== cursor) return current;
+        const components = appendPublicFeedItems(current.components, result.items);
+        return {
+          ...current,
+          components,
+          total: components.length,
+          statusCounts: { active: components.length, draft: 0 },
+          nextCursor: result.nextCursor,
+          loadingMore: false,
+        };
+      });
+    } catch (error) {
+      if (requestId !== searchRequestIdRef.current) {
+        feedLoadingRef.current = false;
+        return;
+      }
+      feedLoadingRef.current = false;
+      setState((current) => ({
+        ...current,
+        loadingMore: false,
+        error: error instanceof Error ? error.message : appConfig.texts.loadFailed,
+      }));
+    }
+  }, [libraryView, queries, state.nextCursor, state.status]);
+
+  React.useEffect(() => {
+    const target = feedSentinelRef.current;
+    if (libraryView !== 'community' || !target || !state.nextCursor || typeof IntersectionObserver === 'undefined') return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void loadMoreCommunity();
+    }, { rootMargin: '240px 0px' });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [libraryView, loadMoreCommunity, state.nextCursor]);
 
   const items = React.useMemo(
     () => buildLibraryItems(state.components),
@@ -277,7 +357,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
       setActionNotice(tr(nextStarred ? 'componentRepo:componentStarred' : 'componentRepo:componentUnstarred'));
       if (shouldMoveToPreviousPage) setPage((current) => Math.max(1, current - 1));
       setRefreshRevision((current) => current + 1);
-      void loadLibrary();
+      if (!isPlaza) void loadLibrary();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : appConfig.texts.loadFailed);
       setRefreshRevision((current) => current + 1);
@@ -311,12 +391,14 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
     }
   };
 
-  const toggleVersions = async (component: ComponentResponse) => {
-    if (selectedComponent?.id === component.id) {
+  const toggleVersions = async (component: ComponentResponse, itemKey: string) => {
+    if (selectedComponentKey === itemKey) {
       setSelectedComponent(null);
+      setSelectedComponentKey(null);
       return;
     }
     setSelectedComponent(component);
+    setSelectedComponentKey(itemKey);
     setVersions([]);
     setVersionState('loading');
     try {
@@ -369,9 +451,27 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
             <Bell aria-hidden="true" />
             {tr('componentRepo:mySubscriptions')}
           </Link>
-        </nav> : null}
+        </nav> : <nav aria-label={tr('componentRepo:plazaFeedTabs')} className="component-library-tabs">
+          <Link
+            aria-current={plazaTab === 'public' ? 'page' : undefined}
+            className={`component-library-tab ${plazaTab === 'public' ? 'component-library-tab-active' : ''}`}
+            to={routeFor('modelPlaza')}
+          >
+            <Boxes aria-hidden="true" />
+            {tr('componentRepo:publicFeedTab')}
+          </Link>
+          <Link
+            aria-current={plazaTab === 'subscriptions' ? 'page' : undefined}
+            className={`component-library-tab ${plazaTab === 'subscriptions' ? 'component-library-tab-active' : ''}`}
+            to={`${routeFor('modelPlaza')}?tab=subscriptions`}
+          >
+            <Bell aria-hidden="true" />
+            {tr('componentRepo:personalSubscriptionsTab')}
+          </Link>
+        </nav>}
       </header>
 
+      {isPlazaSubscriptions ? <ComponentWatchFeedPanel /> : <>
       {!isPlaza ? <section className="component-library-summary" aria-label={tr('componentRepo:componentStatusOverview')}>
         <SummaryCard icon={<Boxes />} label={tr('componentRepo:allComponents')} tone="blue" value={stats.total} />
         <SummaryCard icon={<Layers3 />} label={tr('componentRepo:draft')} tone="purple" value={stats.draft} />
@@ -385,9 +485,9 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
               <h2>{libraryView === 'starred'
                 ? tr('componentRepo:myStarredComponents')
                 : libraryView === 'community'
-                  ? tr('componentRepo:communityLibrary')
+                  ? tr('componentRepo:communityFeed')
                   : selectedGroupName}</h2>
-              <span>{stats.total}</span>
+              {libraryView === 'community' ? null : <span>{stats.total}</span>}
             </div>
             <p>{tr(libraryView === 'starred'
               ? 'componentRepo:starredComponentsDescription'
@@ -428,7 +528,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
               event.preventDefault();
               const nextQuery = queryDraft.trim();
               if (!nextQuery) return;
-              // 个人分组支持多个 AND 条件；公开目录与收藏 API 是单查询契约，因此新条件替换旧条件。
+              // 个人分组支持多个 AND 条件；公共 Feed 与收藏 API 是单查询契约，因此新条件替换旧条件。
               setQueries((current) => libraryView !== 'library'
                 ? [nextQuery]
                 : current.some(
@@ -511,7 +611,19 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
         {actionError ? <div className="component-library-alert"><AlertCircle />{actionError}</div> : null}
         {actionNotice ? <div className="component-library-notice"><CheckCircle2 />{actionNotice}</div> : null}
 
-        <div className="component-library-table" role="table" aria-label={tr('componentRepo:myComponentList')}>
+        {libraryView === 'community' ? (
+          <div className="component-public-feed" aria-label={tr('componentRepo:communityFeed')} role="feed">
+            {state.components.map((item) => (
+              <ComponentPublicFeedCard
+                detailPath={routeFor('componentRepoDetail').replace(':componentId', encodeURIComponent(item.id))}
+                item={item}
+                key={item.feedEventId}
+                onToggleStar={(component) => void toggleStar(component)}
+                starPending={starMutations.has(item.id)}
+              />
+            ))}
+          </div>
+        ) : <div className="component-library-table" role="table" aria-label={tr('componentRepo:myComponentList')}>
           <div className="component-library-table-head" role="row">
             <span role="columnheader">{tr('componentRepo:component')}</span>
             <span role="columnheader">{tr('componentRepo:occupiedSize')}</span>
@@ -520,7 +632,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
             <span role="columnheader">{tr('componentRepo:actions')}</span>
           </div>
           {items.map((item) => (
-            <article className="component-library-row" key={item.id} role="row">
+            <article className="component-library-row" key={item.key} role="row">
               <div className="component-library-item-main" role="cell">
                 <span className="component-library-file-icon component-library-file-icon-blue">
                   <Boxes />
@@ -553,10 +665,10 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
                   {item.data.ownedByActor || item.data.starredByActor || (libraryView === 'library' && selectedGroup?.groupType === 'custom') ? <button onClick={() => setMembershipComponent(item.data)} type="button">
                     <Layers3 aria-hidden="true" />{tr('componentRepo:manageGroups')}
                   </button> : null}
-                  <button aria-expanded={selectedComponent?.id === item.id} onClick={() => void toggleVersions(item.data)} type="button">
+                  <button aria-expanded={selectedComponentKey === item.key} onClick={() => void toggleVersions(item.data, item.key)} type="button">
                     {tr('componentRepo:viewVersions')}<ChevronDown aria-hidden="true" />
                   </button>
-                  {selectedComponent?.id === item.id ? (
+                  {selectedComponentKey === item.key && selectedComponent?.id === item.id ? (
                     <VersionDropdown
                       component={item.data}
                       onDeleted={(deletedVersion) => {
@@ -575,7 +687,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
               </div>
             </article>
           ))}
-        </div>
+        </div>}
 
         {state.status === 'loading' && items.length === 0 ? (
           <div className="component-library-empty"><LoaderCircle className="component-library-spin" /><strong>{tr('componentRepo:loadingComponents')}</strong></div>
@@ -590,7 +702,11 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
                   ? 'componentRepo:starredComponentsUnavailable'
                   : 'componentRepo:noStarredComponents'
               : stats.total === 0
-                ? 'componentRepo:noComponentsUploaded'
+                ? libraryView === 'community' && queries.length > 0
+                  ? 'componentRepo:noMatchingComponents'
+                  : libraryView === 'community'
+                    ? 'componentRepo:noCommunityUpdates'
+                    : 'componentRepo:noComponentsUploaded'
                 : 'componentRepo:noMatchingComponents')}</strong>
             <p>{tr(libraryView === 'starred'
               ? queries.length > 0 || category.trim() !== ''
@@ -599,12 +715,23 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
                   ? 'componentRepo:starredComponentsUnavailableDescription'
                   : 'componentRepo:browseComponentsToStar'
               : stats.total === 0
-                ? 'componentRepo:uploadYourFirstComponentToStartBuildingYourLibrary'
+                ? libraryView === 'community' && queries.length > 0
+                  ? 'componentRepo:tryChangingTheSearchTermOrStatusFilter'
+                  : libraryView === 'community'
+                    ? 'componentRepo:noCommunityUpdatesDescription'
+                    : 'componentRepo:uploadYourFirstComponentToStartBuildingYourLibrary'
                 : 'componentRepo:tryChangingTheSearchTermOrStatusFilter')}</p>
             {libraryView === 'library' && stats.total === 0 ? <button onClick={() => setIsUploadOpen(true)} type="button">{tr('componentRepo:uploadComponent')}</button> : null}
           </div>
         ) : null}
-        {state.totalPages > 1 ? (
+        {libraryView === 'community' && state.nextCursor ? (
+          <div className="component-library-pagination" ref={feedSentinelRef}>
+            <button disabled={state.loadingMore} onClick={() => void loadMoreCommunity()} type="button">
+              {tr(state.loadingMore ? 'componentRepo:loadingMore' : 'componentRepo:loadMore')}
+            </button>
+          </div>
+        ) : null}
+        {libraryView !== 'community' && state.totalPages > 1 ? (
           <nav aria-label={tr('componentRepo:componentSearchPagination')} className="component-library-pagination">
             <button disabled={state.status === 'loading' || state.page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))} type="button">
               {tr('componentRepo:previousPage')}
@@ -664,776 +791,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
           rootGroup={groupTree.root}
         />
       ) : null}
+      </>}
     </section>
   );
-}
-
-function ComponentGroupSidebar({
-  onAddComponents,
-  onCreate,
-  onDelete,
-  onEdit,
-  onMove,
-  onSelect,
-  selectedGroupId,
-  tree,
-}: {
-  onAddComponents: (group: ComponentGroupResponse) => void;
-  onCreate: (parentGroupId: string) => void;
-  onDelete: (group: ComponentGroupResponse) => void;
-  onEdit: (group: ComponentGroupResponse) => void;
-  onMove: (groupId: string, parentGroupId: string, position: number) => void;
-  onSelect: (groupId: string) => void;
-  selectedGroupId: string | null;
-  tree: ComponentGroupTreeResponse | null;
-}) {
-  const tr = useAppTranslation();
-  const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
-  const [openMenuId, setOpenMenuId] = React.useState<string | null>(null);
-  const [draggingId, setDraggingId] = React.useState<string | null>(null);
-  const [dropTarget, setDropTarget] = React.useState<{
-    groupId: string;
-    position: 'before' | 'inside' | 'after';
-  } | null>(null);
-
-  React.useEffect(() => {
-    if (tree) {
-      setExpanded((current) => new Set([...current, tree.root.id]));
-    }
-  }, [tree]);
-
-  React.useEffect(() => {
-    if (!openMenuId) return undefined;
-    const closeMenu = () => setOpenMenuId(null);
-    document.addEventListener('click', closeMenu);
-    return () => document.removeEventListener('click', closeMenu);
-  }, [openMenuId]);
-
-  if (!tree) {
-    return (
-      <aside className="component-group-sidebar">
-        <div className="component-group-loading"><LoaderCircle className="component-library-spin" />{tr('componentRepo:loadingGroups')}</div>
-      </aside>
-    );
-  }
-
-  const childrenByParent = new Map<string, ComponentGroupResponse[]>();
-  for (const group of tree.groups) {
-    if (group.parentGroupId) {
-      const siblings = childrenByParent.get(group.parentGroupId) ?? [];
-      siblings.push(group);
-      childrenByParent.set(group.parentGroupId, siblings);
-    }
-  }
-  for (const siblings of childrenByParent.values()) {
-    siblings.sort((left, right) => left.sortOrder - right.sortOrder || left.createdAt.localeCompare(right.createdAt));
-  }
-  const invalidDropIds = draggingId
-    ? new Set([draggingId, ...groupDescendantIds(tree.groups, draggingId)])
-    : new Set<string>();
-
-  const renderNode = (group: ComponentGroupResponse, depth: number): React.ReactNode => {
-    const children = childrenByParent.get(group.id) ?? [];
-    const isRoot = group.groupType === 'root';
-    const isExpanded = expanded.has(group.id);
-    const dropPosition = dropTarget?.groupId === group.id ? dropTarget.position : null;
-    const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-      if (!draggingId || invalidDropIds.has(group.id)) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = 'move';
-      if (isRoot) {
-        setDropTarget({ groupId: group.id, position: 'inside' });
-        return;
-      }
-      const bounds = event.currentTarget.getBoundingClientRect();
-      const relativeY = (event.clientY - bounds.top) / bounds.height;
-      const position = relativeY < 0.25
-        ? 'before'
-        : relativeY > 0.75
-          ? 'after'
-          : 'inside';
-      setDropTarget({ groupId: group.id, position });
-    };
-    const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!draggingId || !dropPosition || invalidDropIds.has(group.id)) return;
-      let parentGroupId = group.id;
-      let position = (childrenByParent.get(group.id) ?? [])
-        .filter((item) => item.id !== draggingId).length;
-      if (dropPosition !== 'inside' && group.parentGroupId) {
-        parentGroupId = group.parentGroupId;
-        const siblings = (childrenByParent.get(parentGroupId) ?? [])
-          .filter((item) => item.id !== draggingId);
-        const targetIndex = siblings.findIndex((item) => item.id === group.id);
-        position = targetIndex + (dropPosition === 'after' ? 1 : 0);
-      }
-      setExpanded((current) => new Set([...current, parentGroupId]));
-      setDraggingId(null);
-      setDropTarget(null);
-      onMove(draggingId, parentGroupId, position);
-    };
-    return (
-      <React.Fragment key={group.id}>
-        <div
-          aria-grabbed={!isRoot ? draggingId === group.id : undefined}
-          className={[
-            'component-group-node',
-            selectedGroupId === group.id ? 'component-group-node-selected' : '',
-            draggingId === group.id ? 'component-group-node-dragging' : '',
-            dropPosition ? `component-group-node-drop-${dropPosition}` : '',
-          ].filter(Boolean).join(' ')}
-          draggable={!isRoot}
-          onDragEnd={() => {
-            setDraggingId(null);
-            setDropTarget(null);
-          }}
-          onDragOver={handleDragOver}
-          onDragStart={(event) => {
-            if (isRoot) return;
-            event.dataTransfer.effectAllowed = 'move';
-            event.dataTransfer.setData('text/plain', group.id);
-            setDraggingId(group.id);
-            setOpenMenuId(null);
-          }}
-          onDrop={handleDrop}
-          style={{ paddingInlineStart: `${10 + depth * 16}px` }}
-          title={!isRoot ? tr('componentRepo:dragGroupHint') : undefined}
-        >
-          <button
-            aria-label={tr(isExpanded ? 'componentRepo:collapseGroup' : 'componentRepo:expandGroup')}
-            className="component-group-expander"
-            disabled={children.length === 0}
-            onClick={() => setExpanded((current) => {
-              const next = new Set(current);
-              if (next.has(group.id)) next.delete(group.id);
-              else next.add(group.id);
-              return next;
-            })}
-            type="button"
-          >
-            {children.length > 0 ? (isExpanded ? <ChevronDown /> : <ChevronRight />) : <span />}
-          </button>
-          <button className="component-group-select" onClick={() => onSelect(group.id)} type="button">
-            {isRoot ? <FolderOpen /> : <Folder />}
-            <span>{isRoot ? tr('componentRepo:groupRootName') : group.name}</span>
-            <em>{group.directComponentCount}</em>
-          </button>
-          <div className="component-group-actions">
-            <div className="component-group-add-menu">
-              <button
-                aria-expanded={openMenuId === group.id}
-                aria-haspopup="menu"
-                aria-label={tr('componentRepo:addToGroup')}
-                className="component-group-add-button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setOpenMenuId((current) => current === group.id ? null : group.id);
-                }}
-                title={tr('componentRepo:addToGroup')}
-                type="button"
-              >
-                <Plus />
-              </button>
-              {openMenuId === group.id ? (
-                <div className="component-group-action-menu" onClick={(event) => event.stopPropagation()} role="menu">
-                  <button onClick={() => {
-                    setOpenMenuId(null);
-                    onCreate(group.id);
-                  }} role="menuitem" type="button">
-                    <Folder aria-hidden="true" />
-                    {tr('componentRepo:createChildGroup')}
-                  </button>
-                  <button
-                    disabled={isRoot}
-                    onClick={() => {
-                      setOpenMenuId(null);
-                      onAddComponents(group);
-                    }}
-                    role="menuitem"
-                    title={isRoot ? tr('componentRepo:rootGroupIncludesAllComponents') : undefined}
-                    type="button"
-                  >
-                    <Layers3 aria-hidden="true" />
-                    {tr('componentRepo:addComponentsToGroup')}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-            {!isRoot ? (
-              <>
-                <button aria-label={tr('componentRepo:editGroup')} onClick={() => onEdit(group)} title={tr('componentRepo:editGroup')} type="button"><Pencil /></button>
-                <button aria-label={tr('componentRepo:deleteGroup')} onClick={() => onDelete(group)} title={tr('componentRepo:deleteGroup')} type="button"><Trash2 /></button>
-              </>
-            ) : null}
-          </div>
-        </div>
-        {isExpanded ? children.map((child) => renderNode(child, depth + 1)) : null}
-      </React.Fragment>
-    );
-  };
-
-  return (
-    <aside className="component-group-sidebar">
-      <header><h3>{tr('componentRepo:componentGroups')}</h3></header>
-      <nav aria-label={tr('componentRepo:componentGroups')}>{renderNode(tree.root, 0)}</nav>
-      {tree.groups.length === 0 ? <p className="component-group-empty">{tr('componentRepo:noCustomGroups')}</p> : null}
-    </aside>
-  );
-}
-
-function ComponentGroupDialog({
-  editor,
-  onClose,
-  onSaved,
-  tree,
-}: {
-  editor: { mode: 'create' | 'edit'; group?: ComponentGroupResponse; parentGroupId: string };
-  onClose: () => void;
-  onSaved: (groupId: string) => void;
-  tree: ComponentGroupTreeResponse;
-}) {
-  const tr = useAppTranslation();
-  const [name, setName] = React.useState(editor.group?.name ?? '');
-  const [parentGroupId, setParentGroupId] = React.useState(editor.parentGroupId);
-  const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const excludedIds = editor.group
-    ? new Set([editor.group.id, ...groupDescendantIds(tree.groups, editor.group.id)])
-    : new Set<string>();
-  const parentOptions = [tree.root, ...tree.groups].filter((group) => !excludedIds.has(group.id));
-
-  const save = async () => {
-    if (!name.trim()) {
-      setError(tr('componentRepo:groupNameRequired'));
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      const group = editor.mode === 'create'
-        ? await createComponentGroup({
-          parentGroupId,
-          name: name.trim(),
-          contentLocale: resolvedLocale(),
-        })
-        : await updateComponentGroup(editor.group!.id, {
-          name: name.trim(),
-          contentLocale: resolvedLocale(),
-        });
-      onSaved(group.id);
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : appConfig.texts.loadFailed);
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="component-upload-backdrop" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && !saving) onClose();
-    }}>
-      <section aria-labelledby="component-group-dialog-title" aria-modal="true" className="component-group-dialog" role="dialog">
-        <header>
-          <div>
-            <Folder aria-hidden="true" />
-            <h2 id="component-group-dialog-title">{tr(editor.mode === 'create' ? 'componentRepo:createGroupTitle' : 'componentRepo:editGroupTitle')}</h2>
-          </div>
-          <button aria-label={tr('componentRepo:closeGroupDialog')} disabled={saving} onClick={onClose} type="button"><X /></button>
-        </header>
-        <div className="component-group-dialog-body">
-          <label>
-            <span>{tr('componentRepo:groupName')}</span>
-            <input autoFocus maxLength={100} onChange={(event) => setName(event.target.value)} placeholder={tr('componentRepo:groupNamePlaceholder')} value={name} />
-          </label>
-          {editor.mode === 'create' ? (
-            <label>
-              <span>{tr('componentRepo:parentGroup')}</span>
-              <select onChange={(event) => setParentGroupId(event.target.value)} value={parentGroupId}>
-                {parentOptions.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.groupType === 'root' ? tr('componentRepo:groupRootName') : group.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          {error ? <div className="component-library-alert"><AlertCircle />{error}</div> : null}
-        </div>
-        <footer>
-          <button disabled={saving} onClick={onClose} type="button">{tr('componentRepo:cancel')}</button>
-          <button disabled={saving} onClick={() => void save()} type="button">{saving ? <LoaderCircle className="component-library-spin" /> : null}{tr(saving ? 'componentRepo:saving' : 'componentRepo:saveGroup')}</button>
-        </footer>
-      </section>
-    </div>
-  );
-}
-
-function ComponentGroupMembershipDialog({
-  component,
-  onClose,
-  onSaved,
-  tree,
-}: {
-  component: ComponentResponse;
-  onClose: () => void;
-  onSaved: () => void;
-  tree: ComponentGroupTreeResponse;
-}) {
-  const tr = useAppTranslation();
-  const [initialIds, setInitialIds] = React.useState<Set<string>>(new Set());
-  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
-  const [loading, setLoading] = React.useState(true);
-  const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    listComponentGroupIds(component.id)
-      .then((ids) => {
-        const next = new Set(ids);
-        setInitialIds(next);
-        setSelectedIds(next);
-        setLoading(false);
-      })
-      .catch((loadError: Error) => {
-        setError(loadError.message);
-        setLoading(false);
-      });
-  }, [component.id]);
-
-  const save = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      await Promise.all([
-        ...[...selectedIds].filter((id) => !initialIds.has(id)).map((id) => addComponentToGroup(id, component.id)),
-        ...[...initialIds].filter((id) => !selectedIds.has(id)).map((id) => removeComponentFromGroup(id, component.id)),
-      ]);
-      onSaved();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : appConfig.texts.loadFailed);
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="component-upload-backdrop" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && !saving) onClose();
-    }}>
-      <section aria-labelledby="component-membership-dialog-title" aria-modal="true" className="component-group-dialog" role="dialog">
-        <header>
-          <div><Layers3 aria-hidden="true" /><div><h2 id="component-membership-dialog-title">{tr('componentRepo:manageComponentGroups')}</h2><p>{component.name}</p></div></div>
-          <button aria-label={tr('componentRepo:closeGroupDialog')} disabled={saving} onClick={onClose} type="button"><X /></button>
-        </header>
-        <div className="component-group-dialog-body">
-          <p>{tr('componentRepo:manageComponentGroupsDescription')}</p>
-          {loading ? <div className="component-group-loading"><LoaderCircle className="component-library-spin" />{tr('componentRepo:loadingGroups')}</div> : null}
-          {!loading && tree.groups.length === 0 ? <div className="component-group-empty">{tr('componentRepo:noCustomGroups')}</div> : null}
-          <div className="component-membership-options">
-            {tree.groups.map((group) => (
-              <label key={group.id}>
-                <input
-                  checked={selectedIds.has(group.id)}
-                  onChange={(event) => setSelectedIds((current) => {
-                    const next = new Set(current);
-                    if (event.target.checked) next.add(group.id);
-                    else next.delete(group.id);
-                    return next;
-                  })}
-                  type="checkbox"
-                />
-                <Folder aria-hidden="true" />
-                <span>{group.name}</span>
-              </label>
-            ))}
-          </div>
-          {error ? <div className="component-library-alert"><AlertCircle />{error}</div> : null}
-        </div>
-        <footer>
-          <button disabled={saving} onClick={onClose} type="button">{tr('componentRepo:cancel')}</button>
-          <button disabled={saving || loading} onClick={() => void save()} type="button">{saving ? <LoaderCircle className="component-library-spin" /> : null}{tr(saving ? 'componentRepo:saving' : 'componentRepo:saveGroup')}</button>
-        </footer>
-      </section>
-    </div>
-  );
-}
-
-function GroupComponentMembershipDialog({
-  group,
-  onClose,
-  onSaved,
-  rootGroup,
-}: {
-  group: ComponentGroupResponse;
-  onClose: () => void;
-  onSaved: () => void;
-  rootGroup: ComponentGroupResponse;
-}) {
-  const tr = useAppTranslation();
-  const [components, setComponents] = React.useState<ComponentResponse[]>([]);
-  const [initialIds, setInitialIds] = React.useState<Set<string>>(new Set());
-  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
-  const [query, setQuery] = React.useState('');
-  const [loading, setLoading] = React.useState(true);
-  const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    Promise.all([
-      listComponentGroupComponents(rootGroup.id),
-      listComponentStars({ page: 1, pageSize: 100, sort: 'starred_at_desc' }),
-      listComponentGroupComponents(group.id),
-    ])
-      .then(([ownedComponents, starredComponents, groupComponents]) => {
-        const next = new Set(groupComponents.map((component) => component.id));
-        // 当前分组成员必须参与候选并可被移除，即使它已取消收藏；其余候选来自自有与当前收藏。
-        const managedById = new Map<string, ComponentResponse>();
-        [...ownedComponents, ...starredComponents.items, ...groupComponents]
-          .forEach((component) => managedById.set(component.id, component));
-        setComponents([...managedById.values()]);
-        setInitialIds(next);
-        setSelectedIds(next);
-        setLoading(false);
-      })
-      .catch((loadError: Error) => {
-        setError(loadError.message);
-        setLoading(false);
-      });
-  }, [group.id, rootGroup.id]);
-
-  const visibleComponents = React.useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
-    if (!normalizedQuery) return components;
-    return components.filter((component) =>
-      `${component.name} ${component.id}`.toLocaleLowerCase().includes(normalizedQuery));
-  }, [components, query]);
-
-  const save = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      await Promise.all([
-        ...[...selectedIds]
-          .filter((id) => !initialIds.has(id))
-          .map((id) => addComponentToGroup(group.id, id)),
-        ...[...initialIds]
-          .filter((id) => !selectedIds.has(id))
-          .map((id) => removeComponentFromGroup(group.id, id)),
-      ]);
-      onSaved();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : appConfig.texts.loadFailed);
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="component-upload-backdrop" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && !saving) onClose();
-    }}>
-      <section aria-labelledby="group-components-dialog-title" aria-modal="true" className="component-group-dialog component-group-components-dialog" role="dialog">
-        <header>
-          <div>
-            <Layers3 aria-hidden="true" />
-            <div>
-              <h2 id="group-components-dialog-title">{tr('componentRepo:addComponentsToGroupTitle')}</h2>
-              <p>{group.name}</p>
-            </div>
-          </div>
-          <button aria-label={tr('componentRepo:closeGroupDialog')} disabled={saving} onClick={onClose} type="button"><X /></button>
-        </header>
-        <div className="component-group-dialog-body">
-          <p>{tr('componentRepo:chooseComponentsForGroup')}</p>
-          <label className="component-group-component-search">
-            <Search aria-hidden="true" />
-            <input
-              aria-label={tr('componentRepo:searchManagedComponents')}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={tr('componentRepo:searchComponentNameOrId')}
-              value={query}
-            />
-          </label>
-          {loading ? <div className="component-group-loading"><LoaderCircle className="component-library-spin" />{tr('componentRepo:loadingComponents')}</div> : null}
-          {!loading && components.length === 0 ? <div className="component-group-empty">{tr('componentRepo:noManagedComponents')}</div> : null}
-          <div className="component-membership-options component-group-component-options">
-            {visibleComponents.map((component) => (
-              <label key={component.id}>
-                <input
-                  checked={selectedIds.has(component.id)}
-                  onChange={(event) => setSelectedIds((current) => {
-                    const next = new Set(current);
-                    if (event.target.checked) next.add(component.id);
-                    else next.delete(component.id);
-                    return next;
-                  })}
-                  type="checkbox"
-                />
-                <Boxes aria-hidden="true" />
-                <span><strong>{component.name}</strong><small>{shortId(component.id)}</small></span>
-              </label>
-            ))}
-          </div>
-          {error ? <div className="component-library-alert"><AlertCircle />{error}</div> : null}
-        </div>
-        <footer>
-          <button disabled={saving} onClick={onClose} type="button">{tr('componentRepo:cancel')}</button>
-          <button disabled={saving || loading} onClick={() => void save()} type="button">
-            {saving ? <LoaderCircle className="component-library-spin" /> : null}
-            {tr(saving ? 'componentRepo:saving' : 'componentRepo:saveComponents')}
-          </button>
-        </footer>
-      </section>
-    </div>
-  );
-}
-
-function groupDescendantIds(groups: ComponentGroupResponse[], groupId: string): string[] {
-  const result: string[] = [];
-  const pending = [groupId];
-  while (pending.length > 0) {
-    const parentId = pending.pop()!;
-    for (const group of groups) {
-      if (group.parentGroupId === parentId) {
-        result.push(group.id);
-        pending.push(group.id);
-      }
-    }
-  }
-  return result;
-}
-
-export function ComponentUploadDialog({
-  baseVersionId,
-  onClose,
-  onUploadCompleted,
-  targetComponentId,
-}: {
-  baseVersionId?: string | null;
-  onClose: () => void;
-  onUploadCompleted: (result: ComponentImportUploadCompleteResponse) => void;
-  targetComponentId?: string | null;
-}) {
-  const tr = useAppTranslation();
-  const [sourceFile, setSourceFile] = React.useState<File | null>(null);
-  const [exchangeFile, setExchangeFile] = React.useState<File | null>(null);
-  const [state, setState] = React.useState<UploadState>('idle');
-  const [progress, setProgress] = React.useState(0);
-  const [progressMessage, setProgressMessage] = React.useState(tr('componentRepo:readyToUpload'));
-  const [error, setError] = React.useState<string | null>(null);
-  const sourceInputRef = React.useRef<HTMLInputElement>(null);
-
-  React.useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && state !== 'uploading') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, state]);
-
-  const submit = async () => {
-    if (!sourceFile) return;
-    setState('uploading');
-    setProgress(0);
-    setError(null);
-    try {
-      const completion = await createComponentImportWithProgress(
-        sourceFile,
-        exchangeFile,
-        ({ percent, message }) => {
-          setProgress(percent);
-          setProgressMessage(message);
-        },
-        { targetComponentId, baseVersionId },
-      );
-      onUploadCompleted(completion);
-    } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : tr('componentRepo:componentUploadFailed'));
-      setState('error');
-    }
-  };
-
-  const reset = () => {
-    setState('idle');
-    setProgress(0);
-    setProgressMessage(tr('componentRepo:readyToUpload'));
-    setError(null);
-  };
-
-  return (
-    <div className="component-upload-backdrop" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && state !== 'uploading') onClose();
-    }}>
-      <section aria-labelledby="component-upload-title" aria-modal="true" className="component-upload-dialog" role="dialog">
-        <header className="component-upload-header">
-          <div>
-            <span><Upload aria-hidden="true" /></span>
-            <div><h2 id="component-upload-title">{tr('componentRepo:uploadComponent')}</h2><p>{tr('componentRepo:uploadAStudioOrLDrawFileToYourComponentLibrary')}</p></div>
-          </div>
-          <button aria-label={tr('componentRepo:closeUploadDialog')} disabled={state === 'uploading'} onClick={onClose} type="button"><X /></button>
-        </header>
-
-        <div className="component-upload-body">
-          {state === 'idle' ? (
-            <>
-              <input
-                accept=".io,.ldr,.mpd"
-                className="component-upload-hidden-input"
-                onChange={(event) => setSourceFile(event.target.files?.item(0) ?? null)}
-                ref={sourceInputRef}
-                type="file"
-              />
-              <button
-                className={sourceFile ? 'component-upload-dropzone component-upload-dropzone-selected' : 'component-upload-dropzone'}
-                onClick={() => sourceInputRef.current?.click()}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const file = event.dataTransfer.files.item(0);
-                  if (file && isComponentFile(file.name)) setSourceFile(file);
-                }}
-                type="button"
-              >
-                {sourceFile ? <CheckCircle2 aria-hidden="true" /> : <FileUp aria-hidden="true" />}
-                <strong>{sourceFile ? sourceFile.name : tr('componentRepo:dropAComponentFileHereOrClickToSelect')}</strong>
-                <span>{sourceFile ? formatFileSize(sourceFile.size) : tr('componentRepo:supportsIoLdrAndMpdFilesUpTo100Mb')}</span>
-              </button>
-              <label className="component-upload-secondary-file">
-                <span><strong>{tr('componentRepo:exchangeFile')}</strong><em>{tr('componentRepo:optionalOnlyNeededForIoSourceFiles')}</em></span>
-                <span className="component-upload-secondary-picker">{exchangeFile ? exchangeFile.name : tr('componentRepo:selectLdrMpd')}</span>
-                <input accept=".ldr,.mpd" onChange={(event) => setExchangeFile(event.target.files?.item(0) ?? null)} type="file" />
-              </label>
-              <div className="component-upload-tip"><CheckCircle2 /><span><strong>{tr('componentRepo:whatHappensAfterUpload')}</strong>{tr('componentRepo:theFileWillBeStoredSecurelyAndEnterTheParsingAndReviewWorkflow')}</span></div>
-            </>
-          ) : null}
-
-          {state === 'uploading' ? (
-            <div className="component-upload-progress-state">
-              <span className="component-upload-progress-icon"><Upload /></span>
-              <h3>{tr('componentRepo:uploadingComponent')}</h3>
-              <p>{sourceFile?.name}</p>
-              <div className="component-upload-progress-meta"><span>{progressMessage}</span><strong>{progress}%</strong></div>
-              <div aria-label={tr('componentRepo:uploadProgressValue', { percent: progress })} aria-valuemax={100} aria-valuemin={0} aria-valuenow={progress} className="component-upload-progress" role="progressbar">
-                <span style={{ width: `${progress}%` }} />
-              </div>
-              <small>{tr('componentRepo:keepThisPageOpenUntilTheUploadIsComplete')}</small>
-            </div>
-          ) : null}
-
-          {state === 'error' ? (
-            <div className="component-upload-result component-upload-result-error">
-              <span><AlertCircle /></span>
-              <h3>{tr('componentRepo:uploadNotCompleted')}</h3>
-              <p>{error}</p>
-              <div><strong>{sourceFile?.name}</strong><span>{tr('componentRepo:checkTheNetworkOrFileAndTryAgain')}</span></div>
-            </div>
-          ) : null}
-        </div>
-
-        <footer className="component-upload-footer">
-          {state === 'idle' ? <><button onClick={onClose} type="button">{tr('componentRepo:cancel')}</button><button disabled={!sourceFile} onClick={() => void submit()} type="button"><Upload />{tr('componentRepo:startUpload')}</button></> : null}
-          {state === 'uploading' ? <span>{tr('componentRepo:uploadingComponentFiles')}</span> : null}
-          {state === 'error' ? <><button onClick={onClose} type="button">{tr('componentRepo:close')}</button><button onClick={reset} type="button"><RefreshCw />{tr('componentRepo:retryUpload')}</button></> : null}
-        </footer>
-      </section>
-    </div>
-  );
-}
-
-function VersionDropdown({ component, onDeleted, state, versions }: {
-  component: ComponentResponse;
-  onDeleted: (version: ComponentVersionResponse) => void;
-  state: 'idle' | 'loading' | 'error';
-  versions: ComponentVersionResponse[];
-}) {
-  const tr = useAppTranslation();
-  return (
-    <section className="component-version-dropdown" role="menu">
-        <div className="component-version-list">
-          {state === 'loading' ? <div className="component-library-empty"><LoaderCircle className="component-library-spin" /><strong>{tr('componentRepo:loadingVersions')}</strong></div> : null}
-          {state === 'error' ? <div className="component-library-alert"><AlertCircle />{tr('componentRepo:failedToLoadVersions')}</div> : null}
-          {state === 'idle' && versions.length === 0 ? <div className="component-library-empty"><strong>{tr('componentRepo:noComponentVersions')}</strong></div> : null}
-          {versions.map((version) => (
-            <article key={version.id}>
-              <div><strong>v{version.version}</strong><span>{tr('componentRepo:revision')} {version.revision}</span></div>
-              <StatusPill status={version.id === component.currentVersionId ? 'published' : 'draft'} />
-              <ComponentVersionActions
-                componentName={component.name}
-                isOnlyVersion={versions.length === 1}
-                onDeleted={onDeleted}
-                version={version}
-              />
-            </article>
-          ))}
-        </div>
-    </section>
-  );
-}
-
-function SummaryCard({ icon, label, tone, value }: { icon: React.ReactNode; label: string; tone: string; value: number }) {
-  return <article className={`component-library-summary-card component-library-summary-card-${tone}`}><span>{icon}</span><div><strong>{value}</strong><p>{label}</p></div></article>;
-}
-
-function ComponentLogicalSize({ size }: { size: ComponentResponse['logicalSize'] }) {
-  const tr = useAppTranslation();
-  if (!size) {
-    return <span aria-label={tr('componentRepo:sizeUnavailable')} className="component-library-size-unavailable" role="cell">—</span>;
-  }
-  const width = formatDimension(size.widthStud);
-  const depth = formatDimension(size.depthStud);
-  const height = formatDimension(size.heightPlate);
-  return (
-    <div
-      aria-label={tr('componentRepo:sizeAccessibleLabel', { width, depth, height })}
-      className="component-library-size"
-      role="cell"
-    >
-      <strong aria-hidden="true">{width} × {depth} × {height}</strong>
-      <small aria-hidden="true">{tr('componentRepo:sizeUnits')}</small>
-    </div>
-  );
-}
-
-function buildLibraryItems(components: ComponentResponse[]): LibraryItem[] {
-  return components.map((item) => ({
-    id: item.id,
-    name: item.name,
-    status: item.status,
-    createdAt: item.createdAt,
-    starredAt: item.starredAt,
-    data: item,
-  }));
-}
-
-function statusesForFilter(filter: LibraryFilter): string[] | null {
-  if (filter === 'all') return null;
-  if (filter === 'draft') return ['draft'];
-  if (filter === 'published') return ['active'];
-  return null;
-}
-
-function sumStatuses(counts: Record<string, number>, statuses: string[]): number {
-  return statuses.reduce((total, status) => total + (counts[status] ?? 0), 0);
-}
-
-function isComponentFile(name: string): boolean { return /\.(io|ldr|mpd)$/i.test(name); }
-function shortId(id: string): string { return id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id; }
-function formatFileSize(bytes: number): string { return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`; }
-function formatDimension(value: number): string { return formatNumber(value, { maximumFractionDigits: 2 }); }
-function formatDate(value: string): string { return formatDateTime(value, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); }
-
-const statusLabels: Partial<Record<string, TranslationKey>> = {
-  uploaded: 'componentRepo:uploaded', parsing: 'componentRepo:parsing', parsed: 'componentRepo:pendingReview', pending_review: 'componentRepo:pendingReview', in_review: 'componentRepo:inReview',
-  draft: 'componentRepo:draft', active: 'componentRepo:published', published: 'componentRepo:published', failed: 'componentRepo:failed', blocked: 'componentRepo:blocked', rejected: 'componentRepo:rejected', archived: 'componentRepo:archived',
-  confirmed: 'componentRepo:confirmed', passed: 'componentRepo:passed', pass: 'componentRepo:passed', pending: 'componentRepo:pending', ready: 'componentRepo:ready', processing: 'componentRepo:processing',
-};
-
-export function StatusPill({ status }: { status: string }) {
-  const trDynamic = useDynamicTranslation();
-  const translationKey = statusLabels[status];
-  return <span className={`component-repo-status component-repo-status-${status}`}>{translationKey ? trDynamic(translationKey) : status}</span>;
-}
-
-export function routeFor(page: keyof typeof appConfig.routePaths): string {
-  return appConfig.routePaths[page];
 }

@@ -29,7 +29,7 @@ ALTER TABLE component_repo.component_watch_periods
     );
 
 -- Component 退出公开生命周期时按 Component 定位全部 active watcher；actor_id 保持索引键稳定并为后续
--- recipient 查询保留确定顺序，但本迁移不实现 fan-out。
+-- 生命周期清理保留确定顺序；动态 Feed 不依赖该 Component 侧索引读取历史收件人。
 CREATE INDEX component_watch_periods_component_active_idx
     ON component_repo.component_watch_periods (component_id, actor_id)
     WHERE ended_seq IS NULL;

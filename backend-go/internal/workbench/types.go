@@ -13,7 +13,7 @@ const (
 	PartPreviewPrebuildType     = "component.part_preview.prebuild"
 	RelationDetectionVersion    = "component-relation-detector-v3"
 	ValidatorVersion            = "component-repo-validator-v2"
-	PreviewGeneratorVersion     = "component-preview-studio-ldraw-glb-v4"
+	PreviewGeneratorVersion     = "component-preview-studio-ldraw-glb-v6"
 	PartPreviewGeneratorVersion = "part-preview-ldraw-meshopt-glb-v2"
 )
 

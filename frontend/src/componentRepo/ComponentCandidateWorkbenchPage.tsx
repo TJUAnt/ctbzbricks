@@ -41,7 +41,8 @@ import {
   type ComponentVersionPreviewModelResponse,
   type ComponentVersionResponse,
 } from './componentRepoApi';
-import { ComponentUploadDialog, routeFor, StatusPill } from './ComponentRepoPage';
+import { routeFor, StatusPill } from './ComponentRepoPresenters';
+import { ComponentUploadDialog } from './ComponentUploadDialog';
 import { ComponentScene } from '../parts/PartViewerPage';
 
 type CandidateWorkbenchState = {

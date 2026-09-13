@@ -29,8 +29,31 @@ func NewHandler(service *Service, logger *slog.Logger) *Handler {
 // Register 注册 Watch 偏好 API；这些 Handler 只执行有界查询和短事务，不做 watcher fan-out。
 func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/component-watches", h.list)
+	group.GET("/component-watch-feed", h.feed)
 	group.PUT("/components/:componentId/watch", h.watch)
 	group.DELETE("/components/:componentId/watch", h.unwatch)
+}
+
+// feed 根据 actor 当前 active Watch 动态返回发布更新；since 是内容窗口，cursor 只承担稳定翻页。
+func (h *Handler) feed(c *gin.Context) {
+	actor, ok := auth.ActorFromGin(c)
+	if !ok {
+		apierror.WriteInternal(c)
+		return
+	}
+	limit := 0
+	if raw := c.Query("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			h.writeError(c, validationError("limit"))
+			return
+		}
+		limit = parsed
+	}
+	result, err := h.service.ListFeed(c.Request.Context(), actor.ID, FeedRequest{
+		Locale: c.Query("locale"), Limit: limit, Cursor: c.Query("cursor"), Since: c.Query("since"),
+	})
+	h.writeJSON(c, http.StatusOK, result, err)
 }
 
 // list 返回 actor 自己的 active Watch，使用不透明 keyset cursor 防止深分页退化。
@@ -68,9 +91,7 @@ func (h *Handler) watch(c *gin.Context) {
 		h.writeError(c, validationError("body"))
 		return
 	}
-	result, err := h.service.WatchWithContext(c.Request.Context(), actor.ID, c.Param("componentId"), input.Level, NotificationContext{
-		Locale: input.Locale, Timezone: input.Timezone, CatalogVersion: input.CatalogVersion,
-	})
+	result, err := h.service.Watch(c.Request.Context(), actor.ID, c.Param("componentId"), input.Level)
 	h.writeJSON(c, http.StatusOK, result, err)
 }
 

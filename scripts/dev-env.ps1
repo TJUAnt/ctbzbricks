@@ -45,13 +45,9 @@ function Import-CtbzDevEnvironment {
     "COMPONENT_IMPORT_PARSER_VERSION", "COMPONENT_IMPORT_SNAPSHOT_SCHEMA",
     "COMPONENT_IMPORT_MAX_ATTEMPTS", "WORKER_ID", "WORKER_CONCURRENCY",
     "WORKER_TASK_TYPES", "PART_PREVIEW_GLTFPACK_PATH",
+    "FEED_RENDER_BLENDER_PATH", "FEED_RENDER_TIMEOUT",
     "WORKER_HEALTH_CHECK_INTERVAL", "WORKER_POLL_INTERVAL", "WORKER_LEASE_DURATION",
     "WORKER_HEARTBEAT_INTERVAL", "WORKER_RETRY_DELAY",
-    "NOTIFICATION_WORKER_ID", "NOTIFICATION_WORKER_METRICS_HOST",
-    "NOTIFICATION_WORKER_METRICS_PORT", "NOTIFICATION_WORKER_CONCURRENCY",
-    "NOTIFICATION_WORKER_HEALTH_CHECK_INTERVAL", "NOTIFICATION_WORKER_POLL_INTERVAL",
-    "NOTIFICATION_WORKER_LEASE_DURATION", "NOTIFICATION_WORKER_HEARTBEAT_INTERVAL",
-    "NOTIFICATION_WORKER_METRICS_REFRESH_INTERVAL",
     "WORKER_POLL_INTERVAL_SECONDS", "WORKER_LEASE_DURATION_SECONDS",
     "WORKER_HEARTBEAT_INTERVAL_SECONDS", "WORKER_RETRY_DELAY_SECONDS"
   )
@@ -78,6 +74,26 @@ function Import-CtbzDevEnvironment {
   }
   if (-not $env:STORAGE_BUCKET) { $env:STORAGE_BUCKET = "component-artifacts" }
   if (-not $env:STORAGE_KEY_PREFIX) { $env:STORAGE_KEY_PREFIX = "component-repo" }
+  if (-not $env:FEED_RENDER_BLENDER_PATH) {
+    $blenderCommand = Get-Command "blender" -ErrorAction SilentlyContinue
+    if ($blenderCommand) {
+      $env:FEED_RENDER_BLENDER_PATH = $blenderCommand.Source
+    } else {
+      $blenderCandidates = @()
+      if ($env:ProgramFiles) {
+        $blenderCandidates += Join-Path $env:ProgramFiles "Blender Foundation\Blender 4.1\blender.exe"
+      }
+      if (${env:ProgramFiles(x86)}) {
+        $blenderCandidates += Join-Path ${env:ProgramFiles(x86)} "Blender Foundation\Blender 4.1\blender.exe"
+      }
+      foreach ($candidate in $blenderCandidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+          $env:FEED_RENDER_BLENDER_PATH = $candidate
+          break
+        }
+      }
+    }
+  }
 }
 
 function Assert-CtbzDatabaseUrl {

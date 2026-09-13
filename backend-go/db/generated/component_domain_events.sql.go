@@ -15,20 +15,10 @@ const acquireExclusiveComponentActivityLock = `-- name: AcquireExclusiveComponen
 SELECT pg_advisory_xact_lock($1::bigint)
 `
 
-// Publish 使用同一 Component 的独占事务锁；必须在锁内分配 event_seq，固定 Watch period 的事件时点边界。
+// Publish 与 Component 删除使用同一 Component 的独占事务锁；Feed 不再依赖事件时点订阅资格，
+// 但删除生命周期仍必须阻止并发 Watch 在目标失效后创建 active period。
 func (q *Queries) AcquireExclusiveComponentActivityLock(ctx context.Context, lockKey int64) error {
 	_, err := q.db.Exec(ctx, acquireExclusiveComponentActivityLock, lockKey)
-	return err
-}
-
-const createComponentEventDelivery = `-- name: CreateComponentEventDelivery :exec
-INSERT INTO component_repo.component_event_deliveries (event_id)
-VALUES ($1)
-`
-
-// 发布事务为每个领域事件建立且只建立一条独立 fan-out Delivery；失败会与发布事实一起回滚。
-func (q *Queries) CreateComponentEventDelivery(ctx context.Context, eventID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, createComponentEventDelivery, eventID)
 	return err
 }
 

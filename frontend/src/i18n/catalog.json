@@ -1,6 +1,6 @@
 {
   "schema": "brickbuilder-frontend-i18n-catalog-v1",
-  "catalogVersion": "frontend-2026.09.07.1",
+  "catalogVersion": "frontend-2026.09.12.2",
   "sourceLocale": "en-US",
   "defaultLocale": "zh-CN",
   "productLocales": [
@@ -27,5 +27,5 @@
     "ur"
   ],
   "telemetryEndpoint": "/api/v1/i18n/events",
-  "contentHash": "369c7fe3189d1643ced79283c52eea375718f7fb515eaa5cbba7e7e724aa58c2"
+  "contentHash": "e17152420f77f015cc2738c8088b92031bc9d3f6de3a4e9a4ccd5efc160be8bf"
 }

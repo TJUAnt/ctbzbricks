@@ -76,9 +76,11 @@
   "meshModelFileApiUrl": "/api/mesh-models/{modelId}/file",
   "componentRepoApi": {
     "components": "/api/v1/components",
+    "componentPublicFeed": "/api/v1/component-public-feed",
     "componentStars": "/api/v1/component-stars",
     "componentStar": "/api/v1/components/{componentId}/star",
     "componentWatches": "/api/v1/component-watches",
+    "componentWatchFeed": "/api/v1/component-watch-feed",
     "componentWatch": "/api/v1/components/{componentId}/watch",
     "componentGroups": "/api/v1/component-groups",
     "componentGroupsBootstrap": "/api/v1/component-groups/bootstrap",

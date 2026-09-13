@@ -38,8 +38,29 @@ Execution 使用 `task_job_id + execution_number` 唯一编号，并用 `retry_o
 | `component.part_preview.prebuild` | Go Worker | Go Worker |
 | `component.import.parse` | Go Worker | Go Worker |
 | `component.relations.detect` | Go Worker | Go Worker |
+| `component.feed_render.materialize` | Go Worker | Go Worker |
+| `component.relationships.cleanup` | Go Worker | Go Worker |
+| `pixel_2d.generate` | Go Worker | Go Worker |
+| `pixel_2d.edit` | Go Worker | Go Worker |
+| `pixel_2d.design` | Go Worker | Go Worker |
 
 Worker 只能 claim 自己注册的 task type。不得新增 Component Repo Python task type。
+
+当前只有一个通用 Go Worker 可执行文件 `cmd/worker`，上表 12 项是持久任务类型，不是 12 种固定
+进程。未设置任务过滤时，存储和 LDraw 能力完整的通用 Worker 注册全部 12 项；设置 `WORKER_TASK_TYPES`
+后，同一可执行文件可以启动为只领取某些类型的专用进程；设置互斥的 `WORKER_EXCLUDED_TASK_TYPES` 则从
+通用能力中移交指定重资源类型，同时继续承担上传维护。因此“图片渲染 Worker”和“GLB 计算
+Worker”是部署时的负载隔离方式，并非两套任务框架。`component.part_preview.prebuild` 维护脚本也是以限定
+`WORKER_TASK_TYPES` 启动同一个二进制。
+
+renderer v4 提供 `start-feed-render-worker.sh/.ps1`，固定只领取 Feed 图片任务且默认并发为 1。GLB 计算包含
+`component.preview.materialize`、`component.part_preview.materialize` 和 `component.part_preview.prebuild`，可用
+同一过滤机制部署为另一进程组；轻量校验/关系/清理与 P2D 任务也仍复用同一协议。进程分组是资源规划，不改变
+任务类型、状态机或数据库队列。
+
+生产单机拓扑固定为 API、通用/GLB Worker、Feed Render Worker 三个长期容器。通用进程排除 Feed task，
+专用进程 allowlist Feed task 且并发为 1；两者通过相同 PostgreSQL claim/lease 协议独立扩容。镜像、密钥、
+健康检查和迁移边界见 [`deployment/docker_production.md`](deployment/docker_production.md)。
 
 ## 2. 任务 JSON 契约
 
@@ -128,28 +149,71 @@ GLB 都使用同一 Go scene expansion：重复 root/子模型按实例倍增，
   "taskType": "component.preview.materialize",
   "payload": {
     "versionId": "uuid",
-    "generatorVersion": "component-preview-studio-ldraw-glb-v3",
+    "generatorVersion": "component-preview-studio-ldraw-glb-v6",
     "generation": 0,
     "inputHash": "sha256"
   },
   "result": {
     "versionId": "uuid",
     "artifactId": "uuid",
-    "generatorVersion": "component-preview-studio-ldraw-glb-v3",
+    "generatorVersion": "component-preview-studio-ldraw-glb-v6",
     "omittedPartRefs": ["missing.dat"],
     "complete": false
   }
 }
 ```
 
+v6 Artifact metadata 另存稳定机器值 `materialProfileVersion=ldraw-studio-pbr-v1`；GLB 材质 extras 保存同一版本，
+并用可选 Khronos 材质扩展表达折射率、镜面、清漆、透射和发光。它不改变 task payload/result 或用户内容语义。
+
 `component.preview.materialize.inputHash` 绑定冻结输入：
 `componentVersionId + sceneSnapshotId + structureHash + geometryHash +
 partLibraryVersionId + partLibrarySourceHash + generatorVersion`。Worker 只能使用
 该 ComponentVersion 固定的 Part Library，不读取“当前 active library”来重解释旧版本。
+
+### Worker 运行可观测性
+
+API 与 Worker 是独立进程，API 不在请求线程中领取持久任务。Worker 启动时必须记录实际 claim 的 task type
+集合；每次 Attempt 记录 task ID、task type、attempt、耗时和稳定成功/失败结果。日志不得包含 payload 用户内容、
+对象存储 key、SQL、凭据或 provider 原始错误。开发环境只启动 `scripts/start-backend.sh` 时，任务保持 queued；
+完整拓扑必须同时运行 `scripts/start-go-worker.sh`，专用进程可用 `WORKER_TASK_TYPES` 限制领取范围。
 生成器从 Studio/LDraw source path 读取真实 part mesh，组合为 ComponentVersion 整体 GLB；
 没有 structural cube fallback。冻结 Part Library 中没有 ready geometry 的 Part 会保留在 BOM，并从
 GLB 省略；结果以 `omittedPartRefs` 和 `complete` 记录完整度。已声明 ready 的 source 缺失或哈希漂移
 仍作为不可物化错误处理，不能被 partial preview 静默掩盖。
+
+`component.feed_render.materialize`：
+
+```json
+{
+  "taskType": "component.feed_render.materialize",
+  "payload": {
+    "eventId": "uuid",
+    "componentVersionId": "uuid",
+    "renderProfile": "feed_card_3x2",
+    "rendererVersion": "component-feed-renderer-v4"
+  },
+  "result": {
+    "eventId": "uuid",
+    "componentVersionId": "uuid",
+    "artifactId": "uuid",
+    "renderProfile": "feed_card_3x2",
+    "rendererVersion": "component-feed-renderer-v4",
+    "width": 1200,
+    "height": 800,
+    "renderEngine": "blender_cycles_4_1",
+    "rasterFallback": false
+  }
+}
+```
+
+任务在发布事务中创建，input hash 绑定 `componentVersionId + renderProfile + rendererVersion + previewIdentity`。
+Preview 任务仍执行时建立持久依赖；Worker 只读取同 owner、同事件版本的 verified Component Preview GLB，生成
+不可变 `component_feed_image` PNG。Go 在隔离临时目录调用固定 Blender 4.1 Cycles；超时、启动失败或输出校验失败时
+同一 Attempt 使用 `go_raster_v2`，result/Artifact metadata 记录实际 engine 与 fallback。最终 PNG hash 参与 Artifact ID
+和 Storage key，确保重试期间不同输出不会覆盖同一 immutable 对象。Blender adapter 不领取任务、
+不连接数据库或对象存储。通用任务最多尝试三次；成功、失败或取消终态由数据库触发器推进 Feed entry，
+任何图片结果都不改变已发布 Version。locale 沿用 Component 的 `contentLocale` 作为审计上下文，渲染输出不包含翻译文本；timezone 固定 UTC。
 
 `component.part_preview.materialize`：
 

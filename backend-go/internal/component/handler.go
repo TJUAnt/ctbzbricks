@@ -27,6 +27,7 @@ func NewHandler(service *Service, logger *slog.Logger) *Handler {
 // Register 在已认证的 /api/v1 路由组注册 Component Repo 同步 API；耗时计算仍由持久任务承担。
 func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/components", h.listComponents)
+	group.GET("/component-public-feed", h.listPublicFeed)
 	group.GET("/component-stars", h.listStars)
 	group.POST("/components", h.createComponent)
 	group.GET("/components/:componentId", h.getComponent)
@@ -57,6 +58,28 @@ func (h *Handler) Register(group *gin.RouterGroup) {
 
 	group.PUT("/components/:componentId/star", h.star)
 	group.DELETE("/components/:componentId/star", h.unstar)
+}
+
+// listPublicFeed 返回全局用户 Component 发布事件；actor 只用于 Star/Watch 展示投影，不参与成员筛选。
+func (h *Handler) listPublicFeed(c *gin.Context) {
+	actor, ok := actorFromContext(c)
+	if !ok {
+		apierror.WriteInternal(c)
+		return
+	}
+	limit := 0
+	if raw := c.Query("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			h.writeError(c, validationError("limit"))
+			return
+		}
+		limit = parsed
+	}
+	result, err := h.service.ListPublicFeed(c.Request.Context(), actor.ID, PublicFeedRequest{
+		Limit: limit, Cursor: c.Query("cursor"), Query: c.Query("query"),
+	})
+	h.writeJSON(c, http.StatusOK, result, err)
 }
 
 // listStars 返回 actor 当前仍可访问的收藏；sort 目前只允许既定的收藏时间倒序契约。

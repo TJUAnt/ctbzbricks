@@ -1,0 +1,118 @@
+name: brickbuilder
+
+x-service-defaults: &service-defaults
+  env_file:
+    - ${BRICKBUILDER_ENV_FILE:-./deploy/docker/production.env}
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=1g,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  stop_grace_period: 30s
+
+services:
+  api:
+    <<: *service-defaults
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: brickbuilder-api:${BRICKBUILDER_IMAGE_TAG:-local}
+    environment:
+      APP_ENV: production
+      GO_BACKEND_HOST: 0.0.0.0
+      GO_BACKEND_PORT: "8080"
+    ports:
+      - "${BRICKBUILDER_API_BIND_ADDRESS:-127.0.0.1}:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
+    cpus: "${API_CPUS:-1.0}"
+    mem_limit: ${API_MEMORY_LIMIT:-1g}
+    pids_limit: 128
+
+  worker:
+    <<: *service-defaults
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: brickbuilder-worker:${BRICKBUILDER_IMAGE_TAG:-local}
+    env_file:
+      - ${BRICKBUILDER_ENV_FILE:-./deploy/docker/production.env}
+      - ${BRICKBUILDER_WORKER_ENV_FILE:-./deploy/docker/worker.env}
+    environment:
+      APP_ENV: production
+      # 通用 Worker 保留上传维护，只把高耗时 Feed 渲染移交给专用进程。
+      WORKER_EXCLUDED_TASK_TYPES: component.feed_render.materialize
+      WORKER_CONCURRENCY: "${GENERAL_WORKER_CONCURRENCY:-4}"
+      LDRAW_ROOT: /data/ldraw
+      PART_PREVIEW_GLTFPACK_PATH: /usr/local/bin/gltfpack
+    volumes:
+      - type: bind
+        source: ${LDRAW_HOST_PATH:?Set LDRAW_HOST_PATH to the version-pinned LDraw library}
+        target: /data/ldraw
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x worker >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    cpus: "${GENERAL_WORKER_CPUS:-4.0}"
+    mem_limit: ${GENERAL_WORKER_MEMORY_LIMIT:-4g}
+    pids_limit: 256
+
+  feed-render-worker:
+    <<: *service-defaults
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.feed-render
+    image: brickbuilder-feed-render:${BRICKBUILDER_IMAGE_TAG:-local}
+    env_file:
+      - ${BRICKBUILDER_ENV_FILE:-./deploy/docker/production.env}
+      - ${BRICKBUILDER_WORKER_ENV_FILE:-./deploy/docker/worker.env}
+    environment:
+      APP_ENV: production
+      WORKER_TASK_TYPES: component.feed_render.materialize
+      WORKER_CONCURRENCY: "1"
+      FEED_RENDER_BLENDER_PATH: /opt/blender/blender
+      FEED_RENDER_TIMEOUT: "${FEED_RENDER_TIMEOUT:-5m}"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x worker >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    cpus: "${FEED_RENDER_CPUS:-4.0}"
+    mem_limit: ${FEED_RENDER_MEMORY_LIMIT:-4g}
+    pids_limit: 256
+    shm_size: ${FEED_RENDER_SHM_SIZE:-512m}
+
+  migrate:
+    profiles: ["ops"]
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: brickbuilder-api:${BRICKBUILDER_IMAGE_TAG:-local}
+    env_file:
+      - ${BRICKBUILDER_ENV_FILE:-./deploy/docker/production.env}
+    entrypoint: ["/app/migrate"]
+    command: ["status"]
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

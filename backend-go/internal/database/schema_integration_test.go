@@ -26,14 +26,14 @@ func TestComponentRepoBaselineContract(t *testing.T) {
 	defer conn.Close(ctx)
 
 	expectedTables := []string{
-		"artifacts", "assembly_relation_connector_occupancies", "assembly_relations", "candidates", "component_domain_events", "component_event_deliveries",
+		"artifacts", "assembly_relation_connector_occupancies", "assembly_relations", "candidates", "component_domain_events", "component_feed_entries",
 		"component_group_memberships", "component_groups", "component_stars", "component_translations",
 		"component_versions", "component_watch_periods", "components", "connector_analyses",
 		"connector_analysis_blockers", "connector_analysis_items",
 		"connector_analysis_path_nodes", "connector_analysis_relations", "imports",
 		"interfaces", "outbox_events", "part_collider_definitions", "part_connector_definitions", "part_external_ids",
 		"part_geometries", "part_library_versions", "part_previews", "part_translations", "parts", "relation_candidates", "scene_snapshots", "task_dependencies", "task_events",
-		"task_jobs", "tasks", "upload_session_files", "upload_sessions", "user_notifications", "validation_reports",
+		"task_jobs", "tasks", "upload_session_files", "upload_sessions", "validation_reports",
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname
@@ -411,6 +411,46 @@ func testComponentDomainEventImmutability(t *testing.T, tx pgx.Tx) {
 	if err != nil {
 		t.Fatalf("insert valid Component domain event: %v", err)
 	}
+	// official Component 没有 owner；发布事件以 Version.created_by 绑定受信发布者，Feed 才能安全展示官方译文。
+	_, err = tx.Exec(context.Background(), `
+		INSERT INTO component_repo.components
+			(id, content_kind, content_locale, name, status, created_by)
+		VALUES
+			('10000000-0000-0000-0000-000000000020', 'official', 'en-US',
+			 'Official event fixture', 'active', '10000000-0000-0000-0000-000000000002');
+		INSERT INTO component_repo.component_versions
+			(id, component_id, version_label, revision, status, source_artifact_id,
+			 scene_snapshot_id, parser_version, interface_signature, structure_hash,
+			 geometry_hash, release_note, release_note_locale, created_by, published_at)
+		SELECT '10000000-0000-0000-0000-000000000021',
+		       '10000000-0000-0000-0000-000000000020', '1.0.0', 1, 'published',
+		       source_artifact_id, scene_snapshot_id, parser_version, interface_signature,
+		       structure_hash, geometry_hash, 'Official source note', 'en-US',
+		       '10000000-0000-0000-0000-000000000002', now()
+		FROM component_repo.component_versions
+		WHERE id = '10000000-0000-0000-0000-000000000006'`)
+	if err != nil {
+		t.Fatalf("create official domain event fixture: %v", err)
+	}
+	assertTxSQLState(t, tx, `
+		INSERT INTO component_repo.component_domain_events
+			(id, event_type, component_id, component_version_id, actor_id)
+		VALUES
+			('10000000-0000-0000-0000-000000000022', 'component.version.published.v1',
+			 '10000000-0000-0000-0000-000000000020',
+			 '10000000-0000-0000-0000-000000000021',
+			 '10000000-0000-0000-0000-000000000099')`, "23514")
+	_, err = tx.Exec(context.Background(), `
+		INSERT INTO component_repo.component_domain_events
+			(id, event_type, component_id, component_version_id, actor_id)
+		VALUES
+			('10000000-0000-0000-0000-000000000022', 'component.version.published.v1',
+			 '10000000-0000-0000-0000-000000000020',
+			 '10000000-0000-0000-0000-000000000021',
+			 '10000000-0000-0000-0000-000000000002')`)
+	if err != nil {
+		t.Fatalf("insert official Component domain event: %v", err)
+	}
 	assertTxSQLState(t, tx, `
 		WITH reverted AS (
 			UPDATE component_repo.component_versions
@@ -454,41 +494,6 @@ func testComponentDomainEventImmutability(t *testing.T, tx pgx.Tx) {
 			 '10000000-0000-0000-0000-000000000001',
 			 '10000000-0000-0000-0000-000000000006',
 			 '10000000-0000-0000-0000-000000000002')`, "23505")
-	testNotificationDeliveryConstraints(t, tx)
-}
-
-func testNotificationDeliveryConstraints(t *testing.T, tx pgx.Tx) {
-	t.Helper()
-	// processing 状态必须同时持有 owner/expiry，避免出现无法恢复或无法 fencing 的半状态 Delivery。
-	assertTxSQLState(t, tx, `
-		INSERT INTO component_repo.component_event_deliveries (event_id, status)
-		VALUES ('10000000-0000-0000-0000-000000000011', 'processing')`, "23514")
-	if _, err := tx.Exec(context.Background(), `
-		INSERT INTO component_repo.component_event_deliveries (event_id)
-		VALUES ('10000000-0000-0000-0000-000000000011');
-		INSERT INTO component_repo.component_watch_periods
-			(actor_id, component_id, watch_level, notification_locale,
-			 notification_timezone, notification_catalog_version)
-		VALUES
-			('10000000-0000-0000-0000-000000000099',
-			 '10000000-0000-0000-0000-000000000001', 'releases_only',
-			 'en-US', 'UTC', 'frontend-2026.09.06.1')`); err != nil {
-		t.Fatalf("create notification constraint fixtures: %v", err)
-	}
-	// tombstone 与稳定 code 必须一致，防止对象删除后仍生成带可见详情的普通通知。
-	assertTxSQLState(t, tx, `
-		INSERT INTO component_repo.user_notifications
-			(id, recipient_id, event_id, source_watch_period_id, notification_type,
-			 code, component_id, component_version_id, locale, timezone,
-			 resource_catalog_version, tombstone)
-		SELECT '10000000-0000-0000-0000-000000000098', actor_id,
-		       '10000000-0000-0000-0000-000000000011', id,
-		       'component.version.published.v1',
-		       'component_repo.notification.version_published', component_id,
-		       '10000000-0000-0000-0000-000000000006', notification_locale,
-		       notification_timezone, notification_catalog_version, true
-		FROM component_repo.component_watch_periods
-		WHERE actor_id='10000000-0000-0000-0000-000000000099'`, "23514")
 }
 
 func assertTxSQLState(t *testing.T, tx pgx.Tx, statement, expected string) {

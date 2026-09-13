@@ -5,6 +5,7 @@ import (
 	"time"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/feedrender"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -37,6 +38,54 @@ func componentFromList(row db.ListVisibleComponentsRow) Component {
 		TranslationMissing: row.TranslationMissing,
 		CreatedAt:          row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
+}
+
+// publicFeedItemFromDB 将已分页事件映射为 API 投影；用户内容保持原文，个人关系只用于按钮状态。
+func publicFeedItemFromDB(row db.ListComponentPublicFeedRow, imageURLs map[string]string) PublicFeedItem {
+	item := PublicFeedItem{
+		EventID: uuidutil.String(row.EventID), OccurredAt: row.OccurredAt.Time,
+		ComponentVersionID: uuidutil.String(row.ComponentVersionID), Version: row.VersionLabel,
+		Revision: row.Revision, PublishedAt: nullableTime(row.PublishedAt), ReleaseNote: row.ReleaseNote,
+		ReleaseNoteLocale: row.ReleaseNoteLocale,
+		Publisher:         PublicFeedPublisher{ID: uuidutil.String(row.PublisherID)},
+		Render:            PublicFeedRender{Status: "fallback", AvailableAt: row.AvailableAt.Time},
+		Component: Component{
+			ID: uuidutil.String(row.ID), OwnerID: uuidutil.NullableString(row.OwnerID),
+			ContentKind: row.ContentKind, ContentLocale: row.ContentLocale, Name: row.Name,
+			Description: optionalSelected(row.SelectedDescription, row.HasDescription), Tags: nonNilStrings(row.Tags),
+			Category: row.Category, Status: row.Status, CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID),
+			LogicalSize: logicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
+			Metadata:    validJSON(row.Metadata), OwnedByActor: row.OwnedByActor,
+			StarredByActor: row.StarredByActor, StarCount: row.StarCount,
+			Watch:              watchState(row.WatchingByActor, row.WatchLevel, row.WatchedAt),
+			TranslationMissing: false, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		},
+	}
+	if row.RenderStatus == "ready" && row.ImageArtifactID.Valid && row.ImageStorageKey != nil {
+		if url := imageURLs[*row.ImageStorageKey]; url != "" {
+			item.Render.Status = "ready"
+			item.Render.Image = &PublicFeedImage{
+				ArtifactID: uuidutil.String(row.ImageArtifactID), URL: url, Format: "png",
+				SHA256: nullableText(row.ImageSha256), ByteLength: nullableBigint(row.ImageFileSize),
+				Width: feedrender.ImageWidth, Height: feedrender.ImageHeight,
+			}
+		}
+	}
+	return item
+}
+
+func nullableText(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func nullableBigint(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func versionFromDB(row db.ComponentRepoComponentVersion) ComponentVersion {

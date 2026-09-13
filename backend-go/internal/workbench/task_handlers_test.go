@@ -48,6 +48,70 @@ func TestBuildComponentGLBSkipsMissingPartGeometry(t *testing.T) {
 	}
 }
 
+func TestBuildComponentGLBWritesNormalsAndTransparentMaterial(t *testing.T) {
+	identity := [16]float64{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}
+	glb, _, err := buildComponentGLB(
+		[]componentWorldPart{{instanceID: "glass", partRef: "glass.dat", colorCode: "40", matrix: identity}},
+		map[string][]ldrawTriangle{"glass.dat": {{{0, 0, 0}, {20, 0, 0}, {0, 20, 0}}}},
+		PreviewGeneratorVersion,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := decodeComponentGLBJSON(t, glb)
+	mesh := document["meshes"].([]any)[0].(map[string]any)
+	primitive := mesh["primitives"].([]any)[0].(map[string]any)
+	attributes := primitive["attributes"].(map[string]any)
+	if _, ok := attributes["NORMAL"]; !ok {
+		t.Fatal("Component GLB primitive has no NORMAL accessor")
+	}
+	material := document["materials"].([]any)[0].(map[string]any)
+	if material["alphaMode"] != "BLEND" {
+		t.Fatalf("transparent alphaMode = %v", material["alphaMode"])
+	}
+	extras := material["extras"].(map[string]any)
+	if extras["ldrawColorCode"] != "40" || extras["materialClass"] != "glass" || extras["materialProfileVersion"] != "ldraw-studio-pbr-v1" {
+		t.Fatalf("transparent material extras = %#v", extras)
+	}
+	pbr := material["pbrMetallicRoughness"].(map[string]any)
+	base := pbr["baseColorFactor"].([]any)
+	if alpha := base[3].(float64); alpha < 0.49 || alpha > 0.51 {
+		t.Fatalf("transparent alpha = %.3f", alpha)
+	}
+	extensions := material["extensions"].(map[string]any)
+	for _, name := range []string{"KHR_materials_clearcoat", "KHR_materials_ior", "KHR_materials_specular", "KHR_materials_transmission"} {
+		if _, ok := extensions[name]; !ok {
+			t.Errorf("transparent material missing %s: %#v", name, extensions)
+		}
+	}
+	used := map[string]bool{}
+	for _, value := range document["extensionsUsed"].([]any) {
+		used[value.(string)] = true
+	}
+	for name := range extensions {
+		if !used[name] {
+			t.Errorf("extensionsUsed missing %s: %#v", name, used)
+		}
+	}
+}
+
+func TestLDrawMaterialDistinguishesStudioPhysicalClasses(t *testing.T) {
+	chrome := ldrawMaterial("334")
+	pearl := ldrawMaterial("183")
+	chromePBR := chrome["pbrMetallicRoughness"].(map[string]any)
+	pearlPBR := pearl["pbrMetallicRoughness"].(map[string]any)
+	if chromePBR["metallicFactor"].(float64) <= pearlPBR["metallicFactor"].(float64) {
+		t.Fatalf("chrome=%#v pearl=%#v", chromePBR, pearlPBR)
+	}
+	luminous := ldrawMaterial("601")
+	if _, ok := luminous["emissiveFactor"]; !ok {
+		t.Fatalf("luminous material = %#v", luminous)
+	}
+	if _, ok := luminous["extensions"].(map[string]any)["KHR_materials_emissive_strength"]; !ok {
+		t.Fatalf("luminous extensions = %#v", luminous["extensions"])
+	}
+}
+
 func TestBuildComponentGLBBoundsMergeRotatedMultipleRoots(t *testing.T) {
 	parts := []componentWorldPart{
 		{instanceID: "left", partRef: "part.dat", colorCode: "4", matrix: [16]float64{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}},

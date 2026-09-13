@@ -21,17 +21,10 @@ if ($env:START_LEGACY_API -eq "1") {
 if ($env:START_COMPONENT_WORKERS -ne "0") {
   Start-Process $powershell -ArgumentList $noExit, $fileArgument, (Join-Path $scriptDirectory "start-go-worker.ps1")
 }
-if ($env:START_NOTIFICATION_WORKER -ne "0") {
-  Start-Process $powershell -ArgumentList $noExit, $fileArgument, (Join-Path $scriptDirectory "start-notification-worker.ps1")
-}
 Start-Process $powershell -ArgumentList $noExit, $fileArgument, (Join-Path $scriptDirectory "start-frontend.ps1")
 
 Write-Host "Go API: http://127.0.0.1:8080"
 if ($env:START_LEGACY_API -eq "1") {
   Write-Host "Legacy API: http://127.0.0.1:8000"
-}
-if ($env:START_NOTIFICATION_WORKER -ne "0") {
-  $notificationPort = if ($env:NOTIFICATION_WORKER_METRICS_PORT) { $env:NOTIFICATION_WORKER_METRICS_PORT } else { "9091" }
-  Write-Host "Notification Worker monitoring: http://127.0.0.1:$notificationPort"
 }
 Write-Host $config.frontend.url

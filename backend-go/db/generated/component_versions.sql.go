@@ -482,9 +482,17 @@ func (q *Queries) ListVisibleComponentVersions(ctx context.Context, arg ListVisi
 }
 
 const lockOwnedComponentVersion = `-- name: LockOwnedComponentVersion :one
-SELECT v.id, v.component_id, v.status
+SELECT v.id, v.component_id, v.status, c.content_locale,
+       v.preview_artifact_id, v.preview_task_id,
+       preview_task.status AS preview_task_status,
+       COALESCE(preview_artifact.sha256, v.preview_task_id::text, 'preview-unavailable')::text AS preview_identity
 FROM component_repo.component_versions v
 JOIN component_repo.components c ON c.id = v.component_id
+LEFT JOIN component_repo.tasks preview_task ON preview_task.id = v.preview_task_id
+LEFT JOIN component_repo.artifacts preview_artifact
+  ON preview_artifact.id = v.preview_artifact_id
+ AND preview_artifact.verification_status = 'verified'
+ AND preview_artifact.deleted_at IS NULL
 WHERE v.id = $1
   AND v.deleted_at IS NULL
   AND c.owner_id = $2
@@ -499,15 +507,29 @@ type LockOwnedComponentVersionParams struct {
 }
 
 type LockOwnedComponentVersionRow struct {
-	ID          pgtype.UUID
-	ComponentID pgtype.UUID
-	Status      string
+	ID                pgtype.UUID
+	ComponentID       pgtype.UUID
+	Status            string
+	ContentLocale     string
+	PreviewArtifactID pgtype.UUID
+	PreviewTaskID     pgtype.UUID
+	PreviewTaskStatus *string
+	PreviewIdentity   string
 }
 
 func (q *Queries) LockOwnedComponentVersion(ctx context.Context, arg LockOwnedComponentVersionParams) (LockOwnedComponentVersionRow, error) {
 	row := q.db.QueryRow(ctx, lockOwnedComponentVersion, arg.VersionID, arg.ActorID)
 	var i LockOwnedComponentVersionRow
-	err := row.Scan(&i.ID, &i.ComponentID, &i.Status)
+	err := row.Scan(
+		&i.ID,
+		&i.ComponentID,
+		&i.Status,
+		&i.ContentLocale,
+		&i.PreviewArtifactID,
+		&i.PreviewTaskID,
+		&i.PreviewTaskStatus,
+		&i.PreviewIdentity,
+	)
 	return i, err
 }
 

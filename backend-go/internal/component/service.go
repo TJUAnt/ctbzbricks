@@ -2,6 +2,7 @@ package component
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,12 +10,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentactivity"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentdiff"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/feedrender"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/observability"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5"
@@ -41,9 +45,23 @@ type componentSizeFilter struct {
 }
 
 type Service struct {
-	pool    *pgxpool.Pool
-	q       *db.Queries
-	metrics *observability.Registry
+	pool            *pgxpool.Pool
+	q               *db.Queries
+	metrics         *observability.Registry
+	feedImageStore  storage.Store
+	feedImageURLTTL time.Duration
+}
+
+type publicFeedCursorPayload struct {
+	AvailableAt string `json:"availableAt"`
+	EventID     string `json:"eventId"`
+	Query       string `json:"query"`
+}
+
+type decodedPublicFeedCursor struct {
+	AvailableAt pgtype.Timestamptz
+	EventID     pgtype.UUID
+	Query       string
 }
 
 func NewService(pool *pgxpool.Pool) *Service {
@@ -53,6 +71,13 @@ func NewService(pool *pgxpool.Pool) *Service {
 // WithMetrics 为发布事务接入进程级运维指标；未配置时业务行为保持不变。
 func (s *Service) WithMetrics(metrics *observability.Registry) *Service {
 	s.metrics = metrics
+	return s
+}
+
+// WithFeedImages 为 SQL 已授权的 Feed 图片批量签发短期 URL；签名失败时单卡降级，不隐藏发布事件。
+func (s *Service) WithFeedImages(store storage.Store, ttl time.Duration) *Service {
+	s.feedImageStore = store
+	s.feedImageURLTTL = ttl
 	return s
 }
 
@@ -143,6 +168,101 @@ func (s *Service) ListComponents(ctx context.Context, actor pgtype.UUID, request
 		Items: items, Page: request.Page, PageSize: request.PageSize,
 		Total: total, TotalPages: totalPages,
 	}, nil
+}
+
+// ListPublicFeed 按不可变发布事件返回公共广场。Watch 只作为当前 actor 的展示投影，不能改变候选集合。
+func (s *Service) ListPublicFeed(ctx context.Context, actor pgtype.UUID, request PublicFeedRequest) (PublicFeedPage, error) {
+	limit := request.Limit
+	if limit == 0 {
+		limit = defaultPageSize
+	}
+	if limit < 1 || limit > maxPageSize {
+		return PublicFeedPage{}, validationError("limit")
+	}
+	query := strings.TrimSpace(request.Query)
+	if len(query) > 200 {
+		return PublicFeedPage{}, validationError("query")
+	}
+	cursor, err := decodePublicFeedCursor(request.Cursor)
+	if err != nil || (cursor.AvailableAt.Valid && cursor.Query != query) {
+		return PublicFeedPage{}, validationError("cursor")
+	}
+	rows, err := s.q.ListComponentPublicFeed(ctx, db.ListComponentPublicFeedParams{
+		ActorID: actor, SearchQuery: query, CursorAvailableAt: cursor.AvailableAt,
+		CursorEventID: cursor.EventID, PageSize: int32(limit + 1),
+	})
+	if err != nil {
+		return PublicFeedPage{}, err
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	imageURLs := map[string]string{}
+	if s.feedImageStore != nil && s.feedImageURLTTL > 0 {
+		keys := make([]string, 0, len(rows))
+		for _, row := range rows {
+			if row.RenderStatus == "ready" && row.ImageStorageKey != nil &&
+				row.ImageStorageProvider != nil && *row.ImageStorageProvider == s.feedImageStore.Provider() &&
+				row.ImageStorageBucket != nil && *row.ImageStorageBucket == s.feedImageStore.Bucket() {
+				keys = append(keys, *row.ImageStorageKey)
+			}
+		}
+		if len(keys) > 0 {
+			if signed, signErr := s.feedImageStore.SignDownloads(ctx, keys, s.feedImageURLTTL); signErr == nil {
+				imageURLs = signed
+			}
+		}
+	}
+	items := make([]PublicFeedItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, publicFeedItemFromDB(row, imageURLs))
+	}
+	var next *string
+	if hasMore && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		encoded, encodeErr := encodePublicFeedCursor(last.AvailableAt.Time, last.EventID, query)
+		if encodeErr != nil {
+			return PublicFeedPage{}, encodeErr
+		}
+		next = &encoded
+	}
+	return PublicFeedPage{Items: items, NextCursor: next}, nil
+}
+
+func decodePublicFeedCursor(raw string) (decodedPublicFeedCursor, error) {
+	if strings.TrimSpace(raw) == "" {
+		return decodedPublicFeedCursor{}, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return decodedPublicFeedCursor{}, err
+	}
+	var payload publicFeedCursorPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return decodedPublicFeedCursor{}, err
+	}
+	when, err := time.Parse(time.RFC3339Nano, payload.AvailableAt)
+	if err != nil {
+		return decodedPublicFeedCursor{}, err
+	}
+	eventID, err := uuidutil.Parse(payload.EventID)
+	if err != nil {
+		return decodedPublicFeedCursor{}, err
+	}
+	return decodedPublicFeedCursor{
+		AvailableAt: pgtype.Timestamptz{Time: when.UTC(), Valid: true}, EventID: eventID, Query: payload.Query,
+	}, nil
+}
+
+func encodePublicFeedCursor(availableAt time.Time, eventID pgtype.UUID, query string) (string, error) {
+	payload, err := json.Marshal(publicFeedCursorPayload{
+		AvailableAt: availableAt.UTC().Format(time.RFC3339Nano), EventID: uuidutil.String(eventID), Query: query,
+	})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
 // ListStars 返回 actor 当前仍公开可见的个人收藏；归档/删除提交后立即隐藏，持久任务随后删除关系。
@@ -426,7 +546,7 @@ func (s *Service) ListVersions(ctx context.Context, actor pgtype.UUID, component
 }
 
 // PublishVersion 直接发布 owner 的 Draft，并在同一事务中追加唯一的版本发布领域事件。
-// 发布边界对 Component activity 使用独占锁，保证事件序号不会越过尚未提交的 Watch/Unwatch。
+// 发布不枚举 watcher；订阅 Feed 在读取时按 actor 当前 active Watch 关联该不可变事件。
 func (s *Service) PublishVersion(ctx context.Context, actor pgtype.UUID, versionID string) (ComponentVersion, error) {
 	id, err := resourceID(versionID, "versionId")
 	if err != nil {
@@ -466,9 +586,12 @@ func (s *Service) PublishVersion(ctx context.Context, actor pgtype.UUID, version
 		}); err != nil {
 			return ComponentVersion{}, mapDatabaseError(err, "request.conflict")
 		}
-		// WATCH-3 Delivery 与发布事实同事务创建；任何一侧失败都回滚，避免出现无法 fan-out 的幽灵发布。
-		if err := q.CreateComponentEventDelivery(ctx, eventID); err != nil {
-			return ComponentVersion{}, mapDatabaseError(err, "request.conflict")
+		// 发布只提交领域事实与持久任务，不等待图片计算；pending entry 在任务成功或重试终结前不会进入 Feed。
+		if err := feedrender.ScheduleWithQueries(
+			ctx, q, eventID, locked.ComponentID, id, actor, locked.ContentLocale,
+			locked.PreviewTaskID, locked.PreviewTaskStatus, locked.PreviewIdentity,
+		); err != nil {
+			return ComponentVersion{}, err
 		}
 		row, err := q.GetVisibleComponentVersion(ctx, db.GetVisibleComponentVersionParams{VersionID: id, ActorID: actor})
 		return versionFromDB(row), err

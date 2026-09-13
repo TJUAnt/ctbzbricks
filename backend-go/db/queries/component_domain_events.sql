@@ -1,5 +1,6 @@
 -- name: AcquireExclusiveComponentActivityLock :exec
--- Publish 使用同一 Component 的独占事务锁；必须在锁内分配 event_seq，固定 Watch period 的事件时点边界。
+-- Publish 与 Component 删除使用同一 Component 的独占事务锁；Feed 不再依赖事件时点订阅资格，
+-- 但删除生命周期仍必须阻止并发 Watch 在目标失效后创建 active period。
 SELECT pg_advisory_xact_lock(sqlc.arg(lock_key)::bigint);
 
 -- name: CreateComponentVersionPublishedEvent :one
@@ -15,8 +16,3 @@ INSERT INTO component_repo.component_domain_events (
     '{}'::jsonb
 )
 RETURNING event_seq;
-
--- name: CreateComponentEventDelivery :exec
--- 发布事务为每个领域事件建立且只建立一条独立 fan-out Delivery；失败会与发布事实一起回滚。
-INSERT INTO component_repo.component_event_deliveries (event_id)
-VALUES (sqlc.arg(event_id));

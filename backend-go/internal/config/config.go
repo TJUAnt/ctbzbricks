@@ -18,21 +18,28 @@ const (
 )
 
 type Config struct {
-	Environment        string
-	HTTP               HTTPConfig
-	Database           DatabaseConfig
-	Auth               AuthConfig
-	Storage            StorageConfig
-	Worker             WorkerConfig
-	NotificationWorker NotificationWorkerConfig
-	Import             ImportConfig
-	PartPreview        PartPreviewConfig
+	Environment string
+	HTTP        HTTPConfig
+	Database    DatabaseConfig
+	Auth        AuthConfig
+	Storage     StorageConfig
+	Worker      WorkerConfig
+	Import      ImportConfig
+	PartPreview PartPreviewConfig
+	FeedRender  FeedRenderConfig
 }
 
 type PartPreviewConfig struct {
 	LDrawRoot string
 	// GLTFPackPath 固定 Part Preview 的 meshopt 编码器；Worker 启动时验证可执行文件和版本。
 	GLTFPackPath string
+}
+
+// FeedRenderConfig 定义 Go Worker 调用离线路径追踪器的受控边界。
+// BlenderPath 为空时任务仍由 Go 光栅 fallback 完成，不会阻塞已发布事件进入 Feed。
+type FeedRenderConfig struct {
+	BlenderPath string
+	Timeout     time.Duration
 }
 
 type HTTPConfig struct {
@@ -64,31 +71,16 @@ type DatabaseConfig struct {
 type WorkerConfig struct {
 	ID string
 	// TaskTypes 非空时把进程限制为专用 durable task consumer，并关闭通用上传维护。
-	TaskTypes           []string
+	TaskTypes []string
+	// ExcludedTaskTypes 只从通用 Worker 能力中排除重资源任务，同时保留上传维护职责。
+	// 它与 TaskTypes 互斥，避免同一进程同时表达 allowlist 和 denylist 后产生含糊领取边界。
+	ExcludedTaskTypes   []string
 	HealthCheckInterval time.Duration
 	PollInterval        time.Duration
 	LeaseDuration       time.Duration
 	HeartbeatInterval   time.Duration
 	RetryDelay          time.Duration
 	Concurrency         int
-}
-
-// NotificationWorkerConfig 仅配置 Component 通知投递进程，避免与模型/GLB Task Worker 共用并发与 lease。
-type NotificationWorkerConfig struct {
-	ID                     string
-	MetricsHost            string
-	MetricsPort            int
-	PollInterval           time.Duration
-	LeaseDuration          time.Duration
-	HeartbeatInterval      time.Duration
-	HealthCheckInterval    time.Duration
-	MetricsRefreshInterval time.Duration
-	Concurrency            int
-}
-
-// MetricsAddress 返回 Notification Worker 独立的健康检查与指标监听地址。
-func (c NotificationWorkerConfig) MetricsAddress() string {
-	return net.JoinHostPort(c.MetricsHost, strconv.Itoa(c.MetricsPort))
 }
 
 // AuthConfig 同时配置业务请求的本地 JWT 校验，以及页面刷新时的 Supabase 会话二次确认。
@@ -251,36 +243,10 @@ func load(lookup lookupFunc) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	notificationMetricsPort, err := intValue(lookup, "NOTIFICATION_WORKER_METRICS_PORT", 9091, 1, 65535)
-	if err != nil {
-		return Config{}, err
-	}
-	notificationPollInterval, err := durationValue(lookup, "NOTIFICATION_WORKER_POLL_INTERVAL", 500*time.Millisecond)
-	if err != nil {
-		return Config{}, err
-	}
-	notificationLeaseDuration, err := durationValue(lookup, "NOTIFICATION_WORKER_LEASE_DURATION", 60*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	notificationHeartbeatInterval, err := durationValue(lookup, "NOTIFICATION_WORKER_HEARTBEAT_INTERVAL", 20*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	if notificationHeartbeatInterval*2 >= notificationLeaseDuration {
-		return Config{}, errors.New("NOTIFICATION_WORKER_HEARTBEAT_INTERVAL must be less than half NOTIFICATION_WORKER_LEASE_DURATION")
-	}
-	notificationHealthCheckInterval, err := durationValue(lookup, "NOTIFICATION_WORKER_HEALTH_CHECK_INTERVAL", 30*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	notificationMetricsRefreshInterval, err := durationValue(lookup, "NOTIFICATION_WORKER_METRICS_REFRESH_INTERVAL", 15*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	notificationConcurrency, err := intValue(lookup, "NOTIFICATION_WORKER_CONCURRENCY", 4, 1, 4)
-	if err != nil {
-		return Config{}, err
+	workerTaskTypes := stringListValue(lookup("WORKER_TASK_TYPES"))
+	workerExcludedTaskTypes := stringListValue(lookup("WORKER_EXCLUDED_TASK_TYPES"))
+	if len(workerTaskTypes) > 0 && len(workerExcludedTaskTypes) > 0 {
+		return Config{}, errors.New("WORKER_TASK_TYPES and WORKER_EXCLUDED_TASK_TYPES are mutually exclusive")
 	}
 	storageProvider := strings.ToLower(valueOrDefault(lookup, "STORAGE_PROVIDER", "disabled"))
 	if storageProvider != "disabled" && storageProvider != "supabase" {
@@ -349,6 +315,10 @@ func load(lookup lookupFunc) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	feedRenderTimeout, err := durationValue(lookup, "FEED_RENDER_TIMEOUT", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Environment: environment,
@@ -395,24 +365,14 @@ func load(lookup lookupFunc) (Config, error) {
 		},
 		Worker: WorkerConfig{
 			ID:                  strings.TrimSpace(lookup("WORKER_ID")),
-			TaskTypes:           stringListValue(lookup("WORKER_TASK_TYPES")),
+			TaskTypes:           workerTaskTypes,
+			ExcludedTaskTypes:   workerExcludedTaskTypes,
 			HealthCheckInterval: workerHealthCheckInterval,
 			PollInterval:        workerPollInterval,
 			LeaseDuration:       workerLeaseDuration,
 			HeartbeatInterval:   workerHeartbeatInterval,
 			RetryDelay:          workerRetryDelay,
 			Concurrency:         workerConcurrency,
-		},
-		NotificationWorker: NotificationWorkerConfig{
-			ID:                     strings.TrimSpace(lookup("NOTIFICATION_WORKER_ID")),
-			MetricsHost:            valueOrDefault(lookup, "NOTIFICATION_WORKER_METRICS_HOST", "127.0.0.1"),
-			MetricsPort:            notificationMetricsPort,
-			PollInterval:           notificationPollInterval,
-			LeaseDuration:          notificationLeaseDuration,
-			HeartbeatInterval:      notificationHeartbeatInterval,
-			HealthCheckInterval:    notificationHealthCheckInterval,
-			MetricsRefreshInterval: notificationMetricsRefreshInterval,
-			Concurrency:            notificationConcurrency,
 		},
 		Import: ImportConfig{
 			ParserVersion:  importParserVersion,
@@ -422,6 +382,10 @@ func load(lookup lookupFunc) (Config, error) {
 		PartPreview: PartPreviewConfig{
 			LDrawRoot:    strings.TrimSpace(lookup("LDRAW_ROOT")),
 			GLTFPackPath: valueOrDefault(lookup, "PART_PREVIEW_GLTFPACK_PATH", "gltfpack"),
+		},
+		FeedRender: FeedRenderConfig{
+			BlenderPath: strings.TrimSpace(lookup("FEED_RENDER_BLENDER_PATH")),
+			Timeout:     feedRenderTimeout,
 		},
 	}, nil
 }

@@ -20,6 +20,58 @@ type ComponentListRequest struct {
 	Status   string
 }
 
+// PublicFeedRequest 描述组件库广场查询；Cursor 只能继续相同搜索条件下的发布事件流。
+type PublicFeedRequest struct {
+	Limit  int
+	Cursor string
+	Query  string
+}
+
+// PublicFeedPublisher 是发布事件中已验证的发布人身份投影；公开资料尚未建模时只返回稳定用户 ID。
+type PublicFeedPublisher struct {
+	ID string `json:"id"`
+}
+
+// PublicFeedImage 是 Worker 生成的不可变 3:2 派生图定位；内部 storage key 不进入公共响应。
+type PublicFeedImage struct {
+	ArtifactID string `json:"artifactId"`
+	URL        string `json:"url"`
+	Format     string `json:"format"`
+	SHA256     string `json:"sha256"`
+	ByteLength int64  `json:"byteLength"`
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
+}
+
+// PublicFeedRender 表达 Feed 准入终态。fallback 仍是已发布事件，但没有高质量图片。
+type PublicFeedRender struct {
+	Status      string           `json:"status"`
+	AvailableAt time.Time        `json:"availableAt"`
+	Image       *PublicFeedImage `json:"image"`
+}
+
+// PublicFeedItem 保留发布事件身份，并嵌入当前可见的用户 Component 展示投影。
+// 发布版本字段描述事件发生时发布的不可变版本，Component 字段则反映当前公开状态。
+type PublicFeedItem struct {
+	EventID            string              `json:"eventId"`
+	OccurredAt         time.Time           `json:"occurredAt"`
+	ComponentVersionID string              `json:"componentVersionId"`
+	Version            string              `json:"version"`
+	Revision           int32               `json:"revision"`
+	PublishedAt        *time.Time          `json:"publishedAt"`
+	ReleaseNote        *string             `json:"releaseNote"`
+	ReleaseNoteLocale  *string             `json:"releaseNoteLocale"`
+	Publisher          PublicFeedPublisher `json:"publisher"`
+	Render             PublicFeedRender    `json:"render"`
+	Component          Component           `json:"component"`
+}
+
+// PublicFeedPage 使用不透明 keyset cursor 继续全局事件流，不执行 exact COUNT。
+type PublicFeedPage struct {
+	Items      []PublicFeedItem `json:"items"`
+	NextCursor *string          `json:"nextCursor"`
+}
+
 // ComponentPage 返回 actor 可见目录的稳定分页和总数；总数复用相同授权与过滤条件。
 type ComponentPage struct {
 	Items      []Component `json:"items"`

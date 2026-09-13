@@ -1,6 +1,6 @@
 -- +goose Up
 
--- 发布事件是已发生的领域事实，不复用 Task outbox；WATCH-3 会以本表为输入建立独立的 fan-out 执行状态。
+-- 发布事件是已发生的领域事实，不复用 Task outbox；动态 Feed 在读取时按当前 active Watch 关联本表。
 -- 迁移不回填历史 published Version，避免部署时把旧版本误解释为新的订阅事件。
 CREATE TABLE component_repo.component_domain_events (
     id uuid PRIMARY KEY,

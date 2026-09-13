@@ -16,6 +16,11 @@ if [[ -n "${LDRAW_ROOT:-}" ]]; then
 else
   echo "Part preview capability: disabled (LDRAW_ROOT is not set)"
 fi
+if [[ -n "${FEED_RENDER_BLENDER_PATH:-}" ]]; then
+  echo "Feed path tracer: Blender Cycles 4.1"
+else
+  echo "Feed path tracer: unavailable (Go raster fallback active)"
+fi
 
 cd "${CTBZ_PROJECT_ROOT}/backend-go"
 # 直接 exec 编译产物，使上层启动器发送的退出信号到达服务本身，避免 go run 子进程残留。

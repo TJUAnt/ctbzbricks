@@ -16,7 +16,6 @@ import (
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentactivity"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentwatch"
-	"github.com/ctbzbricks/brickbuilder/backend-go/internal/notification"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/observability"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/scene"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
@@ -205,13 +204,32 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 		t.Fatalf("unexpected version published event: type=%q component=%s version=%s actor=%s seq=%d payload=%s",
 			eventType, uuidutil.String(eventComponentID), uuidutil.String(eventVersionID), uuidutil.String(eventActorID), eventSeq, eventPayload)
 	}
-	var deliveryCount int64
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM component_repo.component_event_deliveries delivery
-		JOIN component_repo.component_domain_events event ON event.id=delivery.event_id
-		WHERE event.component_version_id=$1 AND delivery.status='pending'`, mustUUID(t, version.ID)).Scan(&deliveryCount); err != nil || deliveryCount != 1 {
-		t.Fatalf("published event delivery count = %d, error = %v", deliveryCount, err)
+	publicPendingFeed, err := service.ListPublicFeed(ctx, actorA, PublicFeedRequest{Limit: 10})
+	if err != nil || len(publicPendingFeed.Items) != 0 {
+		t.Fatalf("pending image event must not enter public Feed: %+v, error=%v", publicPendingFeed, err)
+	}
+	failFeedRenderTask(t, pool, mustUUID(t, version.ID))
+	ownerFeed, err := service.ListPublicFeed(ctx, actorA, PublicFeedRequest{Limit: 10})
+	if err != nil || len(ownerFeed.Items) != 1 || ownerFeed.Items[0].EventID == "" ||
+		ownerFeed.Items[0].Component.ID != created.ID || ownerFeed.Items[0].ComponentVersionID != version.ID ||
+		ownerFeed.Items[0].Version != "1.0.1" || ownerFeed.Items[0].Publisher.ID != uuidutil.String(actorA) ||
+		!ownerFeed.Items[0].Component.OwnedByActor || ownerFeed.Items[0].Render.Status != "fallback" ||
+		ownerFeed.Items[0].Render.Image != nil || ownerFeed.Items[0].Render.AvailableAt.IsZero() {
+		t.Fatalf("owner public Feed projection: %+v, error=%v", ownerFeed, err)
+	}
+	otherFeed, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{Limit: 10})
+	if err != nil || len(otherFeed.Items) != 1 || otherFeed.Items[0].EventID != ownerFeed.Items[0].EventID ||
+		otherFeed.Items[0].Component.OwnedByActor || otherFeed.Items[0].Component.Watch == nil ||
+		otherFeed.Items[0].Component.Watch.Watching {
+		t.Fatalf("public Feed must be independent of Watch membership: %+v, error=%v", otherFeed, err)
+	}
+	matchingFeed, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{Limit: 10, Query: "用户组件"})
+	if err != nil || len(matchingFeed.Items) != 1 {
+		t.Fatalf("public Feed name search: %+v, error=%v", matchingFeed, err)
+	}
+	emptyFeed, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{Limit: 10, Query: "missing"})
+	if err != nil || len(emptyFeed.Items) != 0 {
+		t.Fatalf("public Feed non-matching search: %+v, error=%v", emptyFeed, err)
 	}
 	if _, err := service.PublishVersion(ctx, actorA, version.ID); errorCode(err) != "request.conflict" {
 		t.Fatalf("repeated publish code = %q, error = %v", errorCode(err), err)
@@ -265,7 +283,7 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	}
 
 	testOfficialTranslationSelection(t, service, pool, actorA)
-	watchedEventSeq := testGroupsMembershipsAndStars(t, service, actorA, actorB, created.ID, headVersion.ID)
+	testGroupsMembershipsAndStars(t, service, actorA, actorB, created.ID, headVersion.ID)
 	testStablePagination(t, service, actorA)
 
 	// Component DELETE 是软删除生命周期终点：Star 直接移除，active Watch 使用一个共同边界关闭并保留历史。
@@ -294,6 +312,12 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	if err != nil || len(pendingWatches.Items) != 0 {
 		t.Fatalf("deleted Component remained in Watch list while cleanup pending: %+v, %v", pendingWatches, err)
 	}
+	pendingFeed, err := watchService.ListFeed(ctx, actorB, componentwatch.FeedRequest{
+		Locale: "en-US", Limit: 20, Since: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil || len(pendingFeed.Items) != 0 {
+		t.Fatalf("deleted Component remained in Feed while cleanup pending: %+v, %v", pendingFeed, err)
+	}
 	var cleanupTaskID pgtype.UUID
 	var cleanupPayload []byte
 	if err := pool.QueryRow(ctx, `
@@ -317,7 +341,6 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	if err != nil || string(repeatedCleanup.Payload) != `{"closedWatches":0,"componentId":"`+created.ID+`","deletedStars":0}` {
 		t.Fatalf("repeat relationship cleanup task: result=%s error=%v", repeatedCleanup.Payload, err)
 	}
-	testNotificationTombstoneMaterialization(t, pool, watchedEventSeq)
 	var remainingStars, activeWatches, lifecycleClosed, lifecycleBoundaries int64
 	var lifecycleStart, lifecycleEnd int64
 	if err := pool.QueryRow(ctx, `
@@ -356,54 +379,6 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	}
 	if _, err := service.Star(ctx, actorB, created.ID); errorCode(err) != "component_repo.component_not_found" {
 		t.Fatalf("deleted component star code = %q, error = %v", errorCode(err), err)
-	}
-}
-
-func testNotificationTombstoneMaterialization(t *testing.T, pool *pgxpool.Pool, eventSeq int64) {
-	t.Helper()
-	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `
-		DELETE FROM component_repo.user_notifications notification
-		USING component_repo.component_domain_events event
-		WHERE event.id=notification.event_id AND event.event_seq=$1`, eventSeq); err != nil {
-		t.Fatalf("clear tombstone notification fixture: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		UPDATE component_repo.component_event_deliveries delivery
-		SET status='pending', cursor_actor_id=NULL, cursor_period_id=NULL, attempts=0,
-		    available_at=clock_timestamp(), lease_owner=NULL, lease_expires_at=NULL,
-		    completed_at=NULL, dead_lettered_at=NULL, updated_at=clock_timestamp()
-		FROM component_repo.component_domain_events event
-		WHERE event.id=delivery.event_id AND event.event_seq=$1`, eventSeq); err != nil {
-		t.Fatalf("reset tombstone notification fixture: %v", err)
-	}
-	service := notification.NewService(pool, observability.NewRegistry())
-	claimed, found, err := service.Claim(ctx, "notification-tombstone", time.Minute)
-	if err != nil || !found {
-		t.Fatalf("claim tombstone delivery: found=%v error=%v", found, err)
-	}
-	for {
-		result, processErr := service.ProcessNextBatch(ctx, "notification-tombstone", claimed)
-		if processErr != nil {
-			t.Fatalf("process tombstone delivery: %v", processErr)
-		}
-		if result.Completed {
-			break
-		}
-	}
-	var count, normalCodes, unsafeParams int64
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*),
-		       count(*) FILTER (WHERE notification.code<>'component_repo.notification.version_published_unavailable'
-		                         OR NOT notification.tombstone),
-		       count(*) FILTER (WHERE notification.params ?| ARRAY['name','releaseNote','description'])
-		FROM component_repo.user_notifications notification
-		JOIN component_repo.component_domain_events event ON event.id=notification.event_id
-		WHERE event.event_seq=$1`, eventSeq).Scan(&count, &normalCodes, &unsafeParams); err != nil {
-		t.Fatalf("read tombstone notifications: %v", err)
-	}
-	if count != 251 || normalCodes != 0 || unsafeParams != 0 {
-		t.Fatalf("tombstone notification safety: count=%d normal=%d unsafeParams=%d", count, normalCodes, unsafeParams)
 	}
 }
 
@@ -650,6 +625,7 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 	if published, err := service.PublishVersion(ctx, actorA, publishVersionID); err != nil || published.Status != "published" {
 		t.Fatalf("publish watched Component version: %+v, %v", published, err)
 	}
+	succeedFeedRenderTask(t, service.pool, mustUUID(t, publishVersionID))
 	var watchedEventSeq int64
 	if err := service.pool.QueryRow(ctx, `
 		SELECT event_seq
@@ -659,6 +635,22 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 	}
 	if committed, _ := service.metrics.ComponentDomainEventCounts(); committed != 2 {
 		t.Fatalf("watched publish committed metric = %d, want 2", committed)
+	}
+	publicFirst, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{Limit: 1})
+	if err != nil || len(publicFirst.Items) != 1 || publicFirst.Items[0].ComponentVersionID != publishVersionID ||
+		publicFirst.NextCursor == nil || !publicFirst.Items[0].Component.StarredByActor ||
+		publicFirst.Items[0].Component.Watch == nil || !publicFirst.Items[0].Component.Watch.Watching {
+		t.Fatalf("public Feed first cursor page: %+v, error=%v", publicFirst, err)
+	}
+	publicSecond, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{Limit: 1, Cursor: *publicFirst.NextCursor})
+	if err != nil || len(publicSecond.Items) != 1 || publicSecond.Items[0].ComponentVersionID == publishVersionID ||
+		publicSecond.NextCursor != nil {
+		t.Fatalf("public Feed second cursor page: %+v, error=%v", publicSecond, err)
+	}
+	if _, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{
+		Limit: 1, Cursor: *publicFirst.NextCursor, Query: "changed-filter",
+	}); errorCode(err) != "request.validation_failed" {
+		t.Fatalf("public Feed accepted cursor after changing query: %v", err)
 	}
 	watchedComponent, err := service.GetComponent(ctx, actorB, componentID, "en-US")
 	if err != nil || watchedComponent.Watch == nil || !watchedComponent.Watch.Watching ||
@@ -706,6 +698,12 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 	if err != nil || len(emptyWatches.Items) != 0 {
 		t.Fatalf("unwatched list: %+v, %v", emptyWatches, err)
 	}
+	emptyFeed, err := watchService.ListFeed(ctx, actorB, componentwatch.FeedRequest{
+		Locale: "en-US", Limit: 20, Since: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil || len(emptyFeed.Items) != 0 {
+		t.Fatalf("Unwatch must immediately hide prior updates from Feed: %+v, %v", emptyFeed, err)
+	}
 	// 两个并发 Rewatch 必须共同创建并返回一个新 active period，不能覆盖旧周期或追加两个 active 行。
 	rewatchResults := make(chan componentwatch.Watch, 2)
 	rewatchErrors := make(chan error, 2)
@@ -750,11 +748,23 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 		t.Fatalf("rewatch periods: total=%d active=%d secondStart=%d firstEnd=%d error=%v",
 			periodCount, activePeriodCount, secondStartedSeq, firstEndedSeq, err)
 	}
-	testNotificationEventTimeAndCrashRecovery(t, service.pool, actorB, mustUUID(t, componentID), watchedEventSeq, firstPeriodID)
+	// Rewatch 后以当前关系读取 Feed：首次 Watch 之前和 Watch 期间发布的两个事件都必须出现。
+	feed, err := watchService.ListFeed(ctx, actorB, componentwatch.FeedRequest{
+		Locale: "en-US", Limit: 20, Since: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil || len(feed.Items) != 2 || feed.Items[0].ComponentVersionID != publishVersionID ||
+		feed.Items[1].ComponentVersionID == publishVersionID {
+		t.Fatalf("current Watch Feed must include pre-Watch and watched releases: %+v, %v", feed, err)
+	}
+	feedSucceeded, feedFailed := watchMetrics.ComponentWatchFeedCounts()
+	if feedSucceeded != 2 || feedFailed != 0 {
+		t.Fatalf("Watch Feed metrics = succeeded %d failed %d", feedSucceeded, feedFailed)
+	}
 	watchSucceeded, watchFailed, unwatchSucceeded, unwatchFailed := watchMetrics.ComponentWatchMutationCounts()
 	if watchSucceeded != 4 || watchFailed != 2 || unwatchSucceeded != 2 || unwatchFailed != 0 {
 		t.Fatalf("watch mutation metrics = %d %d %d %d", watchSucceeded, watchFailed, unwatchSucceeded, unwatchFailed)
 	}
+	testWatchFeedKeysetPagination(t, service, actorA, componentID)
 	testWatchKeysetPagination(t, service, actorA, actorB)
 	stars, err := service.ListStars(ctx, actorB, StarListRequest{
 		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US",
@@ -816,104 +826,6 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 		t.Fatalf("unstarred component removed from personal root: %+v, %v", actorBRoot, err)
 	}
 	return watchedEventSeq
-}
-
-func testNotificationEventTimeAndCrashRecovery(
-	t *testing.T,
-	pool *pgxpool.Pool,
-	recipient, componentID pgtype.UUID,
-	watchedEventSeq, firstPeriodID int64,
-) {
-	t.Helper()
-	ctx := context.Background()
-	metrics := observability.NewRegistry()
-	service := notification.NewService(pool, metrics)
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO component_repo.component_watch_periods
-			(actor_id, component_id, watch_level, started_seq, watched_at,
-			 notification_locale, notification_timezone, notification_catalog_version)
-		SELECT ('30000000-0000-0000-0000-' || lpad(item::text, 12, '0'))::uuid,
-		       $1, 'releases_only', $2-1, clock_timestamp(),
-		       'en-US', 'Asia/Shanghai', 'frontend-2026.09.06.1'
-		FROM generate_series(1, 250) item`, componentID, watchedEventSeq); err != nil {
-		t.Fatalf("seed notification batch recipients: %v", err)
-	}
-
-	// 第一条发布发生在 Watch 前，因此空页直接完成；第二条发布必须命中已关闭的首个区间，
-	// 而不能因为用户后来 Rewatch 就错误归属到当前 active period。
-	first, found, err := service.Claim(ctx, "notification-integration", time.Minute)
-	if err != nil || !found {
-		t.Fatalf("claim pre-watch delivery: found=%v error=%v", found, err)
-	}
-	firstResult, err := service.ProcessNextBatch(ctx, "notification-integration", first)
-	if err != nil || !firstResult.Completed || firstResult.Recipients != 0 {
-		t.Fatalf("pre-watch delivery result: %+v error=%v", firstResult, err)
-	}
-	second, found, err := service.Claim(ctx, "notification-integration", time.Minute)
-	if err != nil || !found {
-		t.Fatalf("claim watched delivery: found=%v error=%v", found, err)
-	}
-	batch, err := service.ProcessNextBatch(ctx, "notification-integration", second)
-	if err != nil || batch.Completed || batch.Recipients != notification.BatchSize || batch.Created != notification.BatchSize {
-		t.Fatalf("watched delivery first batch: %+v error=%v", batch, err)
-	}
-	if _, err := pool.Exec(ctx, `
-		UPDATE component_repo.component_event_deliveries
-		SET lease_expires_at=clock_timestamp()-interval '1 second'
-		WHERE event_id=$1`, second.EventID); err != nil {
-		t.Fatalf("expire notification delivery lease: %v", err)
-	}
-	recovered, err := service.RecoverExpired(ctx)
-	if err != nil || !recovered {
-		t.Fatalf("recover expired delivery: recovered=%v error=%v", recovered, err)
-	}
-	resumed, found, err := service.Claim(ctx, "notification-recovery", time.Minute)
-	if err != nil || !found || resumed.Attempt != second.Attempt+1 {
-		t.Fatalf("reclaim delivery: %+v found=%v error=%v", resumed, found, err)
-	}
-	lastBatch, err := service.ProcessNextBatch(ctx, "notification-recovery", resumed)
-	if err != nil || lastBatch.Completed || lastBatch.Recipients != 1 || lastBatch.Created != 1 {
-		t.Fatalf("resumed delivery last batch: %+v error=%v", lastBatch, err)
-	}
-	completed, err := service.ProcessNextBatch(ctx, "notification-recovery", resumed)
-	if err != nil || !completed.Completed || completed.Recipients != 0 {
-		t.Fatalf("resumed delivery empty-page completion: %+v error=%v", completed, err)
-	}
-
-	var count int64
-	var sourcePeriodID, eventSeq int64
-	var locale, timezone, catalogVersion, code string
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*) OVER (), notification.source_watch_period_id, event.event_seq,
-		       notification.locale, notification.timezone,
-		       notification.resource_catalog_version, notification.code
-		FROM component_repo.user_notifications notification
-		JOIN component_repo.component_domain_events event ON event.id=notification.event_id
-		WHERE notification.recipient_id=$1 AND notification.component_id=$2`, recipient, componentID).Scan(
-		&count, &sourcePeriodID, &eventSeq, &locale, &timezone, &catalogVersion, &code,
-	); err != nil {
-		t.Fatalf("read materialized notification: %v", err)
-	}
-	if count != 1 || eventSeq != watchedEventSeq || sourcePeriodID != firstPeriodID ||
-		locale != "zh-CN" || timezone != "UTC" || catalogVersion != "frontend-2026.09.06.1" ||
-		code != "component_repo.notification.version_published" {
-		t.Fatalf("unexpected notification: count=%d event=%d period=%d locale=%q zone=%q catalog=%q code=%q",
-			count, eventSeq, sourcePeriodID, locale, timezone, catalogVersion, code)
-	}
-	var eventRecipientCount int64
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM component_repo.user_notifications notification
-		JOIN component_repo.component_domain_events event ON event.id=notification.event_id
-		WHERE event.event_seq=$1`, watchedEventSeq).Scan(&eventRecipientCount); err != nil || eventRecipientCount != 251 {
-		t.Fatalf("notification batch recipient count = %d, error=%v", eventRecipientCount, err)
-	}
-	if _, err := pool.Exec(ctx, `
-		UPDATE component_repo.component_watch_periods
-		SET ended_seq=nextval('component_repo.component_activity_sequence'),
-		    unwatched_at=clock_timestamp(), ended_reason='user_unwatched'
-		WHERE component_id=$1 AND actor_id::text LIKE '30000000-%' AND ended_seq IS NULL`, componentID); err != nil {
-		t.Fatalf("close notification batch fixture periods: %v", err)
-	}
 }
 
 func testComponentActivityLockProtocol(t *testing.T, pool *pgxpool.Pool, componentID pgtype.UUID) {
@@ -981,29 +893,23 @@ func testPublishedEventRollback(t *testing.T, pool *pgxpool.Pool, actor, compone
 	}); err != nil {
 		t.Fatalf("insert rollback fixture event: %v", err)
 	}
-	if err := q.CreateComponentEventDelivery(ctx, mustUUID(t, "20000000-0000-0000-0000-000000000041")); err != nil {
-		t.Fatalf("insert rollback fixture delivery: %v", err)
-	}
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatalf("rollback publish transaction: %v", err)
 	}
 	var status string
 	var currentVersionID pgtype.UUID
-	var eventCount, deliveryCount int64
+	var eventCount int64
 	if err := pool.QueryRow(ctx, `
 		SELECT version.status, component.current_version_id,
 		       (SELECT count(*) FROM component_repo.component_domain_events event
-		        WHERE event.component_version_id = version.id),
-		       (SELECT count(*) FROM component_repo.component_event_deliveries delivery
-		        JOIN component_repo.component_domain_events event ON event.id=delivery.event_id
 		        WHERE event.component_version_id = version.id)
 		FROM component_repo.component_versions version
 		JOIN component_repo.components component ON component.id = version.component_id
-		WHERE version.id = $1`, versionID).Scan(&status, &currentVersionID, &eventCount, &deliveryCount); err != nil {
+		WHERE version.id = $1`, versionID).Scan(&status, &currentVersionID, &eventCount); err != nil {
 		t.Fatalf("read rolled-back publish state: %v", err)
 	}
-	if status != "draft" || currentVersionID.Valid || eventCount != 0 || deliveryCount != 0 {
-		t.Fatalf("rolled-back publish leaked state: status=%q current=%s events=%d deliveries=%d", status, uuidutil.String(currentVersionID), eventCount, deliveryCount)
+	if status != "draft" || currentVersionID.Valid || eventCount != 0 {
+		t.Fatalf("rolled-back publish leaked state: status=%q current=%s events=%d", status, uuidutil.String(currentVersionID), eventCount)
 	}
 }
 
@@ -1085,6 +991,15 @@ func testWatchKeysetPagination(t *testing.T, service *Service, creator, actor pg
 	if err != nil || len(second.Items) != 1 || second.NextCursor != nil {
 		t.Fatalf("second watch cursor page: %+v, %v", second, err)
 	}
+	for _, changed := range []componentwatch.ListRequest{
+		{Locale: "zh-CN", Limit: 2, Cursor: *first.NextCursor},
+		{Locale: "en-US", Limit: 2, Cursor: *first.NextCursor, Query: "page"},
+		{Locale: "en-US", Limit: 2, Cursor: *first.NextCursor, Category: "building"},
+	} {
+		if _, changedErr := watchService.List(ctx, actor, changed); errorCode(changedErr) != "request.validation_failed" {
+			t.Fatalf("Watch cursor accepted changed filters: request=%+v code=%q error=%v", changed, errorCode(changedErr), changedErr)
+		}
+	}
 	seen := map[string]bool{}
 	for _, item := range append(first.Items, second.Items...) {
 		if seen[item.ComponentID] {
@@ -1106,6 +1021,164 @@ func testWatchKeysetPagination(t *testing.T, service *Service, creator, actor pg
 	})
 	if err != nil || len(translated.Items) != 1 || translated.Items[0].Name != "订阅分页车辆" {
 		t.Fatalf("translated watch search: %+v, %v", translated, err)
+	}
+}
+
+func testWatchFeedKeysetPagination(t *testing.T, service *Service, creator pgtype.UUID, userComponentID string) {
+	t.Helper()
+	ctx := context.Background()
+	watcher := mustUUID(t, "21000000-0000-0000-0000-000000000004")
+	fixtureTime := time.Now().UTC().Add(-5 * time.Minute)
+	_, err := service.pool.Exec(ctx, `
+		INSERT INTO component_repo.components
+			(id, content_kind, content_locale, name, category, status, created_by)
+		VALUES
+			('21000000-0000-0000-0000-000000000020', 'official', 'en-US',
+			 'Official feed source', 'building', 'active', $1)`, creator)
+	if err != nil {
+		t.Fatalf("seed official Watch Feed Component: %v", err)
+	}
+	_, err = service.pool.Exec(ctx, `
+		INSERT INTO component_repo.component_translations
+			(component_id, locale, name, translation_status, reviewed_by, reviewed_at)
+		VALUES
+			('21000000-0000-0000-0000-000000000020', 'zh-CN', '官方订阅更新',
+			 'reviewed', $1, now())`, creator)
+	if err != nil {
+		t.Fatalf("seed official Watch Feed translation: %v", err)
+	}
+	_, err = service.pool.Exec(ctx, `
+		INSERT INTO component_repo.component_versions
+			(id, component_id, version_label, revision, status, source_artifact_id,
+			 scene_snapshot_id, parser_version, interface_signature, structure_hash,
+			 geometry_hash, release_note, release_note_locale, created_by, published_at)
+		SELECT fixture.version_id, '21000000-0000-0000-0000-000000000020',
+		       fixture.version_label, fixture.revision, 'published', source.source_artifact_id,
+		       source.scene_snapshot_id, source.parser_version, source.interface_signature,
+		       source.structure_hash, source.geometry_hash, fixture.release_note, 'en-US', $1, $2
+		FROM (VALUES
+			('21000000-0000-0000-0000-000000000021'::uuid, 'feed-1', 1, 'Official note 1'),
+			('21000000-0000-0000-0000-000000000022'::uuid, 'feed-2', 2, 'Official note 2'),
+			('21000000-0000-0000-0000-000000000023'::uuid, 'feed-3', 3, 'Official note 3'),
+			('21000000-0000-0000-0000-000000000024'::uuid, 'feed-4', 4, 'Official note 4')
+		) fixture(version_id, version_label, revision, release_note)
+		CROSS JOIN LATERAL (
+			SELECT source_artifact_id, scene_snapshot_id, parser_version,
+			       interface_signature, structure_hash, geometry_hash
+			FROM component_repo.component_versions
+			WHERE status = 'published'
+			LIMIT 1
+		) source`, creator, fixtureTime)
+	if err != nil {
+		t.Fatalf("seed official Watch Feed versions: %v", err)
+	}
+	_, err = service.pool.Exec(ctx, `
+		UPDATE component_repo.components
+		SET current_version_id = '21000000-0000-0000-0000-000000000024'
+		WHERE id = '21000000-0000-0000-0000-000000000020'`)
+	if err != nil {
+		t.Fatalf("link official Watch Feed current version: %v", err)
+	}
+	_, err = service.pool.Exec(ctx, `
+		INSERT INTO component_repo.component_domain_events
+			(id, event_type, component_id, component_version_id, actor_id, occurred_at)
+		SELECT fixture.event_id, 'component.version.published.v1',
+		       '21000000-0000-0000-0000-000000000020', fixture.version_id, $1, $2
+		FROM (VALUES
+			('21000000-0000-0000-0000-000000000031'::uuid, '21000000-0000-0000-0000-000000000021'::uuid),
+			('21000000-0000-0000-0000-000000000032'::uuid, '21000000-0000-0000-0000-000000000022'::uuid),
+			('21000000-0000-0000-0000-000000000033'::uuid, '21000000-0000-0000-0000-000000000023'::uuid),
+			('21000000-0000-0000-0000-000000000034'::uuid, '21000000-0000-0000-0000-000000000024'::uuid)
+		) fixture(event_id, version_id)`, creator, fixtureTime)
+	if err != nil {
+		t.Fatalf("seed official Watch Feed pages: %v", err)
+	}
+	watchService := componentwatch.NewService(service.pool)
+	if _, err := watchService.Watch(ctx, watcher, "21000000-0000-0000-0000-000000000020", componentwatch.ReleasesOnlyLevel); err != nil {
+		t.Fatalf("watch official Feed fixture: %v", err)
+	}
+	since := fixtureTime.Add(-time.Hour).Format(time.RFC3339Nano)
+	first, err := watchService.ListFeed(ctx, watcher, componentwatch.FeedRequest{Locale: "zh-CN", Limit: 2, Since: since})
+	if err != nil || len(first.Items) != 2 || first.NextCursor == nil || first.Items[0].EventID != "21000000-0000-0000-0000-000000000034" ||
+		first.Items[0].ComponentName != "官方订阅更新" || first.Items[0].ReleaseNote == nil || *first.Items[0].ReleaseNote != "Official note 4" ||
+		first.Items[0].ReleaseNoteLocale == nil || *first.Items[0].ReleaseNoteLocale != "en-US" {
+		t.Fatalf("first official Watch Feed page: %+v, %v", first, err)
+	}
+	// 首屏之后插入更晚事件；后续 cursor 必须从原边界继续，不能把新事件插入旧分页序列。
+	_, err = service.pool.Exec(ctx, `
+		INSERT INTO component_repo.component_versions
+			(id, component_id, version_label, revision, status, source_artifact_id,
+			 scene_snapshot_id, parser_version, interface_signature, structure_hash,
+			 geometry_hash, release_note, release_note_locale, created_by, published_at)
+		SELECT '21000000-0000-0000-0000-000000000025',
+		       '21000000-0000-0000-0000-000000000020', 'feed-5', 5, 'published',
+		       source_artifact_id, scene_snapshot_id, parser_version, interface_signature,
+		       structure_hash, geometry_hash, 'Official note 5', 'en-US', $1, $2
+		FROM component_repo.component_versions
+		WHERE id = '21000000-0000-0000-0000-000000000024'`, creator, fixtureTime.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("insert concurrent Watch Feed version: %v", err)
+	}
+	_, err = service.pool.Exec(ctx, `
+		INSERT INTO component_repo.component_domain_events
+			(id, event_type, component_id, component_version_id, actor_id, occurred_at)
+		VALUES
+			('21000000-0000-0000-0000-000000000035', 'component.version.published.v1',
+			 '21000000-0000-0000-0000-000000000020',
+			 '21000000-0000-0000-0000-000000000025', $1, $2)`, creator, fixtureTime.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("insert concurrent Watch Feed event: %v", err)
+	}
+	items := append([]componentwatch.FeedItem{}, first.Items...)
+	cursor := first.NextCursor
+	for cursor != nil {
+		page, pageErr := watchService.ListFeed(ctx, watcher, componentwatch.FeedRequest{Locale: "zh-CN", Limit: 2, Cursor: *cursor})
+		if pageErr != nil {
+			t.Fatalf("continue Watch Feed cursor: %v", pageErr)
+		}
+		items = append(items, page.Items...)
+		cursor = page.NextCursor
+	}
+	seen := map[string]bool{}
+	for _, item := range items {
+		if item.EventID == "21000000-0000-0000-0000-000000000035" || seen[item.EventID] {
+			t.Fatalf("frozen Watch Feed cursor returned inserted/duplicate event: %+v", items)
+		}
+		seen[item.EventID] = true
+	}
+	if len(items) != 4 || len(seen) != 4 {
+		t.Fatalf("frozen Watch Feed pages = %+v", items)
+	}
+	if _, mismatchErr := watchService.ListFeed(ctx, watcher, componentwatch.FeedRequest{
+		Locale: "zh-CN", Limit: 2, Cursor: *first.NextCursor, Since: fixtureTime.Add(-2 * time.Hour).Format(time.RFC3339Nano),
+	}); errorCode(mismatchErr) != "request.validation_failed" {
+		t.Fatalf("Feed cursor accepted changed since: code=%q error=%v", errorCode(mismatchErr), mismatchErr)
+	}
+	refreshed, err := watchService.ListFeed(ctx, watcher, componentwatch.FeedRequest{Locale: "zh-CN", Limit: 10, Since: since})
+	if err != nil || len(refreshed.Items) != 5 || refreshed.Items[0].EventID != "21000000-0000-0000-0000-000000000035" {
+		t.Fatalf("refreshed Watch Feed did not include new event: %+v, %v", refreshed, err)
+	}
+	if _, err := watchService.Watch(ctx, watcher, userComponentID, componentwatch.ReleasesOnlyLevel); err != nil {
+		t.Fatalf("watch user Feed fixture: %v", err)
+	}
+	withUser, err := watchService.ListFeed(ctx, watcher, componentwatch.FeedRequest{
+		Locale: "en-US", Limit: 20, Since: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("read user content Watch Feed: %v", err)
+	}
+	userContentFound := false
+	for _, item := range withUser.Items {
+		if item.ComponentID == userComponentID && item.ReleaseNote != nil && *item.ReleaseNote == "保留用户原文" {
+			userContentFound = item.ComponentName == "  用户组件  " && item.ContentLocale == "zh-CN" &&
+				item.ReleaseNoteLocale != nil && *item.ReleaseNoteLocale == "zh-CN" && !item.TranslationMissing
+		}
+	}
+	if !userContentFound {
+		t.Fatalf("user-authored Feed content changed across locale: %+v", withUser.Items)
+	}
+	if err := watchService.Unwatch(ctx, watcher, userComponentID); err != nil {
+		t.Fatalf("remove user Feed fixture Watch: %v", err)
 	}
 }
 
@@ -1315,6 +1388,92 @@ func resetComponentRepo(t *testing.T, pool *pgxpool.Pool) {
 		RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset component_repo fixtures: %v", err)
+	}
+}
+
+// failFeedRenderTask 模拟 Worker 已耗尽重试：任务先取得租约再失败，数据库触发器必须开放 fallback Feed。
+func failFeedRenderTask(t *testing.T, pool *pgxpool.Pool, versionID pgtype.UUID) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+		UPDATE component_repo.tasks task
+		SET status='running', lease_owner='feed-test-worker', lease_expires_at=now()+interval '1 hour',
+		    attempts=attempts+1, started_at=COALESCE(started_at, now()), updated_at=now()
+		FROM component_repo.component_feed_entries entry
+		WHERE entry.component_version_id=$1 AND entry.render_task_id=task.id AND task.status='queued'`, versionID)
+	if err != nil {
+		t.Fatalf("claim Feed render task fixture: %v", err)
+	}
+	result, err := pool.Exec(context.Background(), `
+		UPDATE component_repo.tasks task
+		SET status='failed', lease_owner=NULL, lease_expires_at=NULL,
+		    error_code='component_repo.feed_render_unavailable', error_params='{}',
+		    finished_at=now(), updated_at=now()
+		FROM component_repo.component_feed_entries entry
+		WHERE entry.component_version_id=$1 AND entry.render_task_id=task.id AND task.status='running'`, versionID)
+	if err != nil {
+		t.Fatalf("terminalize Feed render task: %v", err)
+	}
+	if result.RowsAffected() != 1 {
+		t.Fatalf("terminal Feed render update affected %d rows, want 1", result.RowsAffected())
+	}
+	var status string
+	var availableAt pgtype.Timestamptz
+	if err := pool.QueryRow(context.Background(), `
+		SELECT render_status, available_at
+		FROM component_repo.component_feed_entries
+		WHERE component_version_id=$1`, versionID).Scan(&status, &availableAt); err != nil || status != "fallback" || !availableAt.Valid {
+		t.Fatalf("fallback Feed entry status=%q available=%+v error=%v", status, availableAt, err)
+	}
+}
+
+// succeedFeedRenderTask 模拟 Worker 已登记不可变 PNG 后完成任务，验证触发器把 entry 原子推进为 ready。
+func succeedFeedRenderTask(t *testing.T, pool *pgxpool.Pool, versionID pgtype.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		UPDATE component_repo.tasks task
+		SET status='running', lease_owner='feed-test-worker', lease_expires_at=now()+interval '1 hour',
+		    attempts=attempts+1, started_at=COALESCE(started_at, now()), updated_at=now()
+		FROM component_repo.component_feed_entries entry
+		WHERE entry.component_version_id=$1 AND entry.render_task_id=task.id AND task.status='queued'`, versionID); err != nil {
+		t.Fatalf("claim successful Feed render fixture: %v", err)
+	}
+	var artifactID pgtype.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO component_repo.artifacts (
+			id, owner_id, artifact_type, source_kind, original_filename, storage_provider,
+			storage_bucket, storage_key, sha256, file_size, mime_type, immutable,
+			verification_status, verified_at, uploaded_by
+		)
+		SELECT md5(entry.component_version_id::text || '-feed-image')::uuid,
+		       task.owner_id, 'component_feed_image', 'derived', entry.component_version_id::text || '.png',
+		       'test', 'test', 'feed/' || entry.component_version_id::text || '.png', repeat('a',64), 2048,
+		       'image/png', true, 'verified', now(), task.owner_id
+		FROM component_repo.component_feed_entries entry
+		JOIN component_repo.tasks task ON task.id=entry.render_task_id
+		WHERE entry.component_version_id=$1
+		RETURNING id`, versionID).Scan(&artifactID); err != nil {
+		t.Fatalf("insert successful Feed image artifact: %v", err)
+	}
+	result, err := pool.Exec(ctx, `
+		UPDATE component_repo.tasks task
+		SET status='succeeded', result='{}', result_artifact_id=$2,
+		    lease_owner=NULL, lease_expires_at=NULL, progress_percent=100,
+		    finished_at=now(), updated_at=now()
+		FROM component_repo.component_feed_entries entry
+		WHERE entry.component_version_id=$1 AND entry.render_task_id=task.id AND task.status='running'`, versionID, artifactID)
+	if err != nil || result.RowsAffected() != 1 {
+		t.Fatalf("complete Feed render task: affected=%d error=%v", result.RowsAffected(), err)
+	}
+	var status string
+	var storedArtifactID pgtype.UUID
+	var availableAt pgtype.Timestamptz
+	if err := pool.QueryRow(ctx, `
+		SELECT render_status, image_artifact_id, available_at
+		FROM component_repo.component_feed_entries
+		WHERE component_version_id=$1`, versionID).Scan(&status, &storedArtifactID, &availableAt); err != nil || status != "ready" ||
+		!uuidutil.Equal(storedArtifactID, artifactID) || !availableAt.Valid {
+		t.Fatalf("ready Feed entry status=%q artifact=%s available=%+v error=%v", status, uuidutil.String(storedArtifactID), availableAt, err)
 	}
 }
 

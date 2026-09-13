@@ -6,7 +6,7 @@ import { useAppTranslation } from '../i18n';
 import {
   createComponentImportWithUploadSession,
 } from './componentRepoApi';
-import { routeFor } from './ComponentRepoPage';
+import { routeFor } from './ComponentRepoPresenters';
 
 export function ComponentImportPage() {
   const tr = useAppTranslation();

@@ -34,7 +34,7 @@ func NewApplicationRouter(cfg config.Config, pool *pgxpool.Pool, logger *slog.Lo
 		pool,
 		logger,
 		metrics,
-		component.NewHandler(component.NewService(pool).WithMetrics(metrics), logger),
+		component.NewHandler(component.NewService(pool).WithMetrics(metrics).WithFeedImages(objectStore, cfg.Storage.SignedURLTTL), logger),
 		componentwatch.NewHandler(componentwatch.NewService(pool).WithMetrics(metrics), logger),
 		artifact.NewHandler(artifact.NewService(pool, objectStore, cfg.Storage).WithImportConfig(cfg.Import).WithLogger(logger), logger),
 		ingestion.NewHandler(ingestion.NewService(pool), logger),

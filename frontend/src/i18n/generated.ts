@@ -204,6 +204,7 @@ export type TranslationKey =
   | "componentRepo:collapseGroup"
   | "componentRepo:color"
   | "componentRepo:comingSoon"
+  | "componentRepo:communityFeed"
   | "componentRepo:communityLibrary"
   | "componentRepo:communityLibraryDescription"
   | "componentRepo:compareWithPreviousVersion"
@@ -215,6 +216,7 @@ export type TranslationKey =
   | "componentRepo:componentLibrary"
   | "componentRepo:componentLibrarySections"
   | "componentRepo:componentOverview"
+  | "componentRepo:componentPreviewAlt"
   | "componentRepo:componentReadyForReview"
   | "componentRepo:componentSearchPagination"
   | "componentRepo:componentSourceUploaded"
@@ -307,6 +309,7 @@ export type TranslationKey =
   | "componentRepo:externalInterfaces"
   | "componentRepo:failed"
   | "componentRepo:failedToLoadVersions"
+  | "componentRepo:feedWindow"
   | "componentRepo:filesUploadedProcessingComponent"
   | "componentRepo:filesUploadedVerifyingIntegrity"
   | "componentRepo:filterByStatus"
@@ -331,6 +334,9 @@ export type TranslationKey =
   | "componentRepo:interface"
   | "componentRepo:interfaces"
   | "componentRepo:keepThisPageOpenUntilTheUploadIsComplete"
+  | "componentRepo:last30Days"
+  | "componentRepo:last7Days"
+  | "componentRepo:last90Days"
   | "componentRepo:latestPublishedVersion"
   | "componentRepo:loadConnectorData"
   | "componentRepo:loadConnectorDataDescription"
@@ -342,11 +348,14 @@ export type TranslationKey =
   | "componentRepo:loadingSubscriptions"
   | "componentRepo:loadingVersionComparison"
   | "componentRepo:loadingVersions"
+  | "componentRepo:loadingWatchFeed"
   | "componentRepo:loadMore"
   | "componentRepo:manageComponentGroups"
   | "componentRepo:manageComponentGroupsDescription"
   | "componentRepo:manageGroups"
   | "componentRepo:manageReviewAndPublishReusableLegoComponents"
+  | "componentRepo:manageSubscriptions"
+  | "componentRepo:manageSubscriptionsDescription"
   | "componentRepo:moreDiffChangesNotShown"
   | "componentRepo:myComponentLibrary"
   | "componentRepo:myComponentList"
@@ -355,6 +364,9 @@ export type TranslationKey =
   | "componentRepo:mySubscriptionsDescription"
   | "componentRepo:networkErrorComponentUploadFailed"
   | "componentRepo:nextPage"
+  | "componentRepo:noCommunityUpdates"
+  | "componentRepo:noCommunityUpdatesDescription"
+  | "componentRepo:noComponentDescription"
   | "componentRepo:noComponentsUploaded"
   | "componentRepo:noComponentVersions"
   | "componentRepo:noConnectionPoints"
@@ -370,6 +382,8 @@ export type TranslationKey =
   | "componentRepo:noSubscriptions"
   | "componentRepo:notInCustomGroup"
   | "componentRepo:noVersionChanges"
+  | "componentRepo:noWatchUpdates"
+  | "componentRepo:noWatchUpdatesDescription"
   | "componentRepo:occupiedSize"
   | "componentRepo:openWorkbench"
   | "componentRepo:optionalOnlyNeededForIoSourceFiles"
@@ -385,15 +399,20 @@ export type TranslationKey =
   | "componentRepo:passed"
   | "componentRepo:pending"
   | "componentRepo:pendingReview"
+  | "componentRepo:personalSubscriptionsTab"
+  | "componentRepo:plazaFeedTabs"
   | "componentRepo:position"
   | "componentRepo:previewGeometryMissing"
   | "componentRepo:previewUnavailable"
   | "componentRepo:previousPage"
   | "componentRepo:processing"
   | "componentRepo:processingPleaseWait"
+  | "componentRepo:publicFeedTab"
   | "componentRepo:publish"
   | "componentRepo:published"
+  | "componentRepo:publishedBy"
   | "componentRepo:publishedVersion"
+  | "componentRepo:publishedVersionUpdate"
   | "componentRepo:quantity"
   | "componentRepo:ready"
   | "componentRepo:readyToUpload"
@@ -401,10 +420,12 @@ export type TranslationKey =
   | "componentRepo:refreshComponentList"
   | "componentRepo:refreshImportRecords"
   | "componentRepo:refreshSubscriptionList"
+  | "componentRepo:refreshWatchFeed"
   | "componentRepo:reject"
   | "componentRepo:rejected"
   | "componentRepo:relationReview"
   | "componentRepo:relations"
+  | "componentRepo:releaseNotes"
   | "componentRepo:resetPreview"
   | "componentRepo:retryUpload"
   | "componentRepo:revision"
@@ -445,6 +466,8 @@ export type TranslationKey =
   | "componentRepo:subscriptionLevel"
   | "componentRepo:subscriptionList"
   | "componentRepo:subscriptionPagination"
+  | "componentRepo:subscriptionUpdates"
+  | "componentRepo:subscriptionUpdatesDescription"
   | "componentRepo:supabaseSignInIsNotConfigured"
   | "componentRepo:supportsIoLdrAndMpdFilesUpTo100Mb"
   | "componentRepo:switchingToACompatibleUploadMethod"
@@ -491,6 +514,8 @@ export type TranslationKey =
   | "componentRepo:watchComponent"
   | "componentRepo:watchedAt"
   | "componentRepo:watchedComponents"
+  | "componentRepo:watchFeedList"
+  | "componentRepo:watchFeedPagination"
   | "componentRepo:watching"
   | "componentRepo:watchListCountDescription"
   | "componentRepo:watchReleasesOnly"
@@ -1073,6 +1098,9 @@ export type TranslationParamsByKey = {
   "componentRepo:clearSearchCondition": {
     "query": InterpolationValue;
   };
+  "componentRepo:componentPreviewAlt": {
+    "componentName": InterpolationValue;
+  };
   "componentRepo:deleteComponentDescription": {
     "componentName": InterpolationValue;
   };
@@ -1101,6 +1129,13 @@ export type TranslationParamsByKey = {
   "componentRepo:pageOf": {
     "page": InterpolationValue;
     "totalPages": InterpolationValue;
+  };
+  "componentRepo:publishedBy": {
+    "publisher": InterpolationValue;
+  };
+  "componentRepo:publishedVersionUpdate": {
+    "revision": InterpolationValue;
+    "version": InterpolationValue;
   };
   "componentRepo:selectConnectionPoint": {
     "id": InterpolationValue;

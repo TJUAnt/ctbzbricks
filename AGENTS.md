@@ -16,6 +16,15 @@ At the beginning of implementation, identify the migration phase being changed. 
 Component Repo route, request/response contract, authorization boundary, or execution flow changes. Do not mark
 a phase complete because scaffolding or planning exists.
 
+## Mandatory detailed module design synchronization
+
+- 以一个用户可见菜单或可独立访问的链接作为一个功能模块；已经批准的设计文档明确规定其他边界时，按已批准边界执行。
+- 每次修改代码文件前，必须识别受影响的详细模块设计文档，并核对 `README.md` 的“详细功能设计”索引。
+- 代码修改完成后、任务结束前，必须按实际实现同步更新所有受影响的详细模块设计文档，至少覆盖功能逻辑、前端调用、HTTP 接口、后端服务、持久化或任务边界、权限、i18n、关键代码索引和验证证据。
+- 如果受影响功能没有对应的详细模块设计文档，必须在所属领域的文档目录中创建独立文档，并在 `README.md` 的“详细功能设计”中增加引用；不得只把新功能附加到无关模块文档中。
+- 整理文档时发现的冗余、偏移、过期或不合理设计，应记录为带编号的清理项，说明代码证据、影响、依赖阶段和客观关闭条件。未经当前任务授权，不得顺手改变无关产品行为。
+- 文档状态必须以代码、测试、迁移和部署证据为准；只有规划或脚手架时不得写成已实现、已部署或已验收。
+
 ### Non-negotiable Go migration rules
 
 - Go is the system backend. Component Repo's target runtime is Go-only: its public API and persistent task
@@ -163,10 +172,11 @@ cd frontend
 npm run i18n:check
 npm test
 npm run build
-
-cd ../backend
-python -m pytest
 ```
+
+The legacy `backend` Python test suite is temporarily excluded from this completion gate while functionality is
+migrated to Go. When an i18n-affecting change also modifies `backend-go`, run the Go checks required by the
+affected module and migration phase; Python regression tests are not a substitute for those checks.
 
 Also update architecture, field classification, governance, or release documentation when a contract or boundary changes. In the final handoff, report the i18n impact and validation results.
 

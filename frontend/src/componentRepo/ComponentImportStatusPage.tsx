@@ -5,7 +5,7 @@ import { localizeStructuredMessage } from '../api/client';
 import appConfig from '../app/appConfig';
 import { useAppTranslation } from '../i18n';
 import { getComponentImport } from './componentRepoApi';
-import { routeFor, StatusPill } from './ComponentRepoPage';
+import { routeFor, StatusPill } from './ComponentRepoPresenters';
 
 type ImportStatusState = {
   status: 'processing' | 'failed';

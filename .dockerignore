@@ -1,0 +1,23 @@
+.git
+.github
+.idea
+.codex_deps
+.tools
+.venv*
+.env
+.env.*
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+backend/logs
+data
+LDCadShadowLibrary
+3d models
+design_maps
+designs
+repo

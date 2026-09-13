@@ -11,28 +11,23 @@ import (
 )
 
 type Querier interface {
-	// Publish 使用同一 Component 的独占事务锁；必须在锁内分配 event_seq，固定 Watch period 的事件时点边界。
+	// Publish 与 Component 删除使用同一 Component 的独占事务锁；Feed 不再依赖事件时点订阅资格，
+	// 但删除生命周期仍必须阻止并发 Watch 在目标失效后创建 active period。
 	AcquireExclusiveComponentActivityLock(ctx context.Context, lockKey int64) error
 	// Watch/Unwatch 使用同一 Component 的共享事务锁；Publish 与 Component 删除使用独占锁冻结各自顺序边界。
 	AcquireSharedComponentActivityLock(ctx context.Context, lockKey int64) error
 	AddComponentGroupMembership(ctx context.Context, arg AddComponentGroupMembershipParams) (pgtype.UUID, error)
-	// 通知写入与 cursor 推进使用同一事务；attempt fence 阻止过期 Worker 跨 lease 提交页面。
-	AdvanceComponentEventDeliveryCursor(ctx context.Context, arg AdvanceComponentEventDeliveryCursorParams) (int64, error)
 	AdvancePixelProject(ctx context.Context, arg AdvancePixelProjectParams) (int64, error)
 	// 验证不再是发布门禁；Draft/Published 都保留最近一次报告，失败报告也必须可在详情页追溯。
 	AttachLatestValidationReport(ctx context.Context, arg AttachLatestValidationReportParams) error
 	CancelClaimedTask(ctx context.Context, arg CancelClaimedTaskParams) (ComponentRepoTask, error)
 	CancelQueuedTask(ctx context.Context, arg CancelQueuedTaskParams) (ComponentRepoTask, error)
 	ClaimAvailableTask(ctx context.Context, arg ClaimAvailableTaskParams) (ComponentRepoTask, error)
-	// Worker 只从 pending/retry_wait partial index 领取可执行 Delivery；终态历史永不进入 claim 候选。
-	ClaimComponentEventDelivery(ctx context.Context, arg ClaimComponentEventDeliveryParams) (ClaimComponentEventDeliveryRow, error)
 	ClaimOutboxEvent(ctx context.Context, arg ClaimOutboxEventParams) (ComponentRepoOutboxEvent, error)
 	// 用户主动 Unwatch 仅关闭仍处于 active 生命周期的 Component；结束序号与时间在同一条语句中只写一次。
 	CloseActiveComponentWatchPeriod(ctx context.Context, arg CloseActiveComponentWatchPeriodParams) (int64, error)
 	// Worker 按 Component active 索引和 actor 闭区间游标分批关闭周期；游标避免每批从索引起点重复跳过已关闭项。
 	CloseActiveComponentWatchesForLifecycleBatch(ctx context.Context, arg CloseActiveComponentWatchesForLifecycleBatchParams) ([]pgtype.UUID, error)
-	// 只有 cursor 之后已不存在 recipient 的空页面才能完成 Delivery。
-	CompleteComponentEventDelivery(ctx context.Context, arg CompleteComponentEventDeliveryParams) (int64, error)
 	CompletePixelRevision(ctx context.Context, arg CompletePixelRevisionParams) (int64, error)
 	CompleteTask(ctx context.Context, arg CompleteTaskParams) (ComponentRepoTask, error)
 	CompleteUploadSession(ctx context.Context, arg CompleteUploadSessionParams) (ComponentRepoUploadSession, error)
@@ -57,8 +52,8 @@ type Querier interface {
 	CreateAssemblyRelation(ctx context.Context, arg CreateAssemblyRelationParams) (CreateAssemblyRelationRow, error)
 	CreateCandidateForParse(ctx context.Context, arg CreateCandidateForParseParams) error
 	CreateComponent(ctx context.Context, arg CreateComponentParams) (CreateComponentRow, error)
-	// 发布事务为每个领域事件建立且只建立一条独立 fan-out Delivery；失败会与发布事实一起回滚。
-	CreateComponentEventDelivery(ctx context.Context, eventID pgtype.UUID) error
+	// 发布事务在事件与渲染任务均已创建后写入 pending 投影；终态只能由 tasks trigger 推进。
+	CreateComponentFeedEntry(ctx context.Context, arg CreateComponentFeedEntryParams) (ComponentRepoComponentFeedEntry, error)
 	CreateComponentGroup(ctx context.Context, arg CreateComponentGroupParams) (ComponentRepoComponentGroup, error)
 	CreateComponentImport(ctx context.Context, arg CreateComponentImportParams) (ComponentRepoImport, error)
 	// Component 删除事务只分配一次公共边界并把它冻结进持久任务；回滚产生的 sequence 空洞没有业务含义。
@@ -82,7 +77,6 @@ type Querier interface {
 	CreateUploadSessionFile(ctx context.Context, arg CreateUploadSessionFileParams) (ComponentRepoUploadSessionFile, error)
 	CreateValidationReport(ctx context.Context, arg CreateValidationReportParams) (CreateValidationReportRow, error)
 	DatabasePing(ctx context.Context) (int64, error)
-	DeadLetterComponentEventDelivery(ctx context.Context, arg DeadLetterComponentEventDeliveryParams) (int64, error)
 	DeleteComponentStar(ctx context.Context, arg DeleteComponentStarParams) (pgtype.UUID, error)
 	// Star 是当前收藏状态而不是审计账本；Worker 按 Component 索引和 actor 游标分批物理删除，重试天然幂等。
 	DeleteComponentStarsForLifecycleBatch(ctx context.Context, arg DeleteComponentStarsForLifecycleBatchParams) ([]pgtype.UUID, error)
@@ -100,10 +94,8 @@ type Querier interface {
 	GetActivePartLibraryVersion(ctx context.Context) (pgtype.UUID, error)
 	GetActivePartPreviewPrebuildLibrary(ctx context.Context) (GetActivePartPreviewPrebuildLibraryRow, error)
 	GetAssemblyRelationBySource(ctx context.Context, relationCandidateID pgtype.UUID) (GetAssemblyRelationBySourceRow, error)
-	// 每个批次在事务内锁住并复核 lease fence，同时取得不可变事件和 tombstone 状态。
-	GetClaimedComponentEventDelivery(ctx context.Context, arg GetClaimedComponentEventDeliveryParams) (GetClaimedComponentEventDeliveryRow, error)
-	// Gauge 只扫描非终态和未确认 dead-letter partial indexes；永久完成历史不参与周期采样。
-	GetComponentNotificationBacklog(ctx context.Context) (GetComponentNotificationBacklogRow, error)
+	// Worker 只接受任务自身绑定的发布版本，并读取已经验证的 GLB；发布人的 owner 边界来自不可变事件。
+	GetComponentFeedRenderInput(ctx context.Context, arg GetComponentFeedRenderInputParams) (GetComponentFeedRenderInputRow, error)
 	// 收藏资格检查只读取授权所需的最小投影；已有关系一并返回，以便幂等请求跳过写入和聚合计数。
 	GetComponentStarTarget(ctx context.Context, arg GetComponentStarTargetParams) (GetComponentStarTargetRow, error)
 	// Watch 资格检查只读取目标可用性与当前 actor 的关系；不加载 Component 详情、翻译或聚合。
@@ -144,19 +136,19 @@ type Querier interface {
 	GetVisibleVersionBOM(ctx context.Context, arg GetVisibleVersionBOMParams) (GetVisibleVersionBOMRow, error)
 	GetVisibleVersionPreview(ctx context.Context, arg GetVisibleVersionPreviewParams) (GetVisibleVersionPreviewRow, error)
 	GetVisibleVersionSourceArtifact(ctx context.Context, arg GetVisibleVersionSourceArtifactParams) (ComponentRepoArtifact, error)
-	// attempt 是 fencing token；旧进程即使恢复执行，也不能延长或提交新 owner 已接管的 lease。
-	HeartbeatComponentEventDelivery(ctx context.Context, arg HeartbeatComponentEventDeliveryParams) (int64, error)
 	HeartbeatTask(ctx context.Context, arg HeartbeatTaskParams) (pgtype.Timestamptz, error)
-	// 固定页面后一次批量写入；唯一键把 crash/retry 收敛为用户可见 exactly-once，返回值只用于 created/deduplicated 指标。
-	InsertComponentVersionNotifications(ctx context.Context, arg InsertComponentVersionNotificationsParams) ([]pgtype.UUID, error)
 	// actor 关系索引先限定有界候选；筛选后固定一页，再读取 Component 展示和当前发布版本。
 	// 搜索翻译仅在 search_query 非空时探测，普通列表不会在分页前逐行读取翻译。
 	ListActiveComponentWatches(ctx context.Context, arg ListActiveComponentWatchesParams) ([]ListActiveComponentWatchesRow, error)
 	ListComponentGroupDescendantIDs(ctx context.Context, arg ListComponentGroupDescendantIDsParams) ([]pgtype.UUID, error)
 	ListComponentGroupMembers(ctx context.Context, arg ListComponentGroupMembersParams) ([]ListComponentGroupMembersRow, error)
-	// active 与 closed 使用各自的权威索引，避免无界 active range 污染 GiST 选择性；合并后只对最多
-	// 当前单事件 recipient 包络内的命中集合按 actor/period 做 keyset 和 250 条分页。
-	ListEligibleComponentWatchRecipients(ctx context.Context, arg ListEligibleComponentWatchRecipientsParams) ([]ListEligibleComponentWatchRecipientsRow, error)
+	// 公共广场从全局发布事件索引取候选，不以当前 actor 的 Watch 关系限制成员资格。
+	// 页面事件固定后才聚合 Star 和连接个人关系，避免为游标之后的全部历史事件做逐行计算。
+	ListComponentPublicFeed(ctx context.Context, arg ListComponentPublicFeedParams) ([]ListComponentPublicFeedRow, error)
+	// Feed 成员资格在读取时按当前 active Watch 计算：发布早于 Watch 也可出现，Unwatch 后立即消失。
+	// actor-scoped active partial index 先把候选限定为当前规划的最多 1,000 个 Component；页面固定后才读取
+	// Component 翻译与 Version 展示字段，closed Watch 历史不参与任何执行节点。
+	ListCurrentComponentWatchFeed(ctx context.Context, arg ListCurrentComponentWatchFeedParams) ([]ListCurrentComponentWatchFeedRow, error)
 	ListExpiredUploadSessions(ctx context.Context, arg ListExpiredUploadSessionsParams) ([]ComponentRepoUploadSession, error)
 	ListLocalizedParts(ctx context.Context, arg ListLocalizedPartsParams) ([]ListLocalizedPartsRow, error)
 	ListOwnedCandidateConnectors(ctx context.Context, arg ListOwnedCandidateConnectorsParams) ([]ListOwnedCandidateConnectorsRow, error)
@@ -208,14 +200,11 @@ type Querier interface {
 	PublishComponentVersion(ctx context.Context, versionID pgtype.UUID) (pgtype.UUID, error)
 	PutPixelCatalog(ctx context.Context, arg PutPixelCatalogParams) error
 	ReadyPixelBlob(ctx context.Context, arg ReadyPixelBlobParams) error
-	// 过期 processing lease 每次只恢复一行；达到最大尝试后进入 dead letter，否则重新进入可领取队列。
-	RecoverExpiredComponentEventDelivery(ctx context.Context, recoveredAt pgtype.Timestamptz) (RecoverExpiredComponentEventDeliveryRow, error)
 	RecoverExpiredTask(ctx context.Context, recoveredAt pgtype.Timestamptz) (ComponentRepoTask, error)
 	RejectOwnedRelationCandidate(ctx context.Context, arg RejectOwnedRelationCandidateParams) (RejectOwnedRelationCandidateRow, error)
 	RemoveComponentGroupMembership(ctx context.Context, arg RemoveComponentGroupMembershipParams) (pgtype.UUID, error)
 	RequestRunningTaskCancellation(ctx context.Context, arg RequestRunningTaskCancellationParams) (ComponentRepoTask, error)
 	ReservePixelBlob(ctx context.Context, arg ReservePixelBlobParams) error
-	RetryComponentEventDelivery(ctx context.Context, arg RetryComponentEventDeliveryParams) (int64, error)
 	RetryOutboxEvent(ctx context.Context, arg RetryOutboxEventParams) (ComponentRepoOutboxEvent, error)
 	RetryTask(ctx context.Context, arg RetryTaskParams) (ComponentRepoTask, error)
 	// 尺寸搜索忽略 Box 轴方向：先把三个业务尺寸归一化为升序 a/b/c；任一尺寸缺失时不参与尺寸匹配。
@@ -236,6 +225,8 @@ type Querier interface {
 	UpdateOwnedComponentGroup(ctx context.Context, arg UpdateOwnedComponentGroupParams) (ComponentRepoComponentGroup, error)
 	UpdateOwnedDraftComponentVersion(ctx context.Context, arg UpdateOwnedDraftComponentVersionParams) (ComponentRepoComponentVersion, error)
 	UpdateTaskProgress(ctx context.Context, arg UpdateTaskProgressParams) (ComponentRepoTask, error)
+	// Feed PNG 是可重建派生资产，并明确追溯到实际读取的不可变 GLB Artifact。
+	UpsertComponentFeedImageArtifact(ctx context.Context, arg UpsertComponentFeedImageArtifactParams) (ComponentRepoArtifact, error)
 	UpsertPreviewArtifact(ctx context.Context, arg UpsertPreviewArtifactParams) (ComponentRepoArtifact, error)
 }
 

@@ -16,8 +16,8 @@ import (
 
 // TestZZWatchListQueryPlanEnvelope 在显式门禁中分别构造 active 包络与 closed 重评点，验证历史增长不会改变在线查询边界。
 func TestZZWatchListQueryPlanEnvelope(t *testing.T) {
-	if os.Getenv("RUN_WATCH_LIST_PLAN_TEST") != "1" && os.Getenv("RUN_NOTIFICATION_FANOUT_PLAN_TEST") != "1" {
-		t.Skip("set RUN_WATCH_LIST_PLAN_TEST=1 or RUN_NOTIFICATION_FANOUT_PLAN_TEST=1 to run the Watch plan gate")
+	if os.Getenv("RUN_WATCH_LIST_PLAN_TEST") != "1" && os.Getenv("RUN_WATCH_FEED_PLAN_TEST") != "1" {
+		t.Skip("set RUN_WATCH_LIST_PLAN_TEST=1 or RUN_WATCH_FEED_PLAN_TEST=1 to run the Watch plan gate")
 	}
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -32,8 +32,8 @@ func TestZZWatchListQueryPlanEnvelope(t *testing.T) {
 
 	seedWatchListPlanEnvelope(t, ctx, pool)
 	assertWatchLedgerEnvelope(t, ctx, pool)
-	if os.Getenv("RUN_NOTIFICATION_FANOUT_PLAN_TEST") == "1" {
-		assertNotificationRecipientPlans(t, ctx, pool)
+	if os.Getenv("RUN_WATCH_FEED_PLAN_TEST") == "1" {
+		assertWatchFeedPlans(t, ctx, pool)
 	}
 	actor := mustUUID(t, "16000000-0000-0000-0000-000000000001")
 	firstCursorTime := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
@@ -119,114 +119,113 @@ func assertWatchLedgerEnvelope(t *testing.T, ctx context.Context, pool *pgxpool.
 		t.Fatalf("unexpected Watch envelope: active=%d closed=%d", activeCount, closedCount)
 	}
 
-	var totalBytes, heapBytes, primaryBytes, activeUniqueBytes, activeTimeBytes, componentActiveBytes, eventRangeBytes int64
+	var totalBytes, heapBytes, primaryBytes, activeUniqueBytes, activeTimeBytes int64
 	if err := pool.QueryRow(ctx, `
 		SELECT pg_total_relation_size('component_repo.component_watch_periods'::regclass),
 		       pg_relation_size('component_repo.component_watch_periods'::regclass),
 		       pg_relation_size('component_repo.component_watch_periods_pkey'::regclass),
 		       pg_relation_size('component_repo.component_watch_periods_active_unique_idx'::regclass),
-		       pg_relation_size('component_repo.component_watch_periods_actor_active_time_idx'::regclass),
-		       pg_relation_size('component_repo.component_watch_periods_component_active_idx'::regclass),
-		       pg_relation_size('component_repo.component_watch_periods_closed_event_range_idx'::regclass)`).Scan(
-		&totalBytes, &heapBytes, &primaryBytes, &activeUniqueBytes, &activeTimeBytes, &componentActiveBytes,
-		&eventRangeBytes,
+		       pg_relation_size('component_repo.component_watch_periods_actor_active_time_idx'::regclass)`).Scan(
+		&totalBytes, &heapBytes, &primaryBytes, &activeUniqueBytes, &activeTimeBytes,
 	); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Watch ledger rows active=%d closed=%d; local bytes total=%d heap=%d primary=%d active_unique=%d active_time=%d component_active=%d event_range=%d",
+	t.Logf("Watch ledger rows active=%d closed=%d; local bytes total=%d heap=%d primary=%d active_unique=%d active_time=%d",
 		activeCount, closedCount, totalBytes, heapBytes, primaryBytes, activeUniqueBytes, activeTimeBytes,
-		componentActiveBytes, eventRangeBytes)
+	)
 }
 
-// assertNotificationRecipientPlans 验证真实 event-time SQL 在百万 closed 高密度 Component 上仍由区间/Component 索引驱动，
-// 并覆盖零命中、高 active 命中、历史命中与最深当前包络 cursor。
-func assertNotificationRecipientPlans(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+// assertWatchFeedPlans 验证读取时 Feed 只由当前 actor 的 active Watch 和事件时间索引驱动，
+// 百万 closed 历史不得参与执行；首屏、窄时间窗、高命中、空 actor 与深 cursor 都不得退化为关系全扫描。
+func assertWatchFeedPlans(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	var componentID pgtype.UUID
-	if err := pool.QueryRow(ctx, "SELECT md5('watch-list-component-1')::uuid").Scan(&componentID); err != nil {
-		t.Fatal(err)
-	}
+	actor := mustUUID(t, "16000000-0000-0000-0000-000000000001")
+	firstCursorTime := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	firstCursorID := mustUUID(t, "ffffffff-ffff-ffff-ffff-ffffffffffff")
 	for _, scenario := range []struct {
-		name     string
-		eventSeq int64
+		name        string
+		windowStart time.Time
 	}{
-		{name: "zero-recipient", eventSeq: 1},
-		{name: "closed-history-hit", eventSeq: 3003},
-		{name: "active-high-match", eventSeq: 4_000_000},
+		{name: "selective-window", windowStart: time.Now().UTC().Add(-25 * time.Hour)},
+		{name: "high-match-window", windowStart: time.Now().UTC().Add(-31 * 24 * time.Hour)},
+		{name: "90-day-window", windowStart: time.Now().UTC().Add(-90 * 24 * time.Hour)},
 	} {
-		_ = explainNotificationRecipients(t, ctx, pool, componentID, scenario.eventSeq, pgtype.UUID{}, 0)
-		plan := explainNotificationRecipients(t, ctx, pool, componentID, scenario.eventSeq, pgtype.UUID{}, 0)
-		assertNotificationRecipientPlan(t, scenario.name, plan)
-		t.Logf("notification-%s %s", scenario.name, explainTiming(plan))
+		_ = explainWatchFeed(t, ctx, pool, actor, scenario.windowStart, firstCursorTime, firstCursorID)
+		plan := explainWatchFeed(t, ctx, pool, actor, scenario.windowStart, firstCursorTime, firstCursorID)
+		assertWatchFeedPlan(t, scenario.name, plan)
+		t.Logf("feed-%s %s", scenario.name, explainTiming(plan))
 	}
 
-	var deepActor pgtype.UUID
-	var deepPeriod int64
+	var deepTime time.Time
+	var deepEventID pgtype.UUID
 	if err := pool.QueryRow(ctx, `
-		SELECT actor_id, id
-		FROM component_repo.component_watch_periods
-		WHERE component_id=$1 AND int8range(started_seq, ended_seq, '[)') @> 4000000::bigint
-		ORDER BY actor_id, id OFFSET 979 LIMIT 1`, componentID).Scan(&deepActor, &deepPeriod); err != nil {
-		t.Fatalf("read deepest notification cursor: %v", err)
+		SELECT event.occurred_at, event.id
+		FROM component_repo.component_watch_periods watch
+		JOIN component_repo.component_domain_events event ON event.component_id = watch.component_id
+		WHERE watch.actor_id=$1 AND watch.ended_seq IS NULL
+		  AND event.occurred_at >= clock_timestamp() - interval '31 days'
+		ORDER BY event.occurred_at, event.id OFFSET 20 LIMIT 1`, actor).Scan(&deepTime, &deepEventID); err != nil {
+		t.Fatalf("read deepest Feed cursor: %v", err)
 	}
-	deepPlan := explainNotificationRecipients(t, ctx, pool, componentID, 4_000_000, deepActor, deepPeriod)
-	assertNotificationRecipientPlan(t, "deep-cursor", deepPlan)
-	t.Logf("notification-deep-cursor %s", explainTiming(deepPlan))
+	deepPlan := explainWatchFeed(t, ctx, pool, actor, time.Now().UTC().Add(-31*24*time.Hour), deepTime, deepEventID)
+	assertWatchFeedPlan(t, "deep-cursor", deepPlan)
+	t.Logf("feed-deep-cursor %s", explainTiming(deepPlan))
+
+	emptyActor := mustUUID(t, "16000000-0000-0000-0000-000000000999")
+	emptyPlan := explainWatchFeed(t, ctx, pool, emptyActor, time.Now().UTC().Add(-31*24*time.Hour), firstCursorTime, firstCursorID)
+	assertWatchFeedPlan(t, "empty-actor", emptyPlan)
+	t.Logf("feed-empty-actor %s", explainTiming(emptyPlan))
 }
 
-func explainNotificationRecipients(
+func explainWatchFeed(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
-	componentID pgtype.UUID,
-	eventSeq int64,
-	cursorActor pgtype.UUID,
-	cursorPeriod int64,
+	actor pgtype.UUID,
+	windowStart time.Time,
+	cursorTime time.Time,
+	cursorEventID pgtype.UUID,
 ) string {
 	t.Helper()
-	if !cursorActor.Valid {
-		cursorActor = mustUUID(t, "00000000-0000-0000-0000-000000000000")
+	// 直接读取 sqlc 的手写查询，确保门禁包含真实页内 Version、删除过滤和 reviewed translation 投影。
+	// 不维护简化 SQL 副本，否则业务查询变更后性能测试可能仍错误地通过。
+	data, err := os.ReadFile("../../db/queries/component_watches.sql")
+	if err != nil {
+		t.Fatalf("read authoritative Watch SQL: %v", err)
 	}
-	return collectExplain(t, ctx, pool, `
-		EXPLAIN (ANALYZE, BUFFERS, SETTINGS)
-		WITH eligible AS (
-		    (
-		        SELECT watch.id, watch.actor_id, watch.notification_locale,
-		               watch.notification_timezone, watch.notification_catalog_version
-		        FROM component_repo.component_watch_periods watch
-		        WHERE watch.component_id=$1 AND watch.ended_seq IS NULL
-		          AND watch.started_seq <= $2::bigint
-		          AND (watch.actor_id, watch.id) > ($3::uuid, $4::bigint)
-		        ORDER BY watch.actor_id, watch.id LIMIT 250
-		    )
-		    UNION ALL
-		    (
-		        SELECT watch.id, watch.actor_id, watch.notification_locale,
-		               watch.notification_timezone, watch.notification_catalog_version
-		        FROM component_repo.component_watch_periods watch
-		        WHERE watch.component_id=$1 AND watch.ended_seq IS NOT NULL
-		          AND int8range(watch.started_seq, watch.ended_seq, '[)') @> $2::bigint
-		          AND (watch.actor_id, watch.id) > ($3::uuid, $4::bigint)
-		        ORDER BY watch.actor_id, watch.id LIMIT 250
-		    )
-		)
-		SELECT * FROM eligible
-		ORDER BY actor_id, id
-		LIMIT 250`, componentID, eventSeq, cursorActor, cursorPeriod)
+	_, query, ok := strings.Cut(string(data), "-- name: ListCurrentComponentWatchFeed :many")
+	if !ok {
+		t.Fatal("authoritative Feed query not found")
+	}
+	query = strings.NewReplacer(
+		"sqlc.arg(actor_id)", "$1",
+		"sqlc.arg(window_start)", "$2",
+		"sqlc.narg(cursor_occurred_at)", "$3",
+		"sqlc.narg(cursor_event_id)", "$4",
+		"sqlc.arg(locale)", "$5",
+		"sqlc.arg(page_size)", "$6",
+	).Replace(query)
+	return collectExplain(t, ctx, pool, "EXPLAIN (ANALYZE, BUFFERS, SETTINGS)\n"+query,
+		actor, windowStart, cursorTime, cursorEventID, "zh-CN", int32(21))
 }
 
-func assertNotificationRecipientPlan(t *testing.T, name, plan string) {
+func assertWatchFeedPlan(t *testing.T, name, plan string) {
 	t.Helper()
+	// 发布验收保留完整执行节点与 buffers/settings，不能只记录计时或索引名称。
+	t.Logf("%s full Feed plan:\n%s", name, plan)
 	if strings.Contains(plan, "Seq Scan on component_watch_periods") {
 		t.Fatalf("%s scanned the complete Watch ledger:\n%s", name, plan)
 	}
-	if !strings.Contains(plan, "component_watch_periods_closed_event_range_idx") &&
-		!strings.Contains(plan, "component_watch_periods_component_active_idx") {
-		t.Fatalf("%s did not use an event-time recipient index:\n%s", name, plan)
+	if !strings.Contains(plan, "component_watch_periods_active_unique_idx") &&
+		!strings.Contains(plan, "component_watch_periods_actor_active_time_idx") {
+		t.Fatalf("%s did not use an actor-scoped active Watch index:\n%s", name, plan)
+	}
+	if !strings.Contains(plan, "component_domain_events_component_feed_idx") {
+		t.Fatalf("%s did not use the Component/time Feed event index:\n%s", name, plan)
 	}
 	if strings.Contains(plan, "temp read=") || strings.Contains(plan, "temp written=") ||
 		strings.Contains(plan, "Sort Method: external") {
-		t.Fatalf("%s spilled recipient paging to temporary storage:\n%s", name, plan)
+		t.Fatalf("%s spilled Feed paging to temporary storage:\n%s", name, plan)
 	}
 }
 
@@ -359,11 +358,17 @@ func seedWatchListPlanEnvelope(t *testing.T, ctx context.Context, pool *pgxpool.
 		INSERT INTO component_repo.scene_snapshots (id, import_id, schema_version, parser_version, document, bom, parse_issues)
 		VALUES ('16000000-0000-0000-0000-000000000012', '16000000-0000-0000-0000-000000000011',
 		        'perf-v1', 'perf-v1', '{}', '{}', '[]');
-		INSERT INTO component_repo.components (id, content_kind, content_locale, name, category, status, created_by)
-		SELECT md5('watch-list-component-' || item)::uuid, 'official', 'en-US', 'Watch filter ' || item,
+		INSERT INTO component_repo.components (id, owner_id, content_kind, content_locale, name, category, status, created_by)
+		SELECT md5('watch-list-component-' || item)::uuid,
+		       CASE WHEN item % 10 = 0 THEN NULL ELSE '16000000-0000-0000-0000-000000000002'::uuid END,
+		       CASE WHEN item % 10 = 0 THEN 'official' ELSE 'user' END,
+		       'en-US', 'Watch filter ' || item,
 		       CASE WHEN item % 10 = 0 THEN 'vehicle' ELSE 'building' END,
 		       'active', '16000000-0000-0000-0000-000000000002'
 		FROM generate_series(1, 1000) item;
+		-- 性能 fixture 只验证 Watch/Feed 查询形状，不重复构造十万条 Import/Candidate 来源链；
+		-- 临时停用 Version 来源触发器，事务结束前恢复，发布事件自己的 owner/published 校验仍保持启用。
+		ALTER TABLE component_repo.component_versions DISABLE TRIGGER component_versions_require_source_integrity;
 		INSERT INTO component_repo.component_versions (
 			id, component_id, version_label, status, source_artifact_id, scene_snapshot_id,
 			parser_version, interface_signature, structure_hash, geometry_hash, created_by, published_at
@@ -409,11 +414,63 @@ func seedWatchListPlanEnvelope(t *testing.T, ctx context.Context, pool *pgxpool.
 		       '2026-09-04 00:00:00+00'::timestamptz - make_interval(secs => item)
 		FROM generate_series(1, 1000) actor
 		CROSS JOIN generate_series(1, 1000) item;
+		-- Feed 表保留约九万条窗口外事件，并为 900 个可发布的用户 Component 各准备三条窗口内事件。
+		-- 这让计划必须同时证明时间谓词和 Component 谓词进入复合事件索引，不能依赖测试表过小。
+		INSERT INTO component_repo.component_versions (
+			id, component_id, version_label, status, source_artifact_id, scene_snapshot_id,
+			parser_version, interface_signature, structure_hash, geometry_hash, created_by, published_at
+		)
+		SELECT md5('watch-feed-old-version-' || component_item || '-' || event_item)::uuid,
+		       md5('watch-list-component-' || component_item)::uuid,
+		       'old-' || event_item, 'published', '16000000-0000-0000-0000-000000000010',
+		       '16000000-0000-0000-0000-000000000012', 'perf-v1', repeat('4',64), repeat('5',64),
+		       repeat('6',64), '16000000-0000-0000-0000-000000000002',
+		       clock_timestamp() - make_interval(days => 40 + event_item)
+		FROM generate_series(1, 1000) component_item
+		CROSS JOIN generate_series(1, 100) event_item
+		WHERE component_item % 10 <> 0;
+		INSERT INTO component_repo.component_domain_events (
+			id, event_type, component_id, component_version_id, actor_id, occurred_at
+		)
+		SELECT md5('watch-feed-old-event-' || component_item || '-' || event_item)::uuid,
+		       'component.version.published.v1', md5('watch-list-component-' || component_item)::uuid,
+		       md5('watch-feed-old-version-' || component_item || '-' || event_item)::uuid,
+		       '16000000-0000-0000-0000-000000000002',
+		       clock_timestamp() - make_interval(days => 40 + event_item)
+		FROM generate_series(1, 1000) component_item
+		CROSS JOIN generate_series(1, 100) event_item
+		WHERE component_item % 10 <> 0;
+		INSERT INTO component_repo.component_versions (
+			id, component_id, version_label, status, source_artifact_id, scene_snapshot_id,
+			parser_version, interface_signature, structure_hash, geometry_hash, created_by, published_at
+		)
+		SELECT md5('watch-feed-recent-version-' || component_item || '-' || event_item)::uuid,
+		       md5('watch-list-component-' || component_item)::uuid,
+		       'recent-' || event_item, 'published', '16000000-0000-0000-0000-000000000010',
+		       '16000000-0000-0000-0000-000000000012', 'perf-v1', repeat('7',64), repeat('8',64),
+		       repeat('9',64), '16000000-0000-0000-0000-000000000002',
+		       clock_timestamp() - make_interval(hours => event_item * 24) + make_interval(secs => component_item)
+		FROM generate_series(1, 1000) component_item
+		CROSS JOIN generate_series(1, 3) event_item
+		WHERE component_item % 10 <> 0;
+		ALTER TABLE component_repo.component_versions ENABLE TRIGGER component_versions_require_source_integrity;
+		INSERT INTO component_repo.component_domain_events (
+			id, event_type, component_id, component_version_id, actor_id, occurred_at
+		)
+		SELECT md5('watch-feed-recent-event-' || component_item || '-' || event_item)::uuid,
+		       'component.version.published.v1', md5('watch-list-component-' || component_item)::uuid,
+		       md5('watch-feed-recent-version-' || component_item || '-' || event_item)::uuid,
+		       '16000000-0000-0000-0000-000000000002',
+		       clock_timestamp() - make_interval(hours => event_item * 24) + make_interval(secs => component_item)
+		FROM generate_series(1, 1000) component_item
+		CROSS JOIN generate_series(1, 3) event_item
+		WHERE component_item % 10 <> 0;
 		SELECT setval('component_repo.component_activity_sequence', 4000000, true);
 		ANALYZE component_repo.component_watch_periods;
 		ANALYZE component_repo.components;
 		ANALYZE component_repo.component_versions;
 		ANALYZE component_repo.component_translations;
+		ANALYZE component_repo.component_domain_events;
 	`)
 	if err != nil {
 		t.Fatalf("seed Watch list capacity envelope: %v", err)

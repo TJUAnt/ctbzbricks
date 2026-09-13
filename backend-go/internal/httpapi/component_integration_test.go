@@ -116,6 +116,24 @@ func TestG3HTTPAuthenticationAndErrorContract(t *testing.T) {
 		t.Fatalf("import history status/body = %d %s", importHistory.Code, importHistory.Body.String())
 	}
 
+	watchFeed := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/component-watch-feed?since=2026-09-01T00:00:00Z&limit=20", nil)
+	request.Header.Set("Authorization", "Bearer "+actorAToken)
+	router.ServeHTTP(watchFeed, request)
+	if watchFeed.Code != http.StatusOK || !strings.Contains(watchFeed.Body.String(), `"items":[]`) ||
+		!strings.Contains(watchFeed.Body.String(), `"windowStart":"2026-09-01T00:00:00Z"`) {
+		t.Fatalf("Watch Feed status/body = %d %s", watchFeed.Code, watchFeed.Body.String())
+	}
+
+	publicFeed := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/component-public-feed?limit=20", nil)
+	request.Header.Set("Authorization", "Bearer "+actorAToken)
+	router.ServeHTTP(publicFeed, request)
+	if publicFeed.Code != http.StatusOK || !strings.Contains(publicFeed.Body.String(), `"items":[]`) ||
+		!strings.Contains(publicFeed.Body.String(), `"nextCursor":null`) {
+		t.Fatalf("public Feed status/body = %d %s", publicFeed.Code, publicFeed.Body.String())
+	}
+
 	clientSuppliedKey := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/component-imports/upload-sessions", strings.NewReader(`{
 		"sourceFile":{"filename":"model.ldr","contentType":"text/plain","fileSize":10,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","objectPath":"client/chosen/key"},

@@ -31,7 +31,7 @@ func TestValidateWorkerConfigRequiresLDrawRootForComponentPreview(t *testing.T) 
 	}
 }
 
-func TestDedicatedPixelWorkerDoesNotRequireLDraw(t *testing.T) {
+func TestDedicatedNonPreviewWorkersDoNotRequireLDraw(t *testing.T) {
 	cfg := config.Config{}
 	cfg.Storage.Provider = "supabase"
 	cfg.Storage.ServiceRoleKey = "fixture"
@@ -39,8 +39,34 @@ func TestDedicatedPixelWorkerDoesNotRequireLDraw(t *testing.T) {
 	if err := validateWorkerConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Worker.TaskTypes = append(cfg.Worker.TaskTypes, "unknown")
+	cfg.Worker.TaskTypes = []string{"component.feed_render.materialize"}
+	if err := validateWorkerConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Worker.TaskTypes = append(cfg.Worker.TaskTypes, "component.preview.materialize")
 	if err := validateWorkerConfig(cfg); err == nil {
-		t.Fatal("mixed worker must retain preview prerequisites")
+		t.Fatal("worker with a GLB preview capability must retain LDraw prerequisites")
+	}
+}
+
+func TestGeneralWorkerWithFeedExclusionStillRequiresLDraw(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Storage.Provider = "supabase"
+	cfg.Storage.ServiceRoleKey = "fixture"
+	cfg.Worker.ExcludedTaskTypes = []string{"component.feed_render.materialize"}
+	if err := validateWorkerConfig(cfg); err == nil {
+		t.Fatal("general worker still owns GLB preview tasks and must require LDRAW_ROOT")
+	}
+}
+
+func TestClaimsTaskTypeHonorsAllowlistAndDenylist(t *testing.T) {
+	if claimsTaskType(config.WorkerConfig{TaskTypes: []string{"component.validate"}}, "component.feed_render.materialize") {
+		t.Fatal("allowlisted worker must not claim an omitted task type")
+	}
+	if claimsTaskType(config.WorkerConfig{ExcludedTaskTypes: []string{"component.feed_render.materialize"}}, "component.feed_render.materialize") {
+		t.Fatal("general worker must honor the deployment exclusion")
+	}
+	if !claimsTaskType(config.WorkerConfig{ExcludedTaskTypes: []string{"component.feed_render.materialize"}}, "component.validate") {
+		t.Fatal("general worker must retain non-excluded capabilities")
 	}
 }

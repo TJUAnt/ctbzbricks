@@ -38,7 +38,7 @@ CREATE INDEX component_watch_periods_actor_active_time_idx
     INCLUDE (watch_level)
     WHERE ended_seq IS NULL;
 
--- WATCH-3 的 event-time fan-out 查询与数据分布尚未冻结，本阶段不提前添加推测性 Component 索引。
+-- active Watch 列表由 actor 侧索引驱动；动态 Feed 的事件侧索引由后续 v20 按实际谓词单独管理。
 ALTER TABLE component_repo.component_watch_periods ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON component_repo.component_watch_periods FROM PUBLIC;
 

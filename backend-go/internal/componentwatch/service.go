@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -22,26 +21,24 @@ import (
 )
 
 const (
-	defaultListLimit                  = 20
-	maxListLimit                      = 100
-	defaultNotificationLocale         = "zh-CN"
-	defaultNotificationTimezone       = "UTC"
-	defaultNotificationCatalogVersion = "frontend-2026.09.06.1"
+	defaultListLimit  = 20
+	maxListLimit      = 100
+	defaultFeedWindow = 30 * 24 * time.Hour
 )
 
 var errRetryWatchTransaction = errors.New("retry concurrent watch transaction")
-var catalogVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 // Service 管理当前 actor 的 Watch 偏好与只读列表；它不负责发布事件或通知投递。
 type Service struct {
 	pool    *pgxpool.Pool
 	q       *db.Queries
 	metrics *observability.Registry
+	now     func() time.Time
 }
 
 // NewService 创建使用 PostgreSQL 权威关系数据的 Watch 应用服务。
 func NewService(pool *pgxpool.Pool) *Service {
-	return &Service{pool: pool, q: db.New(pool)}
+	return &Service{pool: pool, q: db.New(pool), now: time.Now}
 }
 
 // WithMetrics 为 Watch mutation 接入进程级低基数指标；未配置时业务行为保持不变。
@@ -50,22 +47,8 @@ func (s *Service) WithMetrics(metrics *observability.Registry) *Service {
 	return s
 }
 
-// Watch 为内部调用提供默认通知上下文；HTTP 入口必须使用 WatchWithContext 保存浏览器的冻结上下文。
+// Watch 幂等建立 releases_only 订阅；Feed 展示上下文在读取时确定，不写入 Watch period。
 func (s *Service) Watch(ctx context.Context, actor pgtype.UUID, componentID, level string) (result Watch, err error) {
-	return s.WatchWithContext(ctx, actor, componentID, level, NotificationContext{
-		Locale: defaultNotificationLocale, Timezone: defaultNotificationTimezone,
-		CatalogVersion: defaultNotificationCatalogVersion,
-	})
-}
-
-// WatchWithContext 幂等建立 releases_only 订阅。资格检查、上下文冻结与写入位于同一可重试串行化事务；
-// 重复 PUT 保留原 period 及原上下文，避免改变既有事件时点和未来通知审计语义。
-func (s *Service) WatchWithContext(
-	ctx context.Context,
-	actor pgtype.UUID,
-	componentID, level string,
-	notificationContext NotificationContext,
-) (result Watch, err error) {
 	defer func() {
 		s.recordMutation(observability.ComponentWatchActionWatch, err)
 	}()
@@ -73,10 +56,6 @@ func (s *Service) WatchWithContext(
 		return Watch{}, apierror.New("component_repo.watch_level_unsupported", http.StatusUnprocessableEntity, map[string]any{"level": level})
 	}
 	id, err := parseID(componentID, "componentId")
-	if err != nil {
-		return Watch{}, err
-	}
-	notificationContext, err = normalizeNotificationContext(notificationContext)
 	if err != nil {
 		return Watch{}, err
 	}
@@ -95,7 +74,7 @@ func (s *Service) WatchWithContext(
 		if uuidutil.Equal(target.OwnerID, actor) {
 			return Watch{}, apierror.New("component_repo.watch_own_component_forbidden", http.StatusConflict, nil)
 		}
-		// 已 active 的相同级别是纯幂等读路径；保留原 watched_at，避免重复 PUT 改变事件时点语义。
+		// 已 active 的相同级别是纯幂等读路径；保留原 watched_at，避免重复 PUT 制造虚假 Rewatch。
 		if target.WatchPeriodID != nil && target.WatchLevel != nil &&
 			*target.WatchLevel == level && target.WatchedAt.Valid {
 			return Watch{ComponentID: componentID, Watching: true, Level: level, WatchedAt: target.WatchedAt.Time}, nil
@@ -105,8 +84,6 @@ func (s *Service) WatchWithContext(
 		}
 		row, err := q.CreateActiveComponentWatchPeriod(ctx, db.CreateActiveComponentWatchPeriodParams{
 			ActorID: actor, ComponentID: id, WatchLevel: level,
-			NotificationLocale: notificationContext.Locale, NotificationTimezone: notificationContext.Timezone,
-			NotificationCatalogVersion: notificationContext.CatalogVersion,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			// 并发请求已先创建 active period；回滚当前快照并重试，下一轮按重复 Watch 返回权威周期。
@@ -120,28 +97,6 @@ func (s *Service) WatchWithContext(
 			Level: row.WatchLevel, WatchedAt: row.WatchedAt.Time,
 		}, nil
 	})
-}
-
-func normalizeNotificationContext(value NotificationContext) (NotificationContext, error) {
-	locale := displayLocale(value.Locale)
-	normalizedInput := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value.Locale, "_", "-")))
-	if normalizedInput == "" || (normalizedInput != "zh" && normalizedInput != "zh-cn" &&
-		normalizedInput != "zh-hans" && !strings.HasPrefix(normalizedInput, "zh-hans-") && normalizedInput != "en" &&
-		normalizedInput != "en-us" && !strings.HasPrefix(normalizedInput, "en-")) {
-		return NotificationContext{}, validationError("locale")
-	}
-	zone := strings.TrimSpace(value.Timezone)
-	if len(zone) > 128 {
-		return NotificationContext{}, validationError("timezone")
-	}
-	if _, err := time.LoadLocation(zone); err != nil {
-		return NotificationContext{}, validationError("timezone")
-	}
-	catalogVersion := strings.TrimSpace(value.CatalogVersion)
-	if !catalogVersionPattern.MatchString(catalogVersion) {
-		return NotificationContext{}, validationError("catalogVersion")
-	}
-	return NotificationContext{Locale: locale, Timezone: zone, CatalogVersion: catalogVersion}, nil
 }
 
 // Unwatch 在共享 Component activity lock 下幂等关闭当前订阅有效区间；Component 删除后由清理任务写统一边界，
@@ -183,16 +138,26 @@ func (s *Service) List(ctx context.Context, actor pgtype.UUID, request ListReque
 	if limit < 1 || limit > maxListLimit {
 		return WatchPage{}, validationError("limit")
 	}
-	if len(request.Query) > 200 || len(request.Category) > 128 {
+	if len(request.Query) > 200 {
 		return WatchPage{}, validationError("query")
 	}
+	if len(request.Category) > 128 {
+		return WatchPage{}, validationError("category")
+	}
+	locale := displayLocale(request.Locale)
+	query := strings.TrimSpace(request.Query)
+	category := strings.TrimSpace(request.Category)
 	cursor, err := decodeCursor(request.Cursor)
 	if err != nil {
 		return WatchPage{}, validationError("cursor")
 	}
+	// cursor 只允许继续原筛选集合，避免调用方换掉名称、分类或 locale 后从旧边界继续而静默漏项。
+	if cursor.WatchedAt.Valid && (cursor.Locale != locale || cursor.Query != query || cursor.Category != category) {
+		return WatchPage{}, validationError("cursor")
+	}
 	rows, err := s.q.ListActiveComponentWatches(ctx, db.ListActiveComponentWatchesParams{
-		Locale: displayLocale(request.Locale), ActorID: actor,
-		CategoryFilter: strings.TrimSpace(request.Category), SearchQuery: strings.TrimSpace(request.Query),
+		Locale: locale, ActorID: actor,
+		CategoryFilter: category, SearchQuery: query,
 		CursorWatchedAt:   cursor.WatchedAt,
 		CursorComponentID: cursor.ComponentID, PageSize: int32(limit + 1),
 	})
@@ -216,7 +181,7 @@ func (s *Service) List(ctx context.Context, actor pgtype.UUID, request ListReque
 	var next *string
 	if hasMore && len(rows) > 0 {
 		last := rows[len(rows)-1]
-		encoded, encodeErr := encodeCursor(last.WatchedAt.Time, last.ComponentID)
+		encoded, encodeErr := encodeCursor(last.WatchedAt.Time, last.ComponentID, locale, query, category)
 		if encodeErr != nil {
 			return WatchPage{}, encodeErr
 		}
@@ -225,14 +190,153 @@ func (s *Service) List(ctx context.Context, actor pgtype.UUID, request ListReque
 	return WatchPage{Items: items, NextCursor: next}, nil
 }
 
+// ListFeed 从 actor 当前 active Watch 出发读取时间窗口内的发布事件。
+// started/ended sequence 不参与资格判断，因此 Watch 可以回看窗口内的既有发布，Unwatch 会在下一次读取立即生效。
+func (s *Service) ListFeed(ctx context.Context, actor pgtype.UUID, request FeedRequest) (page FeedPage, err error) {
+	startedAt := time.Now()
+	defer func() {
+		result := observability.ComponentWatchFeedSucceeded
+		if err != nil {
+			result = observability.ComponentWatchFeedFailed
+		}
+		s.metrics.RecordComponentWatchFeed(result, time.Since(startedAt))
+	}()
+	limit := request.Limit
+	if limit == 0 {
+		limit = defaultListLimit
+	}
+	if limit < 1 || limit > maxListLimit {
+		return FeedPage{}, validationError("limit")
+	}
+	cursor, err := decodeFeedCursor(request.Cursor)
+	if err != nil {
+		return FeedPage{}, validationError("cursor")
+	}
+	windowStart, err := resolveFeedWindowStart(request.Since, cursor, s.now().UTC())
+	if err != nil {
+		return FeedPage{}, validationError("since")
+	}
+	rows, err := s.q.ListCurrentComponentWatchFeed(ctx, db.ListCurrentComponentWatchFeedParams{
+		ActorID: actor, Locale: displayLocale(request.Locale), WindowStart: timestamp(windowStart),
+		CursorOccurredAt: cursor.OccurredAt, CursorEventID: cursor.EventID, PageSize: int32(limit + 1),
+	})
+	if err != nil {
+		return FeedPage{}, err
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	items := make([]FeedItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, FeedItem{
+			EventID: uuidutil.String(row.EventID), EventType: row.EventType, OccurredAt: row.OccurredAt.Time,
+			ComponentID: uuidutil.String(row.ComponentID), ContentKind: row.ContentKind,
+			ContentLocale: row.SelectedContentLocale, ComponentName: row.SelectedName, Category: row.Category,
+			ComponentVersionID: uuidutil.String(row.ComponentVersionID), VersionLabel: row.VersionLabel,
+			Revision: row.Revision, PublishedAt: nullableTime(row.PublishedAt), ReleaseNote: row.ReleaseNote,
+			ReleaseNoteLocale: row.ReleaseNoteLocale, TranslationMissing: row.TranslationMissing,
+		})
+	}
+	var next *string
+	if hasMore && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		encoded, encodeErr := encodeFeedCursor(windowStart, last.OccurredAt.Time, last.EventID)
+		if encodeErr != nil {
+			return FeedPage{}, encodeErr
+		}
+		next = &encoded
+	}
+	return FeedPage{Items: items, NextCursor: next, WindowStart: windowStart}, nil
+}
+
 type cursorPayload struct {
 	WatchedAt   string `json:"watchedAt"`
 	ComponentID string `json:"componentId"`
+	Locale      string `json:"locale"`
+	Query       string `json:"query"`
+	Category    string `json:"category"`
 }
 
 type decodedCursor struct {
 	WatchedAt   pgtype.Timestamptz
 	ComponentID pgtype.UUID
+	Locale      string
+	Query       string
+	Category    string
+}
+
+type feedCursorPayload struct {
+	WindowStart string `json:"windowStart"`
+	OccurredAt  string `json:"occurredAt"`
+	EventID     string `json:"eventId"`
+}
+
+type decodedFeedCursor struct {
+	WindowStart time.Time
+	OccurredAt  pgtype.Timestamptz
+	EventID     pgtype.UUID
+}
+
+func decodeFeedCursor(raw string) (decodedFeedCursor, error) {
+	if strings.TrimSpace(raw) == "" {
+		return decodedFeedCursor{}, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return decodedFeedCursor{}, err
+	}
+	var payload feedCursorPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return decodedFeedCursor{}, err
+	}
+	windowStart, err := time.Parse(time.RFC3339Nano, payload.WindowStart)
+	if err != nil {
+		return decodedFeedCursor{}, err
+	}
+	occurredAt, err := time.Parse(time.RFC3339Nano, payload.OccurredAt)
+	if err != nil {
+		return decodedFeedCursor{}, err
+	}
+	eventID, err := uuidutil.Parse(payload.EventID)
+	if err != nil {
+		return decodedFeedCursor{}, err
+	}
+	return decodedFeedCursor{
+		WindowStart: windowStart.UTC(), OccurredAt: timestamp(occurredAt.UTC()), EventID: eventID,
+	}, nil
+}
+
+func resolveFeedWindowStart(raw string, cursor decodedFeedCursor, now time.Time) (time.Time, error) {
+	if cursor.OccurredAt.Valid {
+		if strings.TrimSpace(raw) == "" {
+			return cursor.WindowStart, nil
+		}
+		provided, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil || !provided.UTC().Equal(cursor.WindowStart) {
+			return time.Time{}, errors.New("feed cursor window mismatch")
+		}
+		return cursor.WindowStart, nil
+	}
+	if strings.TrimSpace(raw) == "" {
+		return now.Add(-defaultFeedWindow), nil
+	}
+	provided, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return provided.UTC(), nil
+}
+
+func encodeFeedCursor(windowStart, occurredAt time.Time, eventID pgtype.UUID) (string, error) {
+	payload, err := json.Marshal(feedCursorPayload{
+		WindowStart: windowStart.UTC().Format(time.RFC3339Nano),
+		OccurredAt:  occurredAt.UTC().Format(time.RFC3339Nano), EventID: uuidutil.String(eventID),
+	})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
 func decodeCursor(raw string) (decodedCursor, error) {
@@ -257,12 +361,14 @@ func decodeCursor(raw string) (decodedCursor, error) {
 	}
 	return decodedCursor{
 		WatchedAt: pgtype.Timestamptz{Time: when.UTC(), Valid: true}, ComponentID: id,
+		Locale: payload.Locale, Query: payload.Query, Category: payload.Category,
 	}, nil
 }
 
-func encodeCursor(watchedAt time.Time, componentID pgtype.UUID) (string, error) {
+func encodeCursor(watchedAt time.Time, componentID pgtype.UUID, locale, query, category string) (string, error) {
 	payload, err := json.Marshal(cursorPayload{
 		WatchedAt: watchedAt.UTC().Format(time.RFC3339Nano), ComponentID: uuidutil.String(componentID),
+		Locale: locale, Query: query, Category: category,
 	})
 	if err != nil {
 		return "", err
@@ -292,6 +398,10 @@ func nullableTime(value pgtype.Timestamptz) *time.Time {
 	}
 	result := value.Time
 	return &result
+}
+
+func timestamp(value time.Time) pgtype.Timestamptz {
+	return pgtype.Timestamptz{Time: value, Valid: true}
 }
 
 func validationError(field string) error {

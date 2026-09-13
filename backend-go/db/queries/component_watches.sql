@@ -15,10 +15,7 @@ SELECT component.id, component.owner_id, component.status,
        existing_watch.watch_level,
        existing_watch.id AS watch_period_id,
        existing_watch.started_seq,
-       existing_watch.watched_at,
-       existing_watch.notification_locale,
-       existing_watch.notification_timezone,
-       existing_watch.notification_catalog_version
+       existing_watch.watched_at
 FROM component_repo.components component
 LEFT JOIN component_repo.component_watch_periods existing_watch
   ON existing_watch.actor_id = sqlc.arg(actor_id)
@@ -30,16 +27,10 @@ WHERE component.id = sqlc.arg(component_id)
 
 -- name: CreateActiveComponentWatchPeriod :one
 -- 没有 active period 时追加新周期；并发重复 PUT 命中部分唯一索引时不更新任何既有行，由 Service 重试读取。
-INSERT INTO component_repo.component_watch_periods (
-    actor_id, component_id, watch_level,
-    notification_locale, notification_timezone, notification_catalog_version
-) VALUES (
-    sqlc.arg(actor_id), sqlc.arg(component_id), sqlc.arg(watch_level),
-    sqlc.arg(notification_locale), sqlc.arg(notification_timezone), sqlc.arg(notification_catalog_version)
-)
+INSERT INTO component_repo.component_watch_periods (actor_id, component_id, watch_level)
+VALUES (sqlc.arg(actor_id), sqlc.arg(component_id), sqlc.arg(watch_level))
 ON CONFLICT (actor_id, component_id) WHERE ended_seq IS NULL DO NOTHING
-RETURNING id, actor_id, component_id, watch_level, started_seq, ended_seq, watched_at, unwatched_at,
-          notification_locale, notification_timezone, notification_catalog_version;
+RETURNING id, actor_id, component_id, watch_level, started_seq, ended_seq, watched_at, unwatched_at;
 
 -- name: CloseActiveComponentWatchPeriod :execrows
 -- 用户主动 Unwatch 仅关闭仍处于 active 生命周期的 Component；结束序号与时间在同一条语句中只写一次。
@@ -161,3 +152,73 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) translation ON true
 ORDER BY page.watched_at DESC, page.component_id DESC;
+
+-- name: ListCurrentComponentWatchFeed :many
+-- Feed 成员资格在读取时按当前 active Watch 计算：发布早于 Watch 也可出现，Unwatch 后立即消失。
+-- actor-scoped active partial index 先把候选限定为当前规划的最多 1,000 个 Component；页面固定后才读取
+-- Component 翻译与 Version 展示字段，closed Watch 历史不参与任何执行节点。
+WITH active_watches AS MATERIALIZED (
+    SELECT watch.component_id
+    FROM component_repo.component_watch_periods watch
+    WHERE watch.actor_id = sqlc.arg(actor_id)
+      AND watch.ended_seq IS NULL
+), feed_page AS MATERIALIZED (
+    SELECT event.id AS event_id,
+           event.event_type,
+           event.component_id,
+           event.component_version_id,
+           event.occurred_at
+    FROM active_watches watch
+    JOIN component_repo.components component
+      ON component.id = watch.component_id
+     AND component.deleted_at IS NULL
+     AND component.status = 'active'
+    -- 全局一页不可能包含同一 Component 排名超过 page_size 的事件；先对每个 active Watch
+    -- 截断到一页保持结果等价，同时强制历史增长时仍按 Component/time 索引做有界探测。
+    JOIN LATERAL (
+        SELECT item.id, item.event_type, item.component_id, item.component_version_id, item.occurred_at
+        FROM component_repo.component_domain_events item
+        WHERE item.component_id = watch.component_id
+          AND item.occurred_at >= sqlc.arg(window_start)::timestamptz
+          AND (item.occurred_at, item.id) < (
+              COALESCE(sqlc.narg(cursor_occurred_at)::timestamptz, 'infinity'::timestamptz),
+              COALESCE(sqlc.narg(cursor_event_id)::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+          )
+        ORDER BY item.occurred_at DESC, item.id DESC
+        LIMIT sqlc.arg(page_size)
+    ) event ON true
+    ORDER BY event.occurred_at DESC, event.id DESC
+    LIMIT sqlc.arg(page_size)
+)
+SELECT page.event_id,
+       page.event_type,
+       page.occurred_at,
+       page.component_id,
+       component.content_kind,
+       (CASE WHEN translation.id IS NULL THEN component.content_locale ELSE translation.locale END)::text
+           AS selected_content_locale,
+       (CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END)::text AS selected_name,
+       component.category,
+       page.component_version_id,
+       version.version_label,
+       version.revision,
+       version.published_at,
+       version.release_note,
+       version.release_note_locale,
+       (component.content_kind = 'official' AND component.content_locale <> sqlc.arg(locale)
+        AND translation.id IS NULL)::boolean AS translation_missing
+FROM feed_page page
+JOIN component_repo.components component ON component.id = page.component_id
+JOIN component_repo.component_versions version
+  ON version.id = page.component_version_id
+ AND version.deleted_at IS NULL
+LEFT JOIN LATERAL (
+    SELECT item.id, item.locale, item.name
+    FROM component_repo.component_translations item
+    WHERE component.content_kind = 'official'
+      AND item.component_id = component.id
+      AND item.locale = sqlc.arg(locale)
+      AND item.translation_status = 'reviewed'
+    LIMIT 1
+) translation ON true
+ORDER BY page.occurred_at DESC, page.event_id DESC;
