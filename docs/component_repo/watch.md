@@ -52,7 +52,7 @@ Watch 是“当前用户订阅某个 Component 的版本发布更新”。它和
 1. 校验 level 和 Component UUID；
 2. 开启 serializable transaction；
 3. 取得由 Component UUID 派生的 shared advisory transaction lock；
-4. `GetComponentWatchTarget` 一次读取目标可见性、owner、状态、是否存在公开 Version，以及 actor 当前 active period；
+4. `GetComponentWatchTarget` 从 v24 `component_catalog_candidates` 一次读取删除边界、owner、状态、公开 Version 资格，以及 actor 当前 active period；
 5. 本人 Component 返回 `component_repo.watch_own_component_forbidden`；
 6. 已存在相同 active period 时直接返回原 `watchedAt`，不更新时间；
 7. 首次 Watch 或 Rewatch 要求 Component 为 active 且存在非 Draft Version；
@@ -88,9 +88,9 @@ cursor 是 base64url JSON，包含边界和规范化后的 `locale/query/categor
 `Service.ListFeed` 默认窗口为最近 30×24 小时；首屏允许 RFC 3339 `since`。Feed cursor 冻结 `windowStart`，后续页
 只从 cursor 恢复窗口，并以 `(occurred_at DESC,event_id DESC)` 继续。
 
-SQL 先物化 actor 当前 active Watch，再对每个 Component 使用
+SQL 先物化 actor 当前 active Watch，再从 v24 candidate projection 统一校验 Component 可见性和公开 Version 资格，并对每个 Component 使用
 `(component_id,occurred_at DESC,id DESC)` 索引取得至多一页事件，做全局 Top-N 后才加载 Version、Component 和
-reviewed translation。Release Note 始终返回作者原文及 `releaseNoteLocale`。
+`component_reviewed_translations`。Release Note 始终返回作者原文及 `releaseNoteLocale`。
 
 后端代码：
 
@@ -139,7 +139,7 @@ Artifact 或 Storage 历史。
 | active component index | 删除 Worker 的批处理入口 | 支持按 actor keyset 继续 |
 | Component/time/event index | Feed 的事件探测 | 与窗口、排序和 cursor 谓词完全一致 |
 
-迁移链为 v15 Watch period、v16 domain event、v17 生命周期、v20 Feed 索引、v21 official 事件授权。
+迁移链为 v15 Watch period、v16 domain event、v17 生命周期、v20 Feed 索引、v21 official 事件授权、v24 共享目录/翻译投影。
 
 ## 7. 权限、国际化与错误
 
@@ -153,9 +153,9 @@ Artifact 或 Storage 历史。
 
 ## 8. 测试定位
 
-2026-09-12 完成前端入口迁移验证：typed i18n 检查、20 个前端测试文件/89 项测试、生产构建和 Python
-296 项回归均通过；Python 回归保留 6 个既有 `PytestReturnNotNoneWarning`。本次没有修改 Watch API、SQL、迁移或
-Worker；公共 Feed v23 图片任务也不改变 Watch Feed 的读取时成员资格。既有 Go 集成测试和大规模查询计划证据未被替换。2026-09-12 真实 Supabase 已由 v20 升级到 v23，重复 `up` 无操作；本次只验证公共 Feed API，不代表 Watch 浏览器流程或生产查询计划已经验收。
+2026-09-14 的 Component 03/04/08 清理未改变 Watch HTTP/cursor/成员资格合约；Watch 管理列表和 Feed 已改读 v24
+candidate/catalog/reviewed translation 共享投影，候选阶段不读取 Version 展示尺寸，迁移往返与跨模块集成通过。Python legacy 回归不再属于完成门禁。真实 Supabase
+仍为 v23；本轮没有部署 v24，也不代表 Watch 浏览器流程或生产查询计划已经验收。
 
 - Go Service/cursor 单测：[service_test.go](../../backend-go/internal/componentwatch/service_test.go)
 - Component、发布、并发、分页和删除集成：[service_integration_test.go](../../backend-go/internal/component/service_integration_test.go)

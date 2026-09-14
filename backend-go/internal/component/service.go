@@ -130,44 +130,75 @@ func (s *Service) GetComponent(ctx context.Context, actor pgtype.UUID, component
 	return componentFromVisible(row), nil
 }
 
-// ListComponents 返回 actor 自有和公开可见的目录；列表与总数必须使用完全一致的授权条件。
+// ListComponents 返回 actor 自有和公开可见目录；候选使用双降序 keyset，页面固定后才做展示 enrichment。
+// 目录不返回 exact total，避免每一页附加 O(N) Count，也从根源消除两次 READ COMMITTED 快照不一致。
 func (s *Service) ListComponents(ctx context.Context, actor pgtype.UUID, request ComponentListRequest) (ComponentPage, error) {
-	request.PageRequest = normalizePage(request.PageRequest)
+	limit := request.Limit
+	if limit == 0 {
+		limit = defaultPageSize
+	}
+	if limit < 1 || limit > maxPageSize {
+		return ComponentPage{}, validationError("limit")
+	}
 	locale := displayLocale(request.Locale)
-	if len(request.Query) > 200 || len(request.Category) > 128 {
+	query := strings.TrimSpace(request.Query)
+	category := strings.TrimSpace(request.Category)
+	status := strings.TrimSpace(request.Status)
+	if len(query) > 200 || len(category) > 128 {
 		return ComponentPage{}, validationError("query")
 	}
-	if request.Status != "" && request.Status != "draft" && request.Status != "active" {
+	if status != "" && status != "draft" && status != "active" {
 		return ComponentPage{}, validationError("status")
 	}
-	params := db.ListVisibleComponentsParams{
-		Locale: locale, ActorID: actor, StatusFilter: request.Status,
-		CategoryFilter: strings.TrimSpace(request.Category), SearchQuery: strings.TrimSpace(request.Query),
-		PageOffset: int32((request.Page - 1) * request.PageSize), PageSize: int32(request.PageSize),
+	cursor, err := decodeComponentListCursor(request.Cursor)
+	if err != nil {
+		return ComponentPage{}, validationError("cursor")
 	}
-	total, err := s.q.CountVisibleComponents(ctx, db.CountVisibleComponentsParams{
-		Locale: params.Locale, ActorID: params.ActorID, StatusFilter: params.StatusFilter,
-		CategoryFilter: params.CategoryFilter, SearchQuery: params.SearchQuery,
+	if cursor.UpdatedAt.Valid && (cursor.Locale != locale || cursor.Query != query ||
+		cursor.Category != category || cursor.Status != status) {
+		return ComponentPage{}, validationError("cursor")
+	}
+	// 完整 UUID 使用等值路径，既保持机器标识符的精确语义，也避免把它送入模糊字符串扫描。
+	searchQuery := query
+	var searchComponentID pgtype.UUID
+	hasSearchComponentID := false
+	if query != "" {
+		if parsedID, parseErr := uuidutil.Parse(query); parseErr == nil {
+			searchComponentID = parsedID
+			hasSearchComponentID = true
+			searchQuery = ""
+		}
+	}
+	rows, err := s.q.ListVisibleComponents(ctx, db.ListVisibleComponentsParams{
+		Locale: locale, ActorID: actor, StatusFilter: status,
+		CategoryFilter: category, SearchQuery: searchQuery,
+		HasSearchComponentID: hasSearchComponentID, SearchComponentID: searchComponentID,
+		CursorUpdatedAt: cursor.UpdatedAt, CursorComponentID: cursor.ComponentID,
+		PageSize: int32(limit + 1),
 	})
 	if err != nil {
 		return ComponentPage{}, err
 	}
-	rows, err := s.q.ListVisibleComponents(ctx, params)
-	if err != nil {
-		return ComponentPage{}, err
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
 	}
 	items := make([]Component, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, componentFromList(row))
 	}
-	totalPages := 0
-	if total > 0 {
-		totalPages = int((total + int64(request.PageSize) - 1) / int64(request.PageSize))
+	var next *string
+	if hasMore && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		encoded, encodeErr := encodeComponentListCursor(
+			last.UpdatedAt.Time, last.ID, locale, query, category, status,
+		)
+		if encodeErr != nil {
+			return ComponentPage{}, encodeErr
+		}
+		next = &encoded
 	}
-	return ComponentPage{
-		Items: items, Page: request.Page, PageSize: request.PageSize,
-		Total: total, TotalPages: totalPages,
-	}, nil
+	return ComponentPage{Items: items, NextCursor: next}, nil
 }
 
 // ListPublicFeed 按不可变发布事件返回公共广场。Watch 只作为当前 actor 的展示投影，不能改变候选集合。

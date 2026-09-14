@@ -60,10 +60,11 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	if _, err := service.UpdateComponent(ctx, actorB, created.ID, UpdateComponentInput{Name: &newName}); errorCode(err) != "component_repo.component_not_found" {
 		t.Fatalf("cross-user update code = %q, error = %v", errorCode(err), err)
 	}
-	emptyList, err := service.ListComponents(ctx, actorA, ComponentListRequest{PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN"})
+	emptyList, err := service.ListComponents(ctx, actorA, ComponentListRequest{Limit: 10, Locale: "zh-CN"})
 	if err != nil || len(emptyList.Items) != 0 {
 		t.Fatalf("component without versions must be hidden from list: %+v, %v", emptyList, err)
 	}
+	assertComponentVersionAvailability(t, pool, created.ID, false, false)
 
 	seedVersionDependencies(t, pool, actorA, actorB, created.ID)
 	_, err = service.CreateVersion(ctx, actorA, created.ID, CreateVersionInput{
@@ -97,6 +98,7 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 		version.StructureHash != strings.Repeat("2", 64) || version.GeometryHash != strings.Repeat("3", 64) {
 		t.Fatalf("version source was not derived from candidate: %+v", version)
 	}
+	assertComponentVersionAvailability(t, pool, created.ID, true, false)
 	releaseNote := "保留用户原文"
 	releaseLocale := "zh"
 	updatedVersion, err := service.UpdateVersion(ctx, actorA, version.ID, UpdateVersionInput{
@@ -116,7 +118,7 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 		WHERE id=$1`, mustUUID(t, version.ID)); err != nil {
 		t.Fatalf("seed draft preview bounds: %v", err)
 	}
-	draftList, err := service.ListComponents(ctx, actorA, ComponentListRequest{PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN"})
+	draftList, err := service.ListComponents(ctx, actorA, ComponentListRequest{Limit: 10, Locale: "zh-CN"})
 	if err != nil || len(draftList.Items) != 1 || draftList.Items[0].LogicalSize == nil ||
 		draftList.Items[0].LogicalSize.WidthStud != 2 || draftList.Items[0].LogicalSize.DepthStud != 1 ||
 		draftList.Items[0].LogicalSize.HeightPlate != 3 {
@@ -247,6 +249,7 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	if err != nil || visible.Status != "active" || visible.CurrentVersionID == nil || *visible.CurrentVersionID != version.ID || visible.OwnedByActor {
 		t.Fatalf("published component visibility: %+v, %v", visible, err)
 	}
+	assertComponentVersionAvailability(t, pool, created.ID, true, true)
 	if _, err := service.GetVersion(ctx, actorB, version.ID); err != nil {
 		t.Fatalf("published version should be visible: %v", err)
 	}
@@ -1186,11 +1189,19 @@ func testStablePagination(t *testing.T, service *Service, actor pgtype.UUID) {
 	t.Helper()
 	ctx := context.Background()
 	seedListableOfficialComponents(t, service.pool, actor)
-	first, err := service.ListComponents(ctx, actor, ComponentListRequest{PageRequest: PageRequest{Page: 1, PageSize: 2}, Locale: "en-US"})
+	first, err := service.ListComponents(ctx, actor, ComponentListRequest{Limit: 2, Locale: "en-US"})
 	if err != nil {
 		t.Fatalf("list first page: %v", err)
 	}
-	second, err := service.ListComponents(ctx, actor, ComponentListRequest{PageRequest: PageRequest{Page: 2, PageSize: 2}, Locale: "en-US"})
+	if first.NextCursor == nil {
+		t.Fatalf("first page must provide continuation cursor: %+v", first)
+	}
+	if _, err := service.ListComponents(ctx, actor, ComponentListRequest{
+		Limit: 2, Cursor: *first.NextCursor, Locale: "en-US", Query: "changed-filter",
+	}); errorCode(err) != "request.validation_failed" {
+		t.Fatalf("changed filter must reject an old Component cursor: %v", err)
+	}
+	second, err := service.ListComponents(ctx, actor, ComponentListRequest{Limit: 2, Cursor: *first.NextCursor, Locale: "en-US"})
 	if err != nil {
 		t.Fatalf("list second page: %v", err)
 	}
@@ -1388,6 +1399,20 @@ func resetComponentRepo(t *testing.T, pool *pgxpool.Pool) {
 		RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset component_repo fixtures: %v", err)
+	}
+}
+
+// assertComponentVersionAvailability 验证 Version 触发器维护的目录资格，避免共享投影在状态转换后静默过期。
+func assertComponentVersionAvailability(t *testing.T, pool *pgxpool.Pool, componentID string, wantAny, wantPublic bool) {
+	t.Helper()
+	var anyVersion, publicVersion bool
+	if err := pool.QueryRow(context.Background(), `
+		SELECT version_available, public_version_available
+		FROM component_repo.components WHERE id=$1`, mustUUID(t, componentID)).Scan(&anyVersion, &publicVersion); err != nil {
+		t.Fatalf("read Component Version availability: %v", err)
+	}
+	if anyVersion != wantAny || publicVersion != wantPublic {
+		t.Fatalf("Component Version availability = %t/%t, want %t/%t", anyVersion, publicVersion, wantAny, wantPublic)
 	}
 }
 

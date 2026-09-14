@@ -12,8 +12,10 @@ type PageRequest struct {
 	PageSize int
 }
 
+// ComponentListRequest 描述 Component 目录 keyset 请求；Cursor 是服务端签发的不透明边界。
 type ComponentListRequest struct {
-	PageRequest
+	Limit    int
+	Cursor   string
 	Locale   string
 	Query    string
 	Category string
@@ -72,13 +74,10 @@ type PublicFeedPage struct {
 	NextCursor *string          `json:"nextCursor"`
 }
 
-// ComponentPage 返回 actor 可见目录的稳定分页和总数；总数复用相同授权与过滤条件。
+// ComponentPage 返回已固定顺序的一页目录与可选续页游标，不计算全量精确总数。
 type ComponentPage struct {
 	Items      []Component `json:"items"`
-	Page       int         `json:"page"`
-	PageSize   int         `json:"pageSize"`
-	Total      int64       `json:"total"`
-	TotalPages int         `json:"totalPages"`
+	NextCursor *string     `json:"nextCursor"`
 }
 
 // StarListRequest 描述当前 actor 的收藏列表查询；完整尺寸表达式复用分组搜索规范。

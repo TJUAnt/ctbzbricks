@@ -100,19 +100,20 @@ func (h *Handler) listStars(c *gin.Context) {
 	h.writeJSON(c, http.StatusOK, result, err)
 }
 
+// listComponents 读取认证 actor 的自有与公开目录；cursor 只允许继续相同 locale 和筛选条件。
 func (h *Handler) listComponents(c *gin.Context) {
 	actor, ok := actorFromContext(c)
 	if !ok {
 		apierror.WriteInternal(c)
 		return
 	}
-	page, err := pageFromQuery(c)
+	limit, err := positiveIntQuery(c.Query("limit"), defaultPageSize)
 	if err != nil {
-		h.writeError(c, err)
+		h.writeError(c, validationError("limit"))
 		return
 	}
 	result, err := h.service.ListComponents(c.Request.Context(), actor.ID, ComponentListRequest{
-		PageRequest: page, Locale: c.Query("locale"), Query: c.Query("query"),
+		Limit: limit, Cursor: c.Query("cursor"), Locale: c.Query("locale"), Query: c.Query("query"),
 		Category: c.Query("category"), Status: c.Query("status"),
 	})
 	h.writeJSON(c, http.StatusOK, result, err)

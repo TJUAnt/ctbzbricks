@@ -15,7 +15,7 @@
 BOM、Source 和 Diff 链路。Group、Star、Watch 是 Component DTO 的关联投影，但各自的业务实现由独立文档描述。
 
 核心边界：PostgreSQL 保存业务、版本、任务和 Artifact 元数据；Supabase Storage 保存源文件和大型派生文件；耗时解析、
-关系检测、验证和 GLB 生成由持久 Go Worker/保留的明确算法任务执行，Gin Handler 不做长计算。
+关系检测、验证和 GLB 生成由持久 Go Worker 执行，Gin Handler 不做长计算。
 
 ## 2. 前端页面与调用链
 
@@ -39,24 +39,30 @@ BOM、Source 和 Diff 链路。Group、Star、Watch 是 Component DTO 的关联�
 
 页面代码：
 
-- 目录、广场壳层、Group 和上传弹窗：[ComponentRepoPage.tsx](../../frontend/src/componentRepo/ComponentRepoPage.tsx)；广场事件追加：[componentPublicFeed.ts](../../frontend/src/componentRepo/componentPublicFeed.ts)；事件卡片：[ComponentPublicFeedCard.tsx](../../frontend/src/componentRepo/ComponentPublicFeedCard.tsx)。Feed 卡片读取 Worker PNG；[glbThumbnailRenderer.ts](../../frontend/src/preview/glbThumbnailRenderer.ts)继续服务 Part 等浏览器缩略图场景，[studioPreviewRendering.ts](../../frontend/src/preview/studioPreviewRendering.ts)统一详情与缩略图的摄影棚环境和材质运行时。
-- 详情、版本、Preview、BOM、Diff、发布和删除：[ComponentDetailPage.tsx](../../frontend/src/componentRepo/ComponentDetailPage.tsx)
+- 目录与列表控制器：[ComponentRepoPage.tsx](../../frontend/src/componentRepo/ComponentRepoPage.tsx)；Group 树和成员编辑：[ComponentGroupControls.tsx](../../frontend/src/componentRepo/ComponentGroupControls.tsx)；上传弹窗：[ComponentUploadDialog.tsx](../../frontend/src/componentRepo/ComponentUploadDialog.tsx)；列表纯展示：[ComponentRepoPresenters.tsx](../../frontend/src/componentRepo/ComponentRepoPresenters.tsx)。广场事件追加见 [componentPublicFeed.ts](../../frontend/src/componentRepo/componentPublicFeed.ts)，事件卡片见 [ComponentPublicFeedCard.tsx](../../frontend/src/componentRepo/ComponentPublicFeedCard.tsx)。
+- 详情控制器：[ComponentDetailPage.tsx](../../frontend/src/componentRepo/ComponentDetailPage.tsx)；读取编排：[useComponentDetailData.ts](../../frontend/src/componentRepo/useComponentDetailData.ts)；权限与写操作：[useComponentDetailMutations.ts](../../frontend/src/componentRepo/useComponentDetailMutations.ts)；纯展示：[ComponentDetailPresenters.tsx](../../frontend/src/componentRepo/ComponentDetailPresenters.tsx)
 - 上传入口：[ComponentImportPage.tsx](../../frontend/src/componentRepo/ComponentImportPage.tsx)
 - Import 历史/状态：[ComponentImportHistoryPage.tsx](../../frontend/src/componentRepo/ComponentImportHistoryPage.tsx)、[ComponentImportStatusPage.tsx](../../frontend/src/componentRepo/ComponentImportStatusPage.tsx)
 - Candidate 工作台：[ComponentCandidateWorkbenchPage.tsx](../../frontend/src/componentRepo/ComponentCandidateWorkbenchPage.tsx)
-- DTO、请求、上传与任务轮询：[componentRepoApi.ts](../../frontend/src/componentRepo/componentRepoApi.ts)
+- 稳定兼容入口：[componentRepoApi.ts](../../frontend/src/componentRepo/componentRepoApi.ts)；DTO：[componentRepoTypes.ts](../../frontend/src/componentRepo/componentRepoTypes.ts)；鉴权请求、路径与完整分页：[componentRepoTransport.ts](../../frontend/src/componentRepo/componentRepoTransport.ts)；领域调用位于 [api](../../frontend/src/componentRepo/api)
+
+`componentRepoApi.ts` 仅重导出稳定名称。目录/Group/Star/Watch/Feed、Component/Version、Workbench、Import/Storage、Task
+轮询分别由领域文件维护，页面现有 import 路径保持兼容。
 
 ## 3. Component 目录、详情与元数据
 
 ### 3.1 目录
 
-`GET /api/v1/components?page&pageSize&locale&query&category&status`
+`GET /api/v1/components?limit&cursor&locale&query&category&status`
 
 `Service.ListComponents` 返回 actor 自有和公开可见 Component。owner 可读取自己的 Draft/active；非 owner 只读取
 active 且至少存在一个非 Draft Version 的 Component。official Component 选择 reviewed translation；user 内容保持
-原文。列表先按 `updated_at DESC,id` 用 OFFSET 固定页，再一次聚合页内 Star 数，并投影当前 actor 的 Star/Watch。
+原文。owner 与公开 active 两个互斥来源分别使用 `(updated_at DESC,id DESC)` keyset，并各自在合并前截到一页；最终页
+固定后才选择展示翻译、聚合页内 Star 并投影当前 actor 的 Star/Watch。opaque cursor 同时冻结排序边界和
+locale/query/category/status，筛选改变时旧 cursor 返回 validation error。
 
-当前实现先执行 `CountVisibleComponents`，再执行 `ListVisibleComponents`，返回 `total/totalPages`。
+响应为 `{items,nextCursor}`。目录不计算 exact total，已经删除 `CountVisibleComponents`，因此每页只有一个列表 SQL
+快照。完整 UUID 使用等值路径；其他输入保留名称、部分 ID 和 reviewed official translation 的 contains 搜索。
 
 ### 3.2 详情
 
@@ -93,9 +99,9 @@ Storage key、bucket、owner 和数据库 Artifact 必须一致。
 
 ### 4.2 Import 与 Worker
 
-Go Worker 从 PostgreSQL 持久任务领取工作。主链包括 Artifact verify、Import parse、Preview materialize 和关系清理；
-解析成功写 SceneSnapshot、BOM、Candidate 和后续任务依赖。`component.relations.detect` 仍是明确的临时 Python 算法例外，
-不能扩展成新的 Component Repo Python API 或任务边界。
+Go Worker 从 PostgreSQL 持久任务领取工作。主链包括 Artifact verify、Import parse、关系检测、Preview materialize 和关系清理；
+解析成功写 SceneSnapshot、BOM、Candidate 和后续任务依赖。`component.import.parse` 与
+`component.relations.detect` 均已由 Go Worker 执行，Component Repo 不再保留 Python 任务消费者。
 
 Import API 的 GET 只读取已经提交的状态，不触发后台处理。任务错误保存稳定 `code + params`，locale/timezone 来自创建
 时冻结上下文。
@@ -196,6 +202,9 @@ Version、Import、Artifact、普通历史 Task 和 Storage object 按保留策�
 |---|---|
 | `components` | owner/content kind、用户源内容、状态、current Version、规范化当前逻辑尺寸、删除标记 |
 | `component_translations` | official reviewed translation；不存用户自动翻译 |
+| `component_reviewed_translations` | Goose v24 的只读审核翻译投影；所有 Component/Group/Star/Watch 用户读取共用 |
+| `component_catalog_candidates` | Goose v24 的轻量候选投影；统一删除边界与任意/公开 Version 资格，Count/搜索/分页不连接 Version 展示数据 |
+| `component_catalog_projection` | Goose v24 的只读展示投影；在固定页面后统一当前 Version / Draft 展示尺寸 |
 | `component_versions` | 不可变来源引用、SceneSnapshot、Part Library、hash、状态、Preview 与发布说明 |
 | `scene_snapshots` | 解析后冻结结构和 BOM 输入 |
 | `artifacts` | source/derived 元数据、owner、Storage key、hash、验证和生命周期 |
@@ -218,28 +227,71 @@ HTTP 模块按职责分为 `component`（Component/Version/Group/Star）、`comp
 ## 10. 测试定位
 
 - Component/Version/Group/Star 主集成：[service_integration_test.go](../../backend-go/internal/component/service_integration_test.go)
+- Component 目录十万行计划：[component_catalog_performance_integration_test.go](../../backend-go/internal/component/component_catalog_performance_integration_test.go)
 - HTTP 与认证契约：[component_integration_test.go](../../backend-go/internal/httpapi/component_integration_test.go)
 - 上传与 Storage：[artifact](../../backend-go/internal/artifact)、[storage](../../backend-go/internal/storage)
 - Import/Worker：[ingestion](../../backend-go/internal/ingestion)、[worker](../../backend-go/internal/worker)
 - Schema/迁移：[schema_integration_test.go](../../backend-go/internal/database/schema_integration_test.go)、[migrations](../../backend-go/db/migrations)
 - 前端 API adapter：[componentRepoApi.test.ts](../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
+- Group 候选完整性与续页：[ComponentGroupControls.test.tsx](../../frontend/src/componentRepo/__tests__/ComponentGroupControls.test.tsx)
 - 材质 Profile、GLB 扩展和前端摄影棚运行时：[catalog_test.go](../../backend-go/internal/ldrawmaterial/catalog_test.go)、[task_handlers_test.go](../../backend-go/internal/workbench/task_handlers_test.go)、[studioPreviewRendering.test.ts](../../frontend/src/preview/__tests__/studioPreviewRendering.test.ts)
 - 页面与 i18n：[localizedPages.test.tsx](../../frontend/src/i18n/__tests__/localizedPages.test.tsx)
 
+2026-09-14 的 03/04/08 清理新增 v24 迁移、目录 cursor 单元/集成测试和十万行 `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)`
+门禁。数据为 100,000 个 Component：90,000 active、10,000 archived、10,000 official、5,000 条 reviewed zh-CN
+翻译，测试 actor 拥有 1,000 条；另测空 actor。查询 fixture 直接写迁移维护的资格事实，业务集成另行锁定
+`false/false -> true/false -> true/true` 的无 Version、Draft、Published 状态转换。
+
+迁移完成 up/down/up 往返；所有场景均无 Version 全表扫描或磁盘 spill。无筛选和深 cursor 使用排序索引，选择性名称与
+reviewed translation 使用各自 trigram GIN；高命中名称/翻译允许 PostgreSQL 在 100,000 条包络内选择顺序扫描。
+PostgreSQL 14.17、`shared_buffers=128MB`、`work_mem=4MB`、`effective_cache_size=4GB` 的 warm-cache 结果如下；
+这些时间只证明本地查询形状，不是生产 SLO。
+
+| 场景 | 执行时间 | 计划结论 |
+|---|---:|---|
+| 无筛选 / category | 0.568 / 0.365 ms | owner/active 排序索引驱动，搜索分支 `never executed` |
+| 选择性名称 / 高命中名称 | 18.455 / 7.480 ms | 选择性路径使用 source trigram；高命中由规划器选择顺序扫描，无 spill |
+| 选择性翻译 / 高命中翻译 | 5.294 / 44.810 ms | 选择性路径使用 reviewed translation trigram；高命中扫描 100k Component 包络，无 spill |
+| 完整 UUID | 0.111 ms | Component 主键等值路径 |
+| 第 80,001 条 cursor / 空 actor | 0.263 / 0.202 ms | 无 OFFSET；深边界进入排序索引，空 actor 不执行无关内层 |
+
+前端 i18n、测试、构建和 Go 结果见迁移进度。
+
 ## 11. 已发现的偏移与清理准备
+
+### 11.1 03/04/08 实施前查询设计记录
+
+- 驱动关系：全局 `components`，按至少 100,000 条验证；增长方向是跨 actor 增长。当前最多 1,000 用户，分别覆盖空 actor、
+  少量自有 Component 和高占比公开 Component，不把 Star/Watch 的每 actor 1,000 条规划误当作 Component 总量上限。
+- 候选来源：无文本搜索时 actor 自有候选从 `(owner_id,updated_at,id)` partial index 驱动，公开候选从
+  `(updated_at,id) WHERE status='active' AND deleted_at IS NULL AND public_version_available` 驱动。文本搜索把 source name、
+  partial UUID 和 reviewed translation 分成独立索引路径，再各自拆成 owner/public 来源；每个来源先截一页，最多
+  `6 × (limit+1)` 行在内存中按 Component ID 去重并固定最终页面。
+- 筛选选择性：无筛选、status/category 选择性筛选、UUID 精确匹配、名称高命中四类分别检查；名称模糊搜索不得依赖普通
+  B-tree，必须通过搜索投影/索引，或保持在客观有界候选内。
+- 稳定顺序：`updated_at DESC,id DESC`；不透明 cursor 同时冻结该边界和 locale/query/category/status，筛选改变时旧 cursor
+  返回 validation error。第一页与最深 cursor 使用同一查询，不接受 page-number OFFSET 或隐藏结果上限。
+- Count 决策：Component 目录交互不需要 exact total；API 删除 `total/totalPages/page`，返回 `items/nextCursor`。因此不再运行
+  独立 Count，也不存在 Count/List 两次 `READ COMMITTED` 快照不一致。一次列表语句内的页面和 enrichment 共用单一快照。
+- enrichment：先固定 Component ID 页面，再读取 reviewed translation、当前尺寸、Star/Watch 和页内 Star 聚合；不在全候选
+  上执行逐行展示聚合。共享 candidate projection 固化删除状态与任意/公开 Version 可用性，catalog projection 只在固定页
+  补当前展示尺寸；两者均不吸收 actor/locale；
+  Version 的 insert/delete/status/component_id 变化由数据库触发器同步两个资格布尔值。
+- 索引成本：替换原 owner 排序索引并新增带 `public_version_available` 谓词的 active partial 排序索引；名称、ID text 和
+  reviewed translation 名称各有与 contains 谓词对应的 trigram GIN。代价是 Component/翻译写入维护 B-tree/GIN，Version
+  变更另执行一次同 Component 的资格刷新；这些索引和触发器只服务已记录的查询与共享事实，不作为推测性索引。
 
 | 编号 | 证据与问题 | 影响 | 清理前置条件 |
 |---|---|---|---|
-| COMPONENT-CLEAN-01 | `listComponentVersions` 固定请求 `pageSize=100` 并在前端按 status 过滤 | 超过 100 个 Version 时详情页静默遗漏历史或 Draft | 后端支持 status 服务端筛选或前端完整分页；增加 101+ Version 测试 |
-| COMPONENT-CLEAN-02 | `listComponentGroupComponents` 固定 `pageSize=100` 并返回裸数组 | Group 成员候选超过 100 时被误当完整集合 | 与 STAR-CLEAN-05 合并修复为服务端搜索和可见续页 |
-| COMPONENT-CLEAN-03 | `ListComponents` 先 Count 后 List，两个 SQL 重复授权、translation 和筛选谓词 | 并发写入时 total 与 rows 可能不在同一快照，谓词可能漂移 | 冻结一致性要求；需要一致时改为单语句/一致读事务并执行计划门禁 |
-| COMPONENT-CLEAN-04 | Component 目录继续使用 OFFSET，且没有明确 Component/actor 硬上限 | 深页成本随跳过行增长 | 记录当前真实分布和 SLO；达到重评阈值前设计稳定 keyset 或明确产品结果上限 |
-| COMPONENT-CLEAN-05 | `ComponentRepoPage.tsx`、`ComponentDetailPage.tsx` 分别超过 1,400/1,200 行 | 数据加载、mutation、弹窗、预览和展示状态耦合，修改难以局部验证 | 先补页面行为测试，再拆 data controller/hooks、mutation hooks 和纯展示组件 |
-| COMPONENT-CLEAN-06 | `componentRepoApi.ts` 超过 1,300 行并混合 HTTP、Storage 上传、任务轮询、DTO 映射和 i18n 进度文案 | 领域边界不清，循环依赖和无关回归风险增加 | 提取统一 transport/error/context；其余按领域拆模块，保持 public adapter 名称兼容后再逐页迁移 |
+| COMPONENT-CLEAN-01（已关闭） | `listComponentVersions` 逐页读取裸 `items` 到短页终点，再对完整集合应用可选 status；adapter 测试覆盖第 101 个 Version | 不再因首个 100 条页面静默遗漏历史或 Draft | 关闭证据：`componentVersionApi.ts`、`componentRepoApi.test.ts` |
+| COMPONENT-CLEAN-02（已关闭） | Group 当前成员逐页读全；候选按自有、收藏、现有成员三个服务端分页来源合并，UI 提供明确“加载更多” | 第 101 条之后的成员和收藏候选可继续发现，保存差异基于完整 membership baseline | 关闭证据：`componentCatalogApi.ts`、`ComponentGroupControls.tsx`、101 条 UI 测试 |
+| COMPONENT-CLEAN-03（已关闭） | `ListComponents` 已删除独立 Count，只用一个 SQL 固定页并完成 enrichment；响应不再暴露 exact total | rows 不再与另一快照的 total 冲突，授权和筛选谓词只有一个读取入口 | 关闭证据：`components.sql`、cursor/Service 集成测试和十万行计划门禁 |
+| COMPONENT-CLEAN-04（已关闭） | Component 目录已改为 `(updated_at DESC,id DESC)` opaque keyset，cursor 绑定 locale/query/category/status | 深页不再线性跳过历史行，且没有固定首 N 代表完整集合 | 关闭证据：第 80,001 条 cursor 计划无前置行过滤、API adapter 和稳定续页测试 |
+| COMPONENT-CLEAN-05（已关闭） | 目录页保留列表控制，Group、上传和 presenter 已拆出；详情页保留页面组合，读取、mutation/权限和 presenter 已拆出 | 页面副作用边界可单独验证；目录/详情控制器均约 800 行，其余按职责独立 | 关闭证据：上述前端代码索引、Group UI 测试及全量前端测试 |
+| COMPONENT-CLEAN-06（已关闭） | 原巨型 adapter 已拆为 DTO、统一鉴权 transport 以及 catalog/version/workbench/import/task 五个领域模块；原文件只做兼容重导出 | 上传、任务、映射和目录调用不再共处一个实现文件，调用方 import 契约保持不变 | 关闭证据：`componentRepoApi.ts` 7 行、`componentRepoTransport.ts` 和 `api/`；全量编译通过 |
 | COMPONENT-CLEAN-07 | `POST /components` 与 `POST /components/:id/versions` 存在，但当前 Web 新建主链只走 Import/Candidate | 双入口职责不清，可能形成绕过审核或无人使用的 API | 先查真实调用、CLI/维护依赖与授权审计；明确为管理入口或删除，不建立兼容代理 |
-| COMPONENT-CLEAN-08 | Component、Group、Star、Watch 各自复制 official translation、可见性、Version/尺寸投影 SQL | 规则调整需要多处同步 | 建立跨查询契约测试；只在 EXPLAIN 证明无性能退化时引入共享 projection/view |
+| COMPONENT-CLEAN-08（已关闭） | v24 `component_catalog_candidates` 统一删除与 Version 资格，`component_catalog_projection` 统一页内展示尺寸，`component_reviewed_translations` 统一 official reviewed 边界；Component、Group、Star、Watch 及公共 Feed 已切换 | 共享资格规则有一个 Goose 权威定义，候选查询不会提前执行 Version 展示点查，各查询只保留 actor、locale、筛选和分页职责 | 关闭证据：v24 up/down/up、三项 schema view 契约、跨模块集成测试及十万行计划；Version 资格由触发器维护的持久布尔值驱动 |
 | COMPONENT-CLEAN-09 | 同一页面对 Group 使用多条件 AND，对公共 Feed/收藏把条件拼成一个 query | 外观相同的搜索控件具有不同语义 | 产品先统一搜索模型；之后同时修改 API、URL 状态、文案和测试 |
 | COMPONENT-CLEAN-10 | v6 已覆盖版本化颜色表、材质类别、折角法线和 glTF PBR 扩展，但 `collectLDrawTriangles` 仍只输出几何；Part 内部 16/24 颜色继承、直接色、多材质、BFC/TEXMAP 和印刷纹理尚未进入 Component GLB | 纯色普通砖显著接近 Studio，印刷、多色、贴图和特殊 BFC 模型仍可能偏差 | 扩展 triangle material identity 与 mesh primitive 分组；为 16/24、direct color、BFC、TEXMAP/printed fixture 分别建立 GLB validator 与 Studio 视觉基准后关闭 |
 
-建议先关闭会静默漏数据的 01/02，再进行 05/06 的结构拆分。03/04/08 属于 SQL 设计工作，必须先记录 cardinality、
-一致性、分页和索引证据；07/09 需要先确认产品与真实调用，不能直接删除或改变交互。
+01/02、05/06 与本轮 03/04/08 已关闭。07/09 仍需要先确认产品与真实调用；10 依赖多材质/BFC/TEXMAP 的独立实现和视觉基准。

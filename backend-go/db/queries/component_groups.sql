@@ -29,32 +29,18 @@ SELECT id, owner_id, parent_group_id, group_type, name, normalized_name,
        (CASE WHEN group_type = 'root' THEN (
            -- root 明确表示“我的组件”，只走 owner 复合索引；收藏由独立 Star 视图承载。
            SELECT count(*)::bigint
-           FROM component_repo.components component
+           FROM component_repo.component_catalog_candidates component
            WHERE component.owner_id = sqlc.arg(owner_id)
-             AND component.deleted_at IS NULL
-             AND EXISTS (
-                 SELECT 1
-                 FROM component_repo.component_versions version
-                 WHERE version.component_id = component.id
-                   AND version.deleted_at IS NULL
-             )
+             AND component.version_available
        ) ELSE (
            SELECT count(*)::bigint
            FROM component_repo.component_group_memberships membership
-           JOIN component_repo.components component ON component.id = membership.component_id
+           JOIN component_repo.component_catalog_candidates component ON component.id = membership.component_id
            WHERE membership.owner_id = sqlc.arg(owner_id)
              AND membership.group_id = group_tree.id
-             AND component.deleted_at IS NULL
-             AND (component.owner_id = sqlc.arg(owner_id) OR component.status = 'active')
-             AND EXISTS (
-                 SELECT 1
-                 FROM component_repo.component_versions version
-                 WHERE version.component_id = component.id
-                   AND version.deleted_at IS NULL
-                   AND (
-                       component.owner_id = sqlc.arg(owner_id)
-                       OR (component.status = 'active' AND version.status <> 'draft')
-                   )
+             AND (
+                 (component.owner_id = sqlc.arg(owner_id) AND component.version_available)
+                 OR (component.status = 'active' AND component.public_version_available)
              )
        ) END)::bigint AS direct_component_count
 FROM group_tree
@@ -174,7 +160,7 @@ WITH group_record AS MATERIALIZED (
     -- root 只表示 actor 自有 Component；custom 只读取显式 membership，二者都避免扫描公开全集。
     SELECT component.id AS component_id, component.created_at AS added_at
     FROM group_record
-    JOIN component_repo.components component ON component.owner_id = group_record.owner_id
+    JOIN component_repo.component_catalog_candidates component ON component.owner_id = group_record.owner_id
     WHERE group_record.group_type = 'root'
     UNION ALL
     SELECT membership.component_id, membership.added_at
@@ -191,9 +177,7 @@ SELECT c.id, c.owner_id, c.content_kind,
        (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
        (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
        c.category, c.status, c.current_version_id,
-       COALESCE(display_version.logical_width_stud, c.logical_width_stud) AS logical_width_stud,
-       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
-       COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
+       c.logical_width_stud, c.logical_depth_stud, c.logical_height_plate,
        c.metadata, c.created_at, c.updated_at,
        COALESCE(c.owner_id = sqlc.arg(owner_id), false)::boolean AS owned_by_actor,
        (c.content_kind = 'official' AND c.content_locale <> sqlc.arg(locale)
@@ -205,42 +189,19 @@ SELECT c.id, c.owner_id, c.content_kind,
        ) AS starred_by_actor,
        candidate_components.added_at
 FROM candidate_components
-JOIN component_repo.components c ON c.id = candidate_components.component_id
-LEFT JOIN LATERAL (
-    SELECT version.logical_width_stud, version.logical_depth_stud,
-           version.logical_height_plate
-    FROM component_repo.component_versions version
-    WHERE version.component_id = c.id
-      AND version.deleted_at IS NULL
-      AND (
-          version.id = c.current_version_id
-          OR (c.current_version_id IS NULL AND version.status = 'draft')
-      )
-    ORDER BY (version.id = c.current_version_id) DESC,
-             version.created_at DESC, version.id DESC
-    LIMIT 1
-) display_version ON true
+JOIN component_repo.component_catalog_candidates c ON c.id = candidate_components.component_id
 LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
-    FROM component_repo.component_translations t
+    FROM component_repo.component_reviewed_translations t
     WHERE c.content_kind = 'official'
       AND t.component_id = c.id
       AND t.locale = sqlc.arg(locale)
-      AND t.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
-WHERE c.deleted_at IS NULL
-  AND (c.owner_id = sqlc.arg(owner_id) OR c.status = 'active')
-  AND EXISTS (
-      SELECT 1
-      FROM component_repo.component_versions version
-      WHERE version.component_id = c.id
-        AND version.deleted_at IS NULL
-        AND (
-            c.owner_id = sqlc.arg(owner_id)
-            OR (c.status = 'active' AND version.status <> 'draft')
-        )
-  )
+WHERE (
+    (c.owner_id = sqlc.arg(owner_id) AND c.version_available)
+    OR (c.status = 'active' AND c.public_version_available)
+)
 ORDER BY candidate_components.added_at DESC, c.id
 LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset)
 ), page_star_counts AS (
@@ -252,12 +213,14 @@ LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset)
 SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        page.selected_name, page.selected_description, page.has_description,
        page.selected_tags, page.category, page.status, page.current_version_id,
-       page.logical_width_stud, page.logical_depth_stud, page.logical_height_plate,
+       display_component.logical_width_stud, display_component.logical_depth_stud,
+       display_component.logical_height_plate,
        page.metadata, page.created_at, page.updated_at, page.owned_by_actor,
        page.translation_missing, page.starred_by_actor,
        COALESCE(page_star_counts.star_count, 0)::bigint AS star_count,
        page.added_at
 FROM page
+JOIN component_repo.component_catalog_projection display_component ON display_component.id = page.id
 LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
 ORDER BY page.added_at DESC, page.id;
 
@@ -281,7 +244,7 @@ WITH group_record AS MATERIALIZED (
 ), candidate_component_ids AS MATERIALIZED (
     SELECT component.id AS component_id
     FROM group_record
-    JOIN component_repo.components component ON component.owner_id = group_record.owner_id
+    JOIN component_repo.component_catalog_candidates component ON component.owner_id = group_record.owner_id
     WHERE group_record.group_type = 'root'
     UNION ALL
     SELECT membership.component_id
@@ -298,9 +261,7 @@ SELECT c.id, c.owner_id, c.content_kind,
        (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
        (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
        c.category, c.status, c.current_version_id,
-       COALESCE(display_version.logical_width_stud, c.logical_width_stud) AS logical_width_stud,
-       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
-       COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
+       c.logical_width_stud, c.logical_depth_stud, c.logical_height_plate,
        c.metadata, c.created_at, c.updated_at,
        COALESCE(c.owner_id = sqlc.arg(owner_id), false)::boolean AS owned_by_actor,
        (c.content_kind = 'official' AND c.content_locale <> sqlc.arg(locale)
@@ -312,64 +273,29 @@ SELECT c.id, c.owner_id, c.content_kind,
        ) AS starred_by_actor,
        count(*) OVER()::bigint AS total_count
 FROM candidate_component_ids
-JOIN component_repo.components c ON c.id = candidate_component_ids.component_id
-LEFT JOIN LATERAL (
-    SELECT version.logical_width_stud, version.logical_depth_stud,
-           version.logical_height_plate
-    FROM component_repo.component_versions version
-    WHERE version.component_id = c.id
-      AND version.deleted_at IS NULL
-      AND (
-          version.id = c.current_version_id
-          OR (c.current_version_id IS NULL AND version.status = 'draft')
-      )
-    ORDER BY (version.id = c.current_version_id) DESC,
-             version.created_at DESC, version.id DESC
-    LIMIT 1
-) display_version ON true
+JOIN component_repo.component_catalog_candidates c ON c.id = candidate_component_ids.component_id
 -- 尺寸搜索忽略 Box 轴方向：先把三个业务尺寸归一化为升序 a/b/c；任一尺寸缺失时不参与尺寸匹配。
 LEFT JOIN LATERAL (
-    SELECT LEAST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
-                 COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
-                 COALESCE(display_version.logical_height_plate, c.logical_height_plate))::double precision AS size_a,
-           (COALESCE(display_version.logical_width_stud, c.logical_width_stud)
-            + COALESCE(display_version.logical_depth_stud, c.logical_depth_stud)
-            + COALESCE(display_version.logical_height_plate, c.logical_height_plate)
-            - LEAST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
-                    COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
-                    COALESCE(display_version.logical_height_plate, c.logical_height_plate))
-            - GREATEST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
-                       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
-                       COALESCE(display_version.logical_height_plate, c.logical_height_plate)))::double precision AS size_b,
-           GREATEST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
-                    COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
-                    COALESCE(display_version.logical_height_plate, c.logical_height_plate))::double precision AS size_c
-    WHERE COALESCE(display_version.logical_width_stud, c.logical_width_stud) IS NOT NULL
-      AND COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) IS NOT NULL
-      AND COALESCE(display_version.logical_height_plate, c.logical_height_plate) IS NOT NULL
+    SELECT c.current_logical_size_a::double precision AS size_a,
+           c.current_logical_size_b::double precision AS size_b,
+           c.current_logical_size_c::double precision AS size_c
+    WHERE c.current_logical_size_a IS NOT NULL
+      AND c.current_logical_size_b IS NOT NULL
+      AND c.current_logical_size_c IS NOT NULL
 ) normalized_size ON true
 LEFT JOIN LATERAL (
     SELECT translation_record.id, translation_record.locale, translation_record.name,
            translation_record.description, translation_record.tags
-    FROM component_repo.component_translations translation_record
+    FROM component_repo.component_reviewed_translations translation_record
     WHERE c.content_kind = 'official'
       AND translation_record.component_id = c.id
       AND translation_record.locale = sqlc.arg(locale)
-      AND translation_record.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
-WHERE c.deleted_at IS NULL
-  AND (c.owner_id = sqlc.arg(owner_id) OR c.status = 'active')
-  AND EXISTS (
-      SELECT 1
-      FROM component_repo.component_versions version
-      WHERE version.component_id = c.id
-        AND version.deleted_at IS NULL
-        AND (
-            c.owner_id = sqlc.arg(owner_id)
-            OR (c.status = 'active' AND version.status <> 'draft')
-        )
-  )
+WHERE (
+    (c.owner_id = sqlc.arg(owner_id) AND c.version_available)
+    OR (c.status = 'active' AND c.public_version_available)
+)
   AND (cardinality(sqlc.arg(status_filters)::text[]) = 0 OR c.status = ANY(sqlc.arg(status_filters)::text[]))
   -- 每个重复 query 都是独立条件；NOT EXISTS 反例使全部文字条件按 AND 组合。
   AND NOT EXISTS (
@@ -429,12 +355,14 @@ LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset)
 SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        page.selected_name, page.selected_description, page.has_description,
        page.selected_tags, page.category, page.status, page.current_version_id,
-       page.logical_width_stud, page.logical_depth_stud, page.logical_height_plate,
+       display_component.logical_width_stud, display_component.logical_depth_stud,
+       display_component.logical_height_plate,
        page.metadata, page.created_at, page.updated_at, page.owned_by_actor,
        page.translation_missing, page.starred_by_actor,
        COALESCE(page_star_counts.star_count, 0)::bigint AS star_count,
        page.total_count
 FROM page
+JOIN component_repo.component_catalog_projection display_component ON display_component.id = page.id
 LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
 ORDER BY page.updated_at DESC, page.id;
 
@@ -447,7 +375,7 @@ WITH group_record AS MATERIALIZED (
 ), candidate_component_ids AS MATERIALIZED (
     SELECT component.id AS component_id
     FROM group_record
-    JOIN component_repo.components component ON component.owner_id = group_record.owner_id
+    JOIN component_repo.component_catalog_candidates component ON component.owner_id = group_record.owner_id
     WHERE group_record.group_type = 'root'
     UNION ALL
     SELECT membership.component_id
@@ -459,64 +387,29 @@ WITH group_record AS MATERIALIZED (
 )
 SELECT c.status, count(*)::bigint AS component_count
 FROM candidate_component_ids
-JOIN component_repo.components c ON c.id = candidate_component_ids.component_id
-LEFT JOIN LATERAL (
-    SELECT version.logical_width_stud, version.logical_depth_stud,
-           version.logical_height_plate
-    FROM component_repo.component_versions version
-    WHERE version.component_id = c.id
-      AND version.deleted_at IS NULL
-      AND (
-          version.id = c.current_version_id
-          OR (c.current_version_id IS NULL AND version.status = 'draft')
-      )
-    ORDER BY (version.id = c.current_version_id) DESC,
-             version.created_at DESC, version.id DESC
-    LIMIT 1
-) display_version ON true
+JOIN component_repo.component_catalog_candidates c ON c.id = candidate_component_ids.component_id
 -- 状态统计必须复用与结果列表完全相同的尺寸归一化，否则分页总数和状态数量会发生漂移。
 LEFT JOIN LATERAL (
-    SELECT LEAST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
-                 COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
-                 COALESCE(display_version.logical_height_plate, c.logical_height_plate))::double precision AS size_a,
-           (COALESCE(display_version.logical_width_stud, c.logical_width_stud)
-            + COALESCE(display_version.logical_depth_stud, c.logical_depth_stud)
-            + COALESCE(display_version.logical_height_plate, c.logical_height_plate)
-            - LEAST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
-                    COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
-                    COALESCE(display_version.logical_height_plate, c.logical_height_plate))
-            - GREATEST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
-                       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
-                       COALESCE(display_version.logical_height_plate, c.logical_height_plate)))::double precision AS size_b,
-           GREATEST(COALESCE(display_version.logical_width_stud, c.logical_width_stud),
-                    COALESCE(display_version.logical_depth_stud, c.logical_depth_stud),
-                    COALESCE(display_version.logical_height_plate, c.logical_height_plate))::double precision AS size_c
-    WHERE COALESCE(display_version.logical_width_stud, c.logical_width_stud) IS NOT NULL
-      AND COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) IS NOT NULL
-      AND COALESCE(display_version.logical_height_plate, c.logical_height_plate) IS NOT NULL
+    SELECT c.current_logical_size_a::double precision AS size_a,
+           c.current_logical_size_b::double precision AS size_b,
+           c.current_logical_size_c::double precision AS size_c
+    WHERE c.current_logical_size_a IS NOT NULL
+      AND c.current_logical_size_b IS NOT NULL
+      AND c.current_logical_size_c IS NOT NULL
 ) normalized_size ON true
 LEFT JOIN LATERAL (
     SELECT translation_record.id, translation_record.name
-    FROM component_repo.component_translations translation_record
+    FROM component_repo.component_reviewed_translations translation_record
     WHERE c.content_kind = 'official'
       AND cardinality(sqlc.arg(text_filters)::text[]) > 0
       AND translation_record.component_id = c.id
       AND translation_record.locale = sqlc.arg(locale)
-      AND translation_record.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
-WHERE c.deleted_at IS NULL
-  AND (c.owner_id = sqlc.arg(owner_id) OR c.status = 'active')
-  AND EXISTS (
-      SELECT 1
-      FROM component_repo.component_versions version
-      WHERE version.component_id = c.id
-        AND version.deleted_at IS NULL
-        AND (
-            c.owner_id = sqlc.arg(owner_id)
-            OR (c.status = 'active' AND version.status <> 'draft')
-        )
-  )
+WHERE (
+    (c.owner_id = sqlc.arg(owner_id) AND c.version_available)
+    OR (c.status = 'active' AND c.public_version_available)
+)
   AND NOT EXISTS (
       SELECT 1
       FROM unnest(sqlc.arg(text_filters)::text[]) AS requested_text(value)

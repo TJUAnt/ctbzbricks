@@ -25,7 +25,7 @@
 | 稳定排序 | `available_at DESC,event_id DESC`；展示时间是 `occurred_at` |
 | 分页/总数 | 不透明 keyset cursor；不使用 OFFSET，不计算 exact count |
 | 一致性 | 单页由一条 SQL 读取；新终态进入头部，旧 cursor 沿既有边界继续 |
-| 查询形状 | 终态部分索引驱动；每个 entry 通过有界 LATERAL 校验 Event、Version、Component，固定 `pageSize+1` 后才聚合 Star、连接个人关系和图片 Artifact |
+| 查询形状 | 终态部分索引驱动；每个 entry 通过有界 LATERAL 校验 Event、Version 和 v24 `component_catalog_candidates`，固定 `pageSize+1` 后才从 catalog projection 读取展示尺寸、聚合 Star、连接个人关系和图片 Artifact |
 | 索引 | v23 `(available_at DESC,event_id DESC)` partial index，只包含 ready/fallback；v22 索引继续服务事件审计和 Watch Feed |
 
 ## 3. 发布、渲染与读取链路
@@ -81,7 +81,7 @@ fallback 时 `status=fallback,image=null`。pending 永不出现在响应中。�
 | Worker / Renderer | `backend-go/internal/feedrender/`、`backend-go/internal/ldrawmaterial/`、`backend-go/cmd/worker/main.go`、`scripts/start-feed-render-worker.sh`、`scripts/start-feed-render-worker.ps1` |
 | GLB 与浏览器材质 | `backend-go/internal/workbench/task_handlers.go`、`frontend/src/preview/studioPreviewRendering.ts`、`glbThumbnailRenderer.ts`、`frontend/src/parts/PartViewerPage.tsx` |
 | 生产部署 | `Dockerfile.api`、`Dockerfile.worker`、`Dockerfile.feed-render`、`compose.production.yml`、`deploy/docker/*.env.example`、`docs/deployment/docker_production.md` |
-| SQL / Migration | `backend-go/db/queries/component_public_feed.sql`、`component_feed_entries.sql`、`backend-go/db/migrations/00022_component_public_feed.sql`、`00023_component_feed_rendering.sql` |
+| SQL / Migration | `backend-go/db/queries/component_public_feed.sql`、`component_feed_entries.sql`、`backend-go/db/migrations/00022_component_public_feed.sql`、`00023_component_feed_rendering.sql`、`00024_component_catalog_projection.sql` |
 | Tests | `public_feed_test.go`、`service_integration_test.go`、`public_feed_performance_integration_test.go`、`renderer_test.go`、`image_renderer_test.go`、`image_renderer_integration_test.go`、`componentPublicFeed.test.ts`、`ComponentPublicFeedCard.test.tsx` |
 
 ## 6. 验证证据
@@ -98,6 +98,9 @@ fallback 时 `status=fallback,image=null`。pending 永不出现在响应中。�
 渲染单元测试验证 1200×800 PNG、70%×65% 构图上限、旧 v4 GLB 透明材质恢复、单 Part 平滑法线边界、alpha 混合与损坏 GLB 拒绝；前端 20 个文件/90 项测试覆盖 ready 图片和 fallback 占位，生产构建与 i18n 检查通过。Go `make check`、最终 v23 隔离 PostgreSQL 和 Python 296 项回归通过，保留 6 个既有 pytest warning。
 
 2026-09-12 真实 Supabase PostgreSQL 17.6 从 Goose v20 升级到 v23；表、部分索引和终态触发器均存在，2 条既有用户发布事件回填为 fallback，状态约束检查无异常。重复 `up` 无操作，真实 Go API readiness 与公共 Feed 请求返回 200，确认升级前的 `pgconn.PrepareError` 已消失。真实 Worker 图片、对象存储、模型视觉和浏览器滚动仍待联合验收。
+
+2026-09-14 的 Component 08 清理把公共 Feed 的删除、active、公开 Version 资格切换到 v24 candidate projection，并在固定页后从 catalog projection 读取展示尺寸；
+事件、图片终态、排序和 cursor 合约未改变。v24 仅在本地隔离 PostgreSQL 完成迁移往返与集成验证，尚未部署真实 Supabase。
 
 同日首次真实发布后发现本机只运行 API、没有 Worker：2 条 Feed 任务均为 queued、attempts=0、无 lease。限定类型 Worker 启动后，两条任务均一次成功并生成 1200×800 PNG，Artifact 分别为 51,478 和 122,917 bytes；公共 Feed 返回 `ready,ready,fallback`，两个签名 URL 实际读取均为 HTTP 200 `image/png`。这验证了任务、Storage 和 API 图片链路；浏览器画面构图与滚动仍需人工验收。
 

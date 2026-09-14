@@ -46,12 +46,12 @@ WITH feed_page AS MATERIALIZED (
 		       component.metadata, component.created_at, component.updated_at,
 		       COALESCE(component.owner_id = sqlc.arg(actor_id), false)::boolean AS owned_by_actor
 		FROM component_repo.component_domain_events source_event
-		JOIN component_repo.components component
+		JOIN component_repo.component_catalog_candidates component
 		  ON component.id=entry.component_id
 		 AND component.id=source_event.component_id
 		 AND component.content_kind='user'
 		 AND component.status='active'
-		 AND component.deleted_at IS NULL
+		 AND component.public_version_available
 		JOIN component_repo.component_versions version
 		  ON version.id=entry.component_version_id
 		 AND version.id=source_event.component_version_id
@@ -114,9 +114,9 @@ SELECT page.event_id,
        page.category,
        page.status,
        page.current_version_id,
-       COALESCE(current_version.logical_width_stud, page.logical_width_stud) AS logical_width_stud,
-       COALESCE(current_version.logical_depth_stud, page.logical_depth_stud) AS logical_depth_stud,
-       COALESCE(current_version.logical_height_plate, page.logical_height_plate) AS logical_height_plate,
+       display_component.logical_width_stud,
+       display_component.logical_depth_stud,
+       display_component.logical_height_plate,
        page.metadata,
        page.created_at,
        page.updated_at,
@@ -132,6 +132,7 @@ SELECT page.event_id,
        active_watch.watch_level,
        active_watch.watched_at
 FROM feed_page page
+JOIN component_repo.component_catalog_projection display_component ON display_component.id = page.id
 LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
 LEFT JOIN component_repo.artifacts feed_image
   ON feed_image.id = page.image_artifact_id
@@ -139,10 +140,6 @@ LEFT JOIN component_repo.artifacts feed_image
  AND feed_image.source_kind = 'derived'
  AND feed_image.verification_status = 'verified'
  AND feed_image.deleted_at IS NULL
-LEFT JOIN component_repo.component_versions current_version
-  ON current_version.id = page.current_version_id
- AND current_version.component_id = page.id
- AND current_version.deleted_at IS NULL
 LEFT JOIN component_repo.component_watch_periods active_watch
   ON active_watch.actor_id = sqlc.arg(actor_id)
  AND active_watch.component_id = page.id

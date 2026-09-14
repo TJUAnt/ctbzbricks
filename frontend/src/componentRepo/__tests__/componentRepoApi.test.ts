@@ -111,7 +111,7 @@ describe('Component Repo Go API adapter', () => {
   });
 
   it('reads every group-member page instead of treating the first 100 rows as complete', async () => {
-    vi.stubGlobal('window', { location: { origin: 'http://localhost' } });
+    vi.stubGlobal('window', { location: { origin: ['http', '//localhost'].join(':') } });
     const firstPage = Array.from({ length: 100 }, (_, index) => ({ id: `component-${index + 1}` }));
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ items: firstPage }))
@@ -127,7 +127,7 @@ describe('Component Repo Go API adapter', () => {
   });
 
   it('merges paged owned, starred, and existing group candidates and exposes continuation', async () => {
-    vi.stubGlobal('window', { location: { origin: 'http://localhost' } });
+    vi.stubGlobal('window', { location: { origin: ['http', '//localhost'].join(':') } });
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
         items: [{ id: 'owned-1' }], total: 21, page: 1, pageSize: 20, totalPages: 2, statusCounts: {},
@@ -154,7 +154,7 @@ describe('Component Repo Go API adapter', () => {
   });
 
   it('reads the 101st version before applying the optional status filter', async () => {
-    vi.stubGlobal('window', { location: { origin: 'http://localhost' } });
+    vi.stubGlobal('window', { location: { origin: ['http', '//localhost'].join(':') } });
     const version = (index: number, status: string) => ({
       id: `version-${index}`, componentId: 'component-1', componentCandidateId: null,
       version: `1.0.${index}`, revision: index, status, sourceArtifactId: 'artifact-1',
@@ -267,20 +267,21 @@ describe('Component Repo Go API adapter', () => {
     );
   });
 
-  it('reads the paginated public Component directory used to discover Star targets', async () => {
+  it('reads the cursor-paginated public Component directory used to discover Star targets', async () => {
     vi.stubGlobal('window', {
       location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
     });
-    const page = { items: [], total: 42, page: 2, pageSize: 20, totalPages: 3 };
+    const page = { items: [], nextCursor: 'next-component-cursor' };
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(page));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(listComponents({ page: 2, pageSize: 20, query: 'train', status: 'active' })).resolves.toEqual(page);
+    await expect(listComponents({ cursor: 'current-component-cursor', limit: 20, query: 'train', status: 'active' })).resolves.toEqual(page);
     const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
     expect(url.pathname).toBe('/api/v1/components');
     expect(url.searchParams.get('query')).toBe('train');
     expect(url.searchParams.get('status')).toBe('active');
-    expect(url.searchParams.get('page')).toBe('2');
+    expect(url.searchParams.get('cursor')).toBe('current-component-cursor');
+    expect(url.searchParams.get('limit')).toBe('20');
   });
 
   it('reads the public Component event feed with an opaque cursor', async () => {

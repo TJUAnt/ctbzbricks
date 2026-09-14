@@ -94,17 +94,20 @@ export async function listComponentGroupMembershipCandidates(payload: {
   };
 }
 
+/** 以不透明游标读取自有与公开 Component 目录；续页必须沿用首屏筛选。 */
 export async function listComponents(payload: {
-  page: number;
-  pageSize: number;
+  limit?: number;
+  cursor?: string;
   query?: string;
+  category?: string;
   status?: string;
 }): Promise<ComponentPageResponse> {
   const url = new URL(appConfig.componentRepoApi.components, window.location.origin);
   url.searchParams.set('locale', currentTaskContext().locale);
-  url.searchParams.set('page', String(payload.page));
-  url.searchParams.set('pageSize', String(payload.pageSize));
+  if (payload.limit) url.searchParams.set('limit', String(payload.limit));
+  if (payload.cursor) url.searchParams.set('cursor', payload.cursor);
   if (payload.query) url.searchParams.set('query', payload.query);
+  if (payload.category) url.searchParams.set('category', payload.category);
   if (payload.status) url.searchParams.set('status', payload.status);
   return requestJson<ComponentPageResponse>(url.toString());
 }

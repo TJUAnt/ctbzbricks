@@ -108,8 +108,17 @@ func TestG3HTTPAuthenticationAndErrorContract(t *testing.T) {
 	assertPublicError(t, unauthorized, http.StatusUnauthorized, "auth.authentication_required")
 
 	actorAToken := integrationToken(t, "30000000-0000-0000-0000-000000000001")
+	catalog := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/components?limit=20&locale=en-US", nil)
+	request.Header.Set("Authorization", "Bearer "+actorAToken)
+	router.ServeHTTP(catalog, request)
+	if catalog.Code != http.StatusOK || !strings.Contains(catalog.Body.String(), `"items":[]`) ||
+		!strings.Contains(catalog.Body.String(), `"nextCursor":null`) || strings.Contains(catalog.Body.String(), `"total"`) {
+		t.Fatalf("Component catalog status/body = %d %s", catalog.Code, catalog.Body.String())
+	}
+
 	importHistory := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/component-imports?page=1&pageSize=20", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/component-imports?page=1&pageSize=20", nil)
 	request.Header.Set("Authorization", "Bearer "+actorAToken)
 	router.ServeHTTP(importHistory, request)
 	if importHistory.Code != http.StatusOK || !strings.Contains(importHistory.Body.String(), `"items":[]`) {

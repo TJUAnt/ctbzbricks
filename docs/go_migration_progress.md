@@ -21,8 +21,9 @@
 | G7 关系、校验和预览 | Completed | relation、interface、可选 validation、BOM 与 GLB preview 均由 Go 执行 |
 | G8 前端切换与 Python 退出 | Completed | Component Repo public API/task consumer 已 Go-only；Python public router 已删除，双语言、双身份 Auth/Storage RLS、恢复/回滚和真实指标门禁通过 |
 
-当前仓库 schema head 为 **v23**（v19 属于独立 P2D 路线，v20 为 Watch Feed 索引，v21 补齐 official 发布事件
-受信发布者，v22 为公共 Feed 事件索引，v23 为 Feed 图片终态投影和索引）；真实 Supabase 已于 2026-09-12 从 v20 升级到 v23。Component Preview v6 与 renderer v4 已在仓库实现 `ldraw-studio-pbr-v1`，本地 Blender 集成通过；v6 Artifact 重建范围、v4 服务器运行、浏览器视觉与生产资源/查询计划验收仍待统一执行。Go API 已覆盖目录、公共广场 Feed、版本、分组、Star、Watch/Feed、Artifact、上传、Import、Candidate、
+当前仓库 schema head 为 **v24**（v19 属于独立 P2D 路线，v20 为 Watch Feed 索引，v21 补齐 official 发布事件
+受信发布者，v22 为公共 Feed 事件索引，v23 为 Feed 图片终态投影和索引，v24 为 Component 目录/审核翻译共享投影与
+keyset/search 索引）；真实 Supabase 已于 2026-09-12 从 v20 升级到 v23，v24 尚未部署。Component Preview v6 与 renderer v4 已在仓库实现 `ldraw-studio-pbr-v1`，本地 Blender 集成通过；v6 Artifact 重建范围、v4 服务器运行、浏览器视觉与生产资源/查询计划验收仍待统一执行。Go API 已覆盖目录、公共广场 Feed、版本、分组、Star、Watch/Feed、Artifact、上传、Import、Candidate、
 关系审核、Part Library、任务、BOM、Preview、Search 和 Version Diff。Component Repo 不再新增 Python task；
 `component.import.parse` 与 `component.relations.detect` 已由 Go Worker 执行。
 
@@ -89,12 +90,14 @@ schema head，也不代表浏览器、RLS、冷热缓存或生产 SLO 已验收�
 | 2026-09-13 / G8 Docker 生产封装 | API、通用/GLB Worker、Feed Render Worker 三个 Linux/amd64 容器与显式 migration profile | Blender 4.1/glTFPack 1.2 归档固定 checksum；非 root/只读 rootfs/tmpfs/资源上限；API 与 Worker 密钥分离；通用 Worker exclude Feed 且保留上传维护；Compose 普通/ops 展开、三个 Linux/amd64 二进制和 Go `make check` 通过，Docker daemon 未运行故镜像/容器验收待执行 |
 | 2026-09-13 / G8 Component Preview v6 / Feed renderer v4 | `ldraw-studio-pbr-v1` 成为 GLB、Three.js 与 Cycles 的共同材质事实源 | 固定 Studio 2.0 `LDConfig.ldr` 148 色与源码 hash；九类材质映射线性颜色、alpha、roughness、metallic、IOR、specular、clearcoat、transmission、emission；GLB 写标准可选扩展和 Profile extras；浏览器使用共享 RoomEnvironment/Neutral tone mapping 并移除黑色边线；完整 Go `make check`、前端 21 文件/93 项、typed i18n、build 和 Python 296 项通过，旧 v4 黄车 GLB 经新版 sidecar 的 Go Worker + Blender 4.1 集成 46.59 秒成功；未写 Supabase、未生成真实 v6 Artifact |
 | 2026-09-13 / WATCH-DEPLOY 队列准备 | 真实 Supabase 非终态任务按持久任务取消语义清空，v6 Preview 与 v4 Feed 图片暂缓 | 操作前仅有 2 个 artifact verify 与 2 个 import parse，均 queued、attempts=0、无 lease；事务取消后 queued/running 均为 0，保留 4 个任务行并写入 4 个 task event 与 4 个 outbox event；Goose 保持 v23，v6 Preview/v4 Feed Artifact 均为 0；正式联合验收前仍须重新检查队列 |
+| 2026-09-13 / G8 前端数据完整性与结构清理 | 先关闭 Component Version/Group 候选固定首 100 条缺口，再拆分目录、详情与 API adapter 职责 | 第 101 条 Version/成员回归和 Group 候选续页 UI 测试通过；详情读取、mutation/权限和 presenter 独立；API 拆为 DTO、统一鉴权 transport 与五个领域模块，7 行兼容入口保留原调用名；未修改 Go API、SQL、迁移或部署状态 |
+| 2026-09-14 / G8 Component 目录一致性与共享投影 / Goose v24 | 关闭 COMPONENT-CLEAN-03/04/08：目录删除独立 Count 和 OFFSET，使用绑定筛选的 `(updated_at DESC,id DESC)` opaque cursor；Component/Group/Star/Watch/公共 Feed 共用 candidate/catalog/reviewed translation 投影 | API 改为 `{items,nextCursor}`；完整 UUID 等值，选择性名称/翻译走 trigram，高命中允许规划器扫描 100,000 条 Component 包络；所有场景无 Version 全表扫描与 spill，最深第 80,001 条 cursor 为 0.263 ms；v24 up/down/up、完整 Go `make check`、隔离 PostgreSQL database/component/httpapi、前端 22 文件/97 项、i18n 与 build 均通过；真实 Supabase 保持 v23 |
 
 ## 5. 最新里程碑：Watch 偏好、发布事件与关系生命周期
 
 日期：2026-09-11
 阶段：G8 / Component Repo 关系能力
-状态：WATCH-1～4 complete in repository；真实 Supabase 已部署 v23，Component Preview v6 / renderer v4 的运行部署、重建范围、真实浏览器与生产计划/资源验收待联合执行
+状态：WATCH-1～4 complete in repository；仓库 schema head v24、真实 Supabase v23，Component Preview v6 / renderer v4 的运行部署、v24 部署、重建范围、真实浏览器与生产计划/资源验收待联合执行
 
 ### 5.1 已实现
 
@@ -417,7 +420,7 @@ backend .venv-app/bin/python -m pytest                     PASS（296 tests）
 
 ## 7. 下一步顺序
 
-1. 在联合验收时先确认没有旧 renderer version 的 queued/running task，再构建并启动固定标签的三个镜像；以显式 migration profile 确认 schema head，受控生成 v6 Preview 并发布一条新版本，确认 GLB/图片 metadata 分别为 `ldraw-studio-pbr-v1` 与 `blender_cycles_4_1`，完成 Watch、真实浏览器、渲染资源和生产 PostgreSQL 计划/延迟验收；schema 已到 v23，不重复执行无关迁移。
+1. 在联合验收时先备份并把真实 Supabase 从 v23 升级到仓库 v24，再确认没有旧 renderer version 的 queued/running task；构建并启动固定标签的三个镜像，受控生成 v6 Preview 并发布一条新版本，确认 GLB/图片 metadata 分别为 `ldraw-studio-pbr-v1` 与 `blender_cycles_4_1`，完成 Watch、目录 cursor、真实浏览器、渲染资源和生产 PostgreSQL 计划/延迟验收。
 2. 持续采集 active Watch/actor、Feed 窗口内发布量、Rewatch 频率、closed 总量、表/索引大小与
    autovacuum/bloat；接近当前包络 70% 或包络提高时重新执行计划门禁。本地时间不得作为生产 SLO。
 

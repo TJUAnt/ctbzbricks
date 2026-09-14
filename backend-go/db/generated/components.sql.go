@@ -13,10 +13,12 @@ import (
 
 const componentIsVisible = `-- name: ComponentIsVisible :one
 SELECT EXISTS (
-    SELECT 1 FROM component_repo.components
+    SELECT 1 FROM component_repo.component_catalog_projection
     WHERE id = $1
-      AND deleted_at IS NULL
-      AND (owner_id = $2 OR status = 'active')
+      AND (
+          owner_id = $2
+          OR status = 'active'
+      )
 )
 `
 
@@ -30,63 +32,6 @@ func (q *Queries) ComponentIsVisible(ctx context.Context, arg ComponentIsVisible
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
-}
-
-const countVisibleComponents = `-- name: CountVisibleComponents :one
-SELECT count(*)::bigint
-FROM component_repo.components c
-LEFT JOIN LATERAL (
-    SELECT t.id, t.name
-    FROM component_repo.component_translations t
-    WHERE c.content_kind = 'official'
-      AND $1::text <> ''
-      AND t.component_id = c.id
-      AND t.locale = $2
-      AND t.translation_status = 'reviewed'
-    LIMIT 1
-) translation ON true
-WHERE c.deleted_at IS NULL
-  AND (c.owner_id = $3 OR c.status = 'active')
-  AND EXISTS (
-      SELECT 1
-      FROM component_repo.component_versions version
-      WHERE version.component_id = c.id
-        AND version.deleted_at IS NULL
-        AND (
-            c.owner_id = $3
-            OR (c.status = 'active' AND version.status <> 'draft')
-        )
-  )
-  AND ($4::text = '' OR c.status = $4)
-  AND ($5::text = '' OR c.category = $5)
-  AND (
-      $1::text = ''
-      OR CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
-         ILIKE '%' || $1 || '%'
-      OR c.id::text ILIKE '%' || $1 || '%'
-  )
-`
-
-type CountVisibleComponentsParams struct {
-	SearchQuery    string
-	Locale         string
-	ActorID        pgtype.UUID
-	StatusFilter   string
-	CategoryFilter string
-}
-
-// 公开目录总数必须复用列表的可见性和过滤条件，避免分页元数据泄露不可见 Component。
-func (q *Queries) CountVisibleComponents(ctx context.Context, arg CountVisibleComponentsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countVisibleComponents,
-		arg.SearchQuery,
-		arg.Locale,
-		arg.ActorID,
-		arg.StatusFilter,
-		arg.CategoryFilter,
-	)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
 }
 
 const createComponent = `-- name: CreateComponent :one
@@ -180,11 +125,8 @@ SELECT c.id, c.owner_id, c.content_kind,
        (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
        (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
        c.category, c.status, c.current_version_id,
-       COALESCE(display_version.logical_width_stud, c.logical_width_stud) AS logical_width_stud,
-       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
-       COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
-       c.metadata, c.created_by,
-       c.created_at, c.updated_at,
+       c.logical_width_stud, c.logical_depth_stud, c.logical_height_plate,
+       c.metadata, c.created_by, c.created_at, c.updated_at,
        COALESCE(c.owner_id = $1, false)::boolean AS owned_by_actor,
        (c.content_kind = 'official' AND c.content_locale <> $2
         AND translation.id IS NULL)::boolean AS translation_missing,
@@ -199,28 +141,13 @@ SELECT c.id, c.owner_id, c.content_kind,
        (SELECT count(*)::bigint
         FROM component_repo.component_stars aggregate_star
         WHERE aggregate_star.component_id = c.id)::bigint AS star_count
-FROM component_repo.components c
-LEFT JOIN LATERAL (
-    SELECT version.logical_width_stud, version.logical_depth_stud,
-           version.logical_height_plate
-    FROM component_repo.component_versions version
-    WHERE version.component_id = c.id
-      AND version.deleted_at IS NULL
-      AND (
-          version.id = c.current_version_id
-          OR (c.current_version_id IS NULL AND version.status = 'draft')
-      )
-    ORDER BY (version.id = c.current_version_id) DESC,
-             version.created_at DESC, version.id DESC
-    LIMIT 1
-) display_version ON true
+FROM component_repo.component_catalog_projection c
 LEFT JOIN LATERAL (
     SELECT t.id, t.locale, t.name, t.description, t.tags
-    FROM component_repo.component_translations t
+    FROM component_repo.component_reviewed_translations t
     WHERE c.content_kind = 'official'
       AND t.component_id = c.id
       AND t.locale = $2
-      AND t.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
 LEFT JOIN component_repo.component_watch_periods active_watch
@@ -228,8 +155,10 @@ LEFT JOIN component_repo.component_watch_periods active_watch
  AND active_watch.component_id = c.id
  AND active_watch.ended_seq IS NULL
 WHERE c.id = $3
-  AND c.deleted_at IS NULL
-  AND (c.owner_id = $1 OR c.status = 'active')
+  AND (
+      c.owner_id = $1
+      OR c.status = 'active'
+  )
 `
 
 type GetVisibleComponentParams struct {
@@ -300,106 +229,236 @@ func (q *Queries) GetVisibleComponent(ctx context.Context, arg GetVisibleCompone
 }
 
 const listVisibleComponents = `-- name: ListVisibleComponents :many
-WITH page AS MATERIALIZED (
-SELECT c.id, c.owner_id, c.content_kind,
-       (CASE WHEN translation.id IS NULL THEN c.content_locale ELSE translation.locale END)::text AS selected_content_locale,
-       (CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END)::text AS selected_name,
-       COALESCE(CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END, '')::text AS selected_description,
-       (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
-       (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
-       c.category, c.status, c.current_version_id,
-       COALESCE(display_version.logical_width_stud, c.logical_width_stud) AS logical_width_stud,
-       COALESCE(display_version.logical_depth_stud, c.logical_depth_stud) AS logical_depth_stud,
-       COALESCE(display_version.logical_height_plate, c.logical_height_plate) AS logical_height_plate,
-       c.metadata, c.created_by,
-       c.created_at, c.updated_at,
-       COALESCE(c.owner_id = $1, false)::boolean AS owned_by_actor,
-       (c.content_kind = 'official' AND c.content_locale <> $2
-        AND translation.id IS NULL)::boolean AS translation_missing,
-       EXISTS (
-           SELECT 1 FROM component_repo.component_stars star
-           WHERE star.actor_id = $1
-             AND star.component_id = c.id
-       ) AS starred_by_actor
-FROM component_repo.components c
-LEFT JOIN LATERAL (
-    SELECT version.logical_width_stud, version.logical_depth_stud,
-           version.logical_height_plate
-    FROM component_repo.component_versions version
-    WHERE version.component_id = c.id
-      AND version.deleted_at IS NULL
-      AND (
-          version.id = c.current_version_id
-          OR (c.current_version_id IS NULL AND version.status = 'draft')
+WITH owner_candidates AS MATERIALIZED (
+    SELECT c.id, c.updated_at
+    FROM component_repo.component_catalog_candidates c
+    WHERE c.owner_id = $1
+      AND c.version_available
+      AND ($2::text = '' OR $3::boolean)
+      AND (c.updated_at, c.id) < (
+          COALESCE($4::timestamptz, 'infinity'::timestamptz),
+          COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
       )
-    ORDER BY (version.id = c.current_version_id) DESC,
-             version.created_at DESC, version.id DESC
-    LIMIT 1
-) display_version ON true
-LEFT JOIN LATERAL (
-    SELECT t.id, t.locale, t.name, t.description, t.tags
-    FROM component_repo.component_translations t
-    WHERE c.content_kind = 'official'
-      AND t.component_id = c.id
-      AND t.locale = $2
-      AND t.translation_status = 'reviewed'
-    LIMIT 1
-) translation ON true
-WHERE c.deleted_at IS NULL
-  AND (c.owner_id = $1 OR c.status = 'active')
-  AND EXISTS (
-      SELECT 1
-      FROM component_repo.component_versions version
-      WHERE version.component_id = c.id
-        AND version.deleted_at IS NULL
-        AND (
-            c.owner_id = $1
-            OR (c.status = 'active' AND version.status <> 'draft')
-        )
-  )
-  AND ($3::text = '' OR c.status = $3)
-  AND ($4::text = '' OR c.category = $4)
-  AND (
-      $5::text = ''
-      OR CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
-         ILIKE '%' || $5 || '%'
-      OR c.id::text ILIKE '%' || $5 || '%'
-  )
-ORDER BY c.updated_at DESC, c.id
-LIMIT $7 OFFSET $6
+      AND ($6::text = '' OR c.status = $6)
+      AND ($7::text = '' OR c.category = $7)
+      AND (NOT $3::boolean
+           OR c.id = $8::uuid)
+    ORDER BY c.updated_at DESC, c.id DESC
+    LIMIT $9
+), public_candidates AS MATERIALIZED (
+    SELECT c.id, c.updated_at
+    FROM component_repo.component_catalog_candidates c
+    WHERE c.owner_id IS DISTINCT FROM $1
+      AND c.status = 'active'
+      AND c.public_version_available
+      AND ($2::text = '' OR $3::boolean)
+      AND (c.updated_at, c.id) < (
+          COALESCE($4::timestamptz, 'infinity'::timestamptz),
+          COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+      )
+      AND ($6::text = '' OR c.status = $6)
+      AND ($7::text = '' OR c.category = $7)
+      AND (NOT $3::boolean
+           OR c.id = $8::uuid)
+    ORDER BY c.updated_at DESC, c.id DESC
+    LIMIT $9
+), name_owner_candidates AS MATERIALIZED (
+    -- 名称与 ID 分开驱动，让 PostgreSQL 可分别选择 trigram 或稳定排序索引。
+    SELECT c.id, c.updated_at
+    FROM component_repo.component_catalog_candidates c
+    WHERE $2::text <> ''
+      AND NOT $3::boolean
+      AND c.name ILIKE '%' || $2 || '%'
+      AND c.owner_id = $1
+      AND c.version_available
+      AND (c.updated_at, c.id) < (
+          COALESCE($4::timestamptz, 'infinity'::timestamptz),
+          COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+      )
+      AND ($6::text = '' OR c.status = $6)
+      AND ($7::text = '' OR c.category = $7)
+    ORDER BY c.updated_at DESC, c.id DESC
+    LIMIT $9
+), name_public_candidates AS MATERIALIZED (
+    SELECT c.id, c.updated_at
+    FROM component_repo.component_catalog_candidates c
+    WHERE $2::text <> ''
+      AND NOT $3::boolean
+      AND c.name ILIKE '%' || $2 || '%'
+      AND c.owner_id IS DISTINCT FROM $1
+      AND c.status = 'active'
+      AND c.public_version_available
+      AND (c.updated_at, c.id) < (
+          COALESCE($4::timestamptz, 'infinity'::timestamptz),
+          COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+      )
+      AND ($6::text = '' OR c.status = $6)
+      AND ($7::text = '' OR c.category = $7)
+    ORDER BY c.updated_at DESC, c.id DESC
+    LIMIT $9
+), id_owner_candidates AS MATERIALIZED (
+    SELECT c.id, c.updated_at
+    FROM component_repo.component_catalog_candidates c
+    WHERE $2::text <> ''
+      AND NOT $3::boolean
+      AND c.id::text ILIKE '%' || $2 || '%'
+      AND c.owner_id = $1
+      AND c.version_available
+      AND (c.updated_at, c.id) < (
+          COALESCE($4::timestamptz, 'infinity'::timestamptz),
+          COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+      )
+      AND ($6::text = '' OR c.status = $6)
+      AND ($7::text = '' OR c.category = $7)
+    ORDER BY c.updated_at DESC, c.id DESC
+    LIMIT $9
+), id_public_candidates AS MATERIALIZED (
+    SELECT c.id, c.updated_at
+    FROM component_repo.component_catalog_candidates c
+    WHERE $2::text <> ''
+      AND NOT $3::boolean
+      AND c.id::text ILIKE '%' || $2 || '%'
+      AND c.owner_id IS DISTINCT FROM $1
+      AND c.status = 'active'
+      AND c.public_version_available
+      AND (c.updated_at, c.id) < (
+          COALESCE($4::timestamptz, 'infinity'::timestamptz),
+          COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+      )
+      AND ($6::text = '' OR c.status = $6)
+      AND ($7::text = '' OR c.category = $7)
+    ORDER BY c.updated_at DESC, c.id DESC
+    LIMIT $9
+), translation_owner_candidates AS MATERIALIZED (
+    SELECT c.id, c.updated_at
+    FROM component_repo.component_reviewed_translations translation
+    JOIN component_repo.component_catalog_candidates c ON c.id = translation.component_id
+    WHERE $2::text <> ''
+      AND NOT $3::boolean
+      AND translation.locale = $10
+      AND translation.name ILIKE '%' || $2 || '%'
+      AND c.owner_id = $1
+      AND c.version_available
+      AND (c.updated_at, c.id) < (
+          COALESCE($4::timestamptz, 'infinity'::timestamptz),
+          COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+      )
+      AND ($6::text = '' OR c.status = $6)
+      AND ($7::text = '' OR c.category = $7)
+    ORDER BY c.updated_at DESC, c.id DESC
+    LIMIT $9
+), translation_public_candidates AS MATERIALIZED (
+    SELECT c.id, c.updated_at
+    FROM component_repo.component_reviewed_translations translation
+    JOIN component_repo.component_catalog_candidates c ON c.id = translation.component_id
+    WHERE $2::text <> ''
+      AND NOT $3::boolean
+      AND translation.locale = $10
+      AND translation.name ILIKE '%' || $2 || '%'
+      AND c.owner_id IS DISTINCT FROM $1
+      AND c.status = 'active'
+      AND c.public_version_available
+      AND (c.updated_at, c.id) < (
+          COALESCE($4::timestamptz, 'infinity'::timestamptz),
+          COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+      )
+      AND ($6::text = '' OR c.status = $6)
+      AND ($7::text = '' OR c.category = $7)
+    ORDER BY c.updated_at DESC, c.id DESC
+    LIMIT $9
+), candidate_components AS MATERIALIZED (
+    -- 每个来源先截到一页，搜索时合并集合最多处理 6 * page_size 行。
+    SELECT owner.id, owner.updated_at FROM owner_candidates owner
+    UNION ALL
+    SELECT public_item.id, public_item.updated_at FROM public_candidates public_item
+    UNION ALL
+    SELECT name_owner.id, name_owner.updated_at FROM name_owner_candidates name_owner
+    UNION ALL
+    SELECT name_public.id, name_public.updated_at FROM name_public_candidates name_public
+    UNION ALL
+    SELECT id_owner.id, id_owner.updated_at FROM id_owner_candidates id_owner
+    UNION ALL
+    SELECT id_public.id, id_public.updated_at FROM id_public_candidates id_public
+    UNION ALL
+    SELECT translation_owner.id, translation_owner.updated_at FROM translation_owner_candidates translation_owner
+    UNION ALL
+    SELECT translation_public.id, translation_public.updated_at FROM translation_public_candidates translation_public
+), deduplicated_candidates AS MATERIALIZED (
+    SELECT candidate.id, max(candidate.updated_at)::timestamptz AS updated_at
+    FROM candidate_components candidate
+    GROUP BY candidate.id
+), page AS MATERIALIZED (
+    SELECT candidate.id, candidate.updated_at
+    FROM deduplicated_candidates candidate
+    ORDER BY candidate.updated_at DESC, candidate.id DESC
+    LIMIT $9
+), page_rows AS MATERIALIZED (
+    -- 展示翻译、actor Star 和共享尺寸只作用于已经固定的页面。
+    SELECT c.id, c.owner_id, c.content_kind,
+           (CASE WHEN translation.id IS NULL THEN c.content_locale ELSE translation.locale END)::text AS selected_content_locale,
+           (CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END)::text AS selected_name,
+           COALESCE(CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END, '')::text AS selected_description,
+           (CASE WHEN translation.id IS NULL THEN c.description ELSE translation.description END IS NOT NULL)::boolean AS has_description,
+           (CASE WHEN translation.id IS NULL THEN c.tags ELSE translation.tags END)::text[] AS selected_tags,
+           c.category, c.status, c.current_version_id,
+           c.logical_width_stud, c.logical_depth_stud, c.logical_height_plate,
+           c.metadata, c.created_by, c.created_at, c.updated_at,
+           COALESCE(c.owner_id = $1, false)::boolean AS owned_by_actor,
+           (c.content_kind = 'official' AND c.content_locale <> $10
+            AND translation.id IS NULL)::boolean AS translation_missing,
+           EXISTS (
+               SELECT 1 FROM component_repo.component_stars star
+               WHERE star.actor_id = $1
+                 AND star.component_id = c.id
+           ) AS starred_by_actor
+    FROM page
+    JOIN component_repo.component_catalog_projection c ON c.id = page.id
+    LEFT JOIN LATERAL (
+        SELECT t.id, t.locale, t.name, t.description, t.tags
+        FROM component_repo.component_reviewed_translations t
+        WHERE c.content_kind = 'official'
+          AND t.component_id = c.id
+          AND t.locale = $10
+        LIMIT 1
+    ) translation ON true
 ), page_star_counts AS (
-    -- 列表先分页再聚合当前页 Star，避免关系规模增长后出现逐行 COUNT 放大。
     SELECT aggregate_star.component_id, count(*)::bigint AS star_count
     FROM component_repo.component_stars aggregate_star
     JOIN page ON page.id = aggregate_star.component_id
     GROUP BY aggregate_star.component_id
 )
-SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
-       page.selected_name, page.selected_description, page.has_description,
-       page.selected_tags, page.category, page.status, page.current_version_id,
-       page.logical_width_stud, page.logical_depth_stud, page.logical_height_plate,
-       page.metadata, page.created_by, page.created_at, page.updated_at,
-       page.owned_by_actor, page.translation_missing, page.starred_by_actor,
+SELECT page_rows.id, page_rows.owner_id, page_rows.content_kind,
+       page_rows.selected_content_locale, page_rows.selected_name,
+       page_rows.selected_description, page_rows.has_description,
+       page_rows.selected_tags, page_rows.category, page_rows.status,
+       page_rows.current_version_id, page_rows.logical_width_stud,
+       page_rows.logical_depth_stud, page_rows.logical_height_plate,
+       page_rows.metadata, page_rows.created_by, page_rows.created_at,
+       page_rows.updated_at, page_rows.owned_by_actor,
+       page_rows.translation_missing, page_rows.starred_by_actor,
        (active_watch.actor_id IS NOT NULL)::boolean AS watching_by_actor,
        active_watch.watch_level, active_watch.watched_at,
        COALESCE(page_star_counts.star_count, 0)::bigint AS star_count
-FROM page
-LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
+FROM page_rows
+LEFT JOIN page_star_counts ON page_star_counts.component_id = page_rows.id
 LEFT JOIN component_repo.component_watch_periods active_watch
   ON active_watch.actor_id = $1
- AND active_watch.component_id = page.id
+ AND active_watch.component_id = page_rows.id
  AND active_watch.ended_seq IS NULL
-ORDER BY page.updated_at DESC, page.id
+ORDER BY page_rows.updated_at DESC, page_rows.id DESC
 `
 
 type ListVisibleComponentsParams struct {
-	ActorID        pgtype.UUID
-	Locale         string
-	StatusFilter   string
-	CategoryFilter string
-	SearchQuery    string
-	PageOffset     int32
-	PageSize       int32
+	ActorID              pgtype.UUID
+	SearchQuery          string
+	HasSearchComponentID bool
+	CursorUpdatedAt      pgtype.Timestamptz
+	CursorComponentID    pgtype.UUID
+	StatusFilter         string
+	CategoryFilter       string
+	SearchComponentID    pgtype.UUID
+	PageSize             int32
+	Locale               string
 }
 
 type ListVisibleComponentsRow struct {
@@ -430,15 +489,20 @@ type ListVisibleComponentsRow struct {
 	StarCount             int64
 }
 
+// 无文本搜索时从 owner/active 排序索引驱动；文本搜索先用 trigram 产生来源候选。
+// 每个互斥来源最多保留一页，跨源重复只在有界集合中去重；cursor 与 ORDER BY 使用相同双降序键。
 func (q *Queries) ListVisibleComponents(ctx context.Context, arg ListVisibleComponentsParams) ([]ListVisibleComponentsRow, error) {
 	rows, err := q.db.Query(ctx, listVisibleComponents,
 		arg.ActorID,
-		arg.Locale,
+		arg.SearchQuery,
+		arg.HasSearchComponentID,
+		arg.CursorUpdatedAt,
+		arg.CursorComponentID,
 		arg.StatusFilter,
 		arg.CategoryFilter,
-		arg.SearchQuery,
-		arg.PageOffset,
+		arg.SearchComponentID,
 		arg.PageSize,
+		arg.Locale,
 	)
 	if err != nil {
 		return nil, err

@@ -51,6 +51,24 @@ func TestComponentRepoBaselineContract(t *testing.T) {
 	if !slices.Equal(tables, expectedTables) {
 		t.Fatalf("unexpected component_repo tables\nwant: %v\n got: %v", expectedTables, tables)
 	}
+	// 列表共享投影必须由 Goose 固定存在；Service 启动期间不得临时创建或修复它们。
+	rows, err = conn.Query(ctx, `
+		SELECT c.relname
+		FROM pg_catalog.pg_class c
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'component_repo' AND c.relkind = 'v'
+		ORDER BY c.relname`)
+	if err != nil {
+		t.Fatalf("list component_repo views: %v", err)
+	}
+	views, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("collect component_repo views: %v", err)
+	}
+	expectedViews := []string{"component_catalog_candidates", "component_catalog_projection", "component_reviewed_translations"}
+	if !slices.Equal(views, expectedViews) {
+		t.Fatalf("unexpected component_repo views\nwant: %v\n got: %v", expectedViews, views)
+	}
 	var activitySequenceCache int64
 	if err := conn.QueryRow(ctx, `
 		SELECT cache_size

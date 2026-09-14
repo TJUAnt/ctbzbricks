@@ -1,5 +1,7 @@
 import type { StructuredMessage } from '../api/client';
 
+// 本文件集中保存 Component Repo 前端 DTO；字段名和机器状态必须与 Go `/api/v1` 契约保持一致。
+
 export type ComponentResponse = {
   id: string;
   ownerId?: string | null;
@@ -106,10 +108,7 @@ export type ComponentStarPageResponse = {
 
 export type ComponentPageResponse = {
   items: ComponentResponse[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
+  nextCursor: string | null;
 };
 
 /** ComponentPublicFeedItemResponse 保留发布事件身份，并提供当前 Component 与发布版本投影。 */

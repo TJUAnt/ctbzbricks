@@ -19,9 +19,9 @@ A data platform for LEGO bricks.
 
 | 功能 | 当前实现文档 | 主要范围 | 状态 |
 |---|---|---|---|
-| Watch | [Watch 详细设计](./docs/component_repo/watch.md) | Watch/Unwatch、管理列表、动态 Feed、发布事件与删除联动 | 仓库实现和测试完成；真实 Supabase 已到 v23，浏览器与生产计划验收待执行 |
-| Star | [Star 详细设计](./docs/component_repo/star.md) | Star/Unstar、收藏列表、计数、尺寸筛选与删除联动 | 已实现；保留分页、一致性和前端拆分清理项 |
-| Component | [Component 详细设计](./docs/component_repo/component.md) | 目录、详情、版本、上传导入、发布、Preview GLB、BOM、Diff 与删除 | Go 主链路及 v6 Studio 材质 Profile 已实现；旧 Preview 重建与视觉基准待联合验收 |
+| Watch | [Watch 详细设计](./docs/component_repo/watch.md) | Watch/Unwatch、管理列表、动态 Feed、发布事件与删除联动 | 仓库实现和测试完成；读取已使用 v24 共享投影，真实 Supabase 仍为 v23，浏览器与生产计划验收待执行 |
+| Star | [Star 详细设计](./docs/component_repo/star.md) | Star/Unstar、收藏列表、计数、尺寸筛选与删除联动 | 已实现；候选完整性、前端职责拆分及跨模块展示投影已收敛，Star 自身一致性项保留 |
+| Component | [Component 详细设计](./docs/component_repo/component.md) | 目录、详情、版本、上传导入、发布、Preview GLB、BOM、Diff 与删除 | Go 主链路已实现；01～06 中已授权项及 08 已关闭，目录改为单查询 cursor，视觉验收待执行 |
 | 组件广场 | [组件广场详细设计](./docs/component_repo/component_plaza.md) | 公共/个人订阅页签、Worker 派生事件图片、Watch Feed 与订阅管理入口 | 双 Feed、Cycles 优先 renderer v4 和 Docker 生产封装完成；服务器部署与浏览器验收待统一执行 |
 
 统一接口契约以 [docs/api.md](./docs/api.md) 为准，Go 迁移事实以

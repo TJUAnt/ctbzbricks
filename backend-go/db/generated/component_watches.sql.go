@@ -172,24 +172,17 @@ func (q *Queries) CreateComponentRelationshipEndBoundary(ctx context.Context) (C
 
 const getComponentWatchTarget = `-- name: GetComponentWatchTarget :one
 SELECT component.id, component.owner_id, component.status,
-       EXISTS (
-           SELECT 1
-           FROM component_repo.component_versions version
-           WHERE version.component_id = component.id
-             AND version.deleted_at IS NULL
-             AND version.status <> 'draft'
-       )::boolean AS public_version_available,
+       component.public_version_available,
        existing_watch.watch_level,
        existing_watch.id AS watch_period_id,
        existing_watch.started_seq,
        existing_watch.watched_at
-FROM component_repo.components component
+FROM component_repo.component_catalog_candidates component
 LEFT JOIN component_repo.component_watch_periods existing_watch
   ON existing_watch.actor_id = $1
  AND existing_watch.component_id = component.id
  AND existing_watch.ended_seq IS NULL
 WHERE component.id = $2
-  AND component.deleted_at IS NULL
   AND (component.owner_id = $1 OR component.status = 'active')
 `
 
@@ -240,27 +233,18 @@ WITH actor_watches AS MATERIALIZED (
 ), watch_page AS MATERIALIZED (
     SELECT watch.component_id, watch.watch_level, watch.watched_at
     FROM actor_watches watch
-    JOIN component_repo.components component ON component.id = watch.component_id
-    JOIN LATERAL (
-        SELECT true AS available
-        FROM component_repo.component_versions public_version
-        WHERE public_version.component_id = component.id
-          AND public_version.deleted_at IS NULL
-          AND public_version.status <> 'draft'
-        LIMIT 1
-    ) public_version ON true
+    JOIN component_repo.component_catalog_candidates component ON component.id = watch.component_id
     LEFT JOIN LATERAL (
         SELECT item.id, item.name
-        FROM component_repo.component_translations item
+        FROM component_repo.component_reviewed_translations item
         WHERE $5::text <> ''
           AND component.content_kind = 'official'
           AND item.component_id = component.id
           AND item.locale = $1
-          AND item.translation_status = 'reviewed'
         LIMIT 1
     ) search_translation ON true
-    WHERE component.deleted_at IS NULL
-      AND component.status = 'active'
+    WHERE component.status = 'active'
+      AND component.public_version_available
       AND ($6::text = '' OR component.category = $6)
       -- leading-wildcard 搜索只运行在当前 actor 的有界 Watch 候选集内，不依赖普通 B-tree。
       AND (
@@ -286,17 +270,16 @@ SELECT page.component_id,
        (component.content_kind = 'official' AND component.content_locale <> $1
         AND translation.id IS NULL)::boolean AS translation_missing
 FROM watch_page page
-JOIN component_repo.components component ON component.id = page.component_id
+JOIN component_repo.component_catalog_projection component ON component.id = page.component_id
 LEFT JOIN component_repo.component_versions current_version
   ON current_version.id = component.current_version_id
  AND current_version.deleted_at IS NULL
 LEFT JOIN LATERAL (
     SELECT item.id, item.locale, item.name
-    FROM component_repo.component_translations item
+    FROM component_repo.component_reviewed_translations item
     WHERE component.content_kind = 'official'
       AND item.component_id = component.id
       AND item.locale = $1
-      AND item.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
 ORDER BY page.watched_at DESC, page.component_id DESC
@@ -383,10 +366,10 @@ WITH active_watches AS MATERIALIZED (
            event.component_version_id,
            event.occurred_at
     FROM active_watches watch
-    JOIN component_repo.components component
+    JOIN component_repo.component_catalog_candidates component
       ON component.id = watch.component_id
-     AND component.deleted_at IS NULL
      AND component.status = 'active'
+     AND component.public_version_available
     -- 全局一页不可能包含同一 Component 排名超过 page_size 的事件；先对每个 active Watch
     -- 截断到一页保持结果等价，同时强制历史增长时仍按 Component/time 索引做有界探测。
     JOIN LATERAL (
@@ -422,17 +405,16 @@ SELECT page.event_id,
        (component.content_kind = 'official' AND component.content_locale <> $1
         AND translation.id IS NULL)::boolean AS translation_missing
 FROM feed_page page
-JOIN component_repo.components component ON component.id = page.component_id
+JOIN component_repo.component_catalog_projection component ON component.id = page.component_id
 JOIN component_repo.component_versions version
   ON version.id = page.component_version_id
  AND version.deleted_at IS NULL
 LEFT JOIN LATERAL (
     SELECT item.id, item.locale, item.name
-    FROM component_repo.component_translations item
+    FROM component_repo.component_reviewed_translations item
     WHERE component.content_kind = 'official'
       AND item.component_id = component.id
       AND item.locale = $1
-      AND item.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
 ORDER BY page.occurred_at DESC, page.event_id DESC

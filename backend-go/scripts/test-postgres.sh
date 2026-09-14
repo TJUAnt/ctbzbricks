@@ -37,7 +37,8 @@ trap cleanup EXIT HUP INT TERM
 
 mkdir -p "$socket_dir"
 initdb -D "$cluster_dir" --username=postgres --auth=trust --no-locale --encoding=UTF8 >/dev/null
-pg_ctl -D "$cluster_dir" -o "-h 127.0.0.1 -p $pg_port -k $socket_dir" -w start >/dev/null
+# 隔离库没有恢复价值；关闭持久 WAL 成本，使十万/百万行计划 fixture 不挤占开发机磁盘。
+pg_ctl -D "$cluster_dir" -o "-h 127.0.0.1 -p $pg_port -k $socket_dir -c fsync=off -c full_page_writes=off -c wal_level=minimal -c max_wal_senders=0 -c max_wal_size=128MB -c min_wal_size=32MB" -w start >/dev/null
 
 isolated_database_url="postgresql://postgres@127.0.0.1:$pg_port/postgres?sslmode=disable"
 export DATABASE_URL="$isolated_database_url"
@@ -51,10 +52,12 @@ go run ./cmd/migrate up
 go run ./cmd/migrate version
 # 百万级关系计划门禁只在显式开启时输出详细计划，避免日常集成测试产生大量日志。
 integration_test_flags=""
-if [ "${RUN_PIXEL_PLAN_TEST:-0}" = "1" ] || [ "${RUN_STAR_SIZE_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_LIST_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_FEED_PLAN_TEST:-0}" = "1" ] || [ "${RUN_PUBLIC_FEED_PLAN_TEST:-0}" = "1" ]; then
+if [ "${RUN_PIXEL_PLAN_TEST:-0}" = "1" ] || [ "${RUN_STAR_SIZE_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_LIST_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_FEED_PLAN_TEST:-0}" = "1" ] || [ "${RUN_PUBLIC_FEED_PLAN_TEST:-0}" = "1" ] || [ "${RUN_COMPONENT_LIST_PLAN_TEST:-0}" = "1" ]; then
 	integration_test_flags="-v"
 fi
-go test $integration_test_flags -p=1 -tags=integration ./internal/database ./internal/component ./internal/artifact ./internal/task ./internal/worker ./internal/ingestion ./internal/workbench ./internal/httpapi ./internal/partlibrary ./internal/pixel2d
+# 默认执行完整集成集；性能门禁可在低磁盘 CI runner 上显式缩小包集合，迁移和启动无 DDL 契约仍会执行。
+integration_packages=${BRICKBUILDER_TEST_PACKAGES:-"./internal/database ./internal/component ./internal/artifact ./internal/task ./internal/worker ./internal/ingestion ./internal/workbench ./internal/httpapi ./internal/partlibrary ./internal/pixel2d"}
+go test $integration_test_flags -p=1 -tags=integration $integration_packages
 
 before_schema="$test_root/schema-before.sql"
 after_schema="$test_root/schema-after.sql"

@@ -21,27 +21,18 @@ SELECT count(*)::bigint AS total,
        (SELECT count(*)::bigint
         FROM actor_stars) AS relationship_total
 FROM actor_stars star
-JOIN component_repo.components component ON component.id = star.component_id
-JOIN LATERAL (
-    SELECT true AS available
-    FROM component_repo.component_versions version
-    WHERE version.component_id = component.id
-      AND version.deleted_at IS NULL
-      AND version.status <> 'draft'
-    LIMIT 1
-) public_version ON true
+JOIN component_repo.component_catalog_candidates component ON component.id = star.component_id
 LEFT JOIN LATERAL (
     SELECT translation.id, translation.name
-    FROM component_repo.component_translations translation
+    FROM component_repo.component_reviewed_translations translation
     WHERE component.content_kind = 'official'
       AND $1::text <> ''
       AND translation.component_id = component.id
       AND translation.locale = $2
-      AND translation.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
-WHERE component.deleted_at IS NULL
-  AND component.status = 'active'
+WHERE component.status = 'active'
+  AND component.public_version_available
   AND ($3::text = '' OR component.category = $3)
   AND (
       $1::text = ''
@@ -201,20 +192,13 @@ func (q *Queries) DeleteComponentStarsForLifecycleBatch(ctx context.Context, arg
 
 const getComponentStarTarget = `-- name: GetComponentStarTarget :one
 SELECT component.id, component.owner_id, component.status,
-       EXISTS (
-           SELECT 1
-           FROM component_repo.component_versions version
-           WHERE version.component_id = component.id
-             AND version.deleted_at IS NULL
-             AND version.status <> 'draft'
-       )::boolean AS public_version_available,
+       component.public_version_available,
        existing_star.starred_at
-FROM component_repo.components component
+FROM component_repo.component_catalog_candidates component
 LEFT JOIN component_repo.component_stars existing_star
   ON existing_star.actor_id = $1
  AND existing_star.component_id = component.id
 WHERE component.id = $2
-  AND component.deleted_at IS NULL
   AND (component.owner_id = $1 OR component.status = 'active')
 `
 
@@ -267,26 +251,17 @@ SELECT component.id, component.owner_id, component.content_kind,
        true::boolean AS starred_by_actor,
        star.starred_at
 FROM actor_stars star
-JOIN component_repo.components component ON component.id = star.component_id
-JOIN LATERAL (
-    SELECT true AS available
-    FROM component_repo.component_versions version
-    WHERE version.component_id = component.id
-      AND version.deleted_at IS NULL
-      AND version.status <> 'draft'
-    LIMIT 1
-) public_version ON true
+JOIN component_repo.component_catalog_candidates component ON component.id = star.component_id
 LEFT JOIN LATERAL (
     SELECT item.id, item.locale, item.name, item.description, item.tags
-    FROM component_repo.component_translations item
+    FROM component_repo.component_reviewed_translations item
     WHERE component.content_kind = 'official'
       AND item.component_id = component.id
       AND item.locale = $2
-      AND item.translation_status = 'reviewed'
     LIMIT 1
 ) translation ON true
-WHERE component.deleted_at IS NULL
-  AND component.status = 'active'
+WHERE component.status = 'active'
+  AND component.public_version_available
   AND ($3::text = '' OR component.category = $3)
   AND (
       $4::text = ''
@@ -334,24 +309,14 @@ LIMIT $10 OFFSET $9
 SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        page.selected_name, page.selected_description, page.has_description,
        page.selected_tags, page.category, page.status, page.current_version_id,
-       COALESCE(display_version.logical_width_stud, page.logical_width_stud) AS logical_width_stud,
-       COALESCE(display_version.logical_depth_stud, page.logical_depth_stud) AS logical_depth_stud,
-       COALESCE(display_version.logical_height_plate, page.logical_height_plate) AS logical_height_plate,
+       display_component.logical_width_stud, display_component.logical_depth_stud,
+       display_component.logical_height_plate,
        page.metadata, page.created_at, page.updated_at, page.owned_by_actor,
        page.translation_missing, page.starred_by_actor,
        COALESCE(page_star_counts.star_count, 0)::bigint AS star_count,
        page.starred_at
 FROM page
-LEFT JOIN LATERAL (
-    -- 原始有方向尺寸仅服务最终展示；必须在 page 固定后读取，不能扩大到 actor 的全部候选。
-    SELECT version.logical_width_stud, version.logical_depth_stud,
-           version.logical_height_plate
-    FROM component_repo.component_versions version
-    WHERE version.component_id = page.id
-      AND version.deleted_at IS NULL
-      AND version.id = page.current_version_id
-    LIMIT 1
-) display_version ON true
+JOIN component_repo.component_catalog_projection display_component ON display_component.id = page.id
 LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
 ORDER BY page.starred_at DESC, page.id
 `

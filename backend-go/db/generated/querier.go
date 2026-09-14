@@ -45,8 +45,6 @@ type Querier interface {
 	CountSearchableParts(ctx context.Context, arg CountSearchablePartsParams) (int64, error)
 	// 先物化 actor 的有界权威关系集，再逐候选探测 Component 与可公开 Version；避免空/稀疏 actor 先构建全库哈希。
 	CountStarredComponents(ctx context.Context, arg CountStarredComponentsParams) (CountStarredComponentsRow, error)
-	// 公开目录总数必须复用列表的可见性和过滤条件，避免分页元数据泄露不可见 Component。
-	CountVisibleComponents(ctx context.Context, arg CountVisibleComponentsParams) (int64, error)
 	// 没有 active period 时追加新周期；并发重复 PUT 命中部分唯一索引时不更新任何既有行，由 Service 重试读取。
 	CreateActiveComponentWatchPeriod(ctx context.Context, arg CreateActiveComponentWatchPeriodParams) (CreateActiveComponentWatchPeriodRow, error)
 	CreateAssemblyRelation(ctx context.Context, arg CreateAssemblyRelationParams) (CreateAssemblyRelationRow, error)
@@ -169,6 +167,8 @@ type Querier interface {
 	ListStarredComponents(ctx context.Context, arg ListStarredComponentsParams) ([]ListStarredComponentsRow, error)
 	ListUploadSessionFiles(ctx context.Context, sessionID pgtype.UUID) ([]ComponentRepoUploadSessionFile, error)
 	ListVisibleComponentVersions(ctx context.Context, arg ListVisibleComponentVersionsParams) ([]ComponentRepoComponentVersion, error)
+	// 无文本搜索时从 owner/active 排序索引驱动；文本搜索先用 trigram 产生来源候选。
+	// 每个互斥来源最多保留一页，跨源重复只在有界集合中去重；cursor 与 ORDER BY 使用相同双降序键。
 	ListVisibleComponents(ctx context.Context, arg ListVisibleComponentsParams) ([]ListVisibleComponentsRow, error)
 	LockImportForParse(ctx context.Context, importID pgtype.UUID) (ComponentRepoImport, error)
 	LockOwnedComponent(ctx context.Context, arg LockOwnedComponentParams) (LockOwnedComponentRow, error)

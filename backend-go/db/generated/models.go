@@ -96,7 +96,65 @@ type ComponentRepoComponent struct {
 	// 当前公开版本轴无关逻辑尺寸的中间值
 	CurrentLogicalSizeB pgtype.Numeric
 	// 当前公开版本轴无关逻辑尺寸的最大值
-	CurrentLogicalSizeC pgtype.Numeric
+	CurrentLogicalSizeC    pgtype.Numeric
+	VersionAvailable       bool
+	PublicVersionAvailable bool
+}
+
+// Component Repo Count、搜索和分页共享轻量投影；不执行 Version 展示读取
+type ComponentRepoComponentCatalogCandidate struct {
+	ID                     pgtype.UUID
+	OwnerID                pgtype.UUID
+	ContentKind            string
+	ContentLocale          string
+	Name                   string
+	Description            *string
+	Tags                   []string
+	Category               *string
+	Status                 string
+	CurrentVersionID       pgtype.UUID
+	LogicalWidthStud       pgtype.Numeric
+	LogicalDepthStud       pgtype.Numeric
+	LogicalHeightPlate     pgtype.Numeric
+	CurrentLogicalSizeA    pgtype.Numeric
+	CurrentLogicalSizeB    pgtype.Numeric
+	CurrentLogicalSizeC    pgtype.Numeric
+	Metadata               []byte
+	CreatedBy              pgtype.UUID
+	CreatedAt              pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
+	DeletedAt              pgtype.Timestamptz
+	DeletedBy              pgtype.UUID
+	VersionAvailable       bool
+	PublicVersionAvailable bool
+}
+
+// Component Repo 列表共享投影；调用查询负责 actor、locale、筛选、分页和页内 enrichment
+type ComponentRepoComponentCatalogProjection struct {
+	ID                     pgtype.UUID
+	OwnerID                pgtype.UUID
+	ContentKind            string
+	ContentLocale          string
+	Name                   string
+	Description            *string
+	Tags                   []string
+	Category               *string
+	Status                 string
+	CurrentVersionID       pgtype.UUID
+	LogicalWidthStud       pgtype.Numeric
+	LogicalDepthStud       pgtype.Numeric
+	LogicalHeightPlate     pgtype.Numeric
+	CurrentLogicalSizeA    pgtype.Numeric
+	CurrentLogicalSizeB    pgtype.Numeric
+	CurrentLogicalSizeC    pgtype.Numeric
+	Metadata               []byte
+	CreatedBy              pgtype.UUID
+	CreatedAt              pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
+	DeletedAt              pgtype.Timestamptz
+	DeletedBy              pgtype.UUID
+	VersionAvailable       bool
+	PublicVersionAvailable bool
 }
 
 type ComponentRepoComponentDomainEvent struct {
@@ -144,6 +202,20 @@ type ComponentRepoComponentGroupMembership struct {
 	ComponentID pgtype.UUID
 	AddedBy     pgtype.UUID
 	AddedAt     pgtype.Timestamptz
+}
+
+// Component Repo 官方已审核翻译共享只读投影；未审核状态不能进入用户读取路径
+type ComponentRepoComponentReviewedTranslation struct {
+	ID          int64
+	ComponentID pgtype.UUID
+	Locale      string
+	Name        string
+	Description *string
+	Tags        []string
+	ReviewedBy  pgtype.UUID
+	ReviewedAt  pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
 }
 
 type ComponentRepoComponentStar struct {
