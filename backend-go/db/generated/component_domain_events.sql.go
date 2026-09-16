@@ -11,17 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const acquireExclusiveComponentActivityLock = `-- name: AcquireExclusiveComponentActivityLock :exec
-SELECT pg_advisory_xact_lock($1::bigint)
-`
-
-// Publish 与 Component 删除使用同一 Component 的独占事务锁；Feed 不再依赖事件时点订阅资格，
-// 但删除生命周期仍必须阻止并发 Watch 在目标失效后创建 active period。
-func (q *Queries) AcquireExclusiveComponentActivityLock(ctx context.Context, lockKey int64) error {
-	_, err := q.db.Exec(ctx, acquireExclusiveComponentActivityLock, lockKey)
-	return err
-}
-
 const createComponentVersionPublishedEvent = `-- name: CreateComponentVersionPublishedEvent :one
 INSERT INTO component_repo.component_domain_events (
     id, event_type, component_id, component_version_id, actor_id, payload
@@ -43,7 +32,8 @@ type CreateComponentVersionPublishedEventParams struct {
 	ActorID            pgtype.UUID
 }
 
-// Version 首次发布和唯一事件同事务提交；payload v1 保持空对象，避免复制用户文案或最终译文。
+// Version 首次发布和唯一事件同事务提交；event_seq 只保留发布审计顺序，不参与 read-time Feed 成员资格。
+// payload v1 保持空对象，避免复制用户文案或最终译文。
 func (q *Queries) CreateComponentVersionPublishedEvent(ctx context.Context, arg CreateComponentVersionPublishedEventParams) (int64, error) {
 	row := q.db.QueryRow(ctx, createComponentVersionPublishedEvent,
 		arg.ID,

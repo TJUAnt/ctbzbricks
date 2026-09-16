@@ -117,6 +117,16 @@ func TestG3HTTPAuthenticationAndErrorContract(t *testing.T) {
 		t.Fatalf("Component catalog status/body = %d %s", catalog.Code, catalog.Body.String())
 	}
 
+	// Star 公共分页只返回可见结果的精确总数；删除清理中的内部关系量不得泄露到 HTTP 契约。
+	stars := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/component-stars?page=1&pageSize=20&locale=en-US", nil)
+	request.Header.Set("Authorization", "Bearer "+actorAToken)
+	router.ServeHTTP(stars, request)
+	if stars.Code != http.StatusOK || !strings.Contains(stars.Body.String(), `"items":[]`) ||
+		!strings.Contains(stars.Body.String(), `"total":0`) || strings.Contains(stars.Body.String(), `"relationshipTotal"`) {
+		t.Fatalf("Star list status/body = %d %s", stars.Code, stars.Body.String())
+	}
+
 	importHistory := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/component-imports?page=1&pageSize=20", nil)
 	request.Header.Set("Authorization", "Bearer "+actorAToken)

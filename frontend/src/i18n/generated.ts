@@ -459,8 +459,6 @@ export type TranslationKey =
   | "componentRepo:starred"
   | "componentRepo:starredAt"
   | "componentRepo:starredComponentsDescription"
-  | "componentRepo:starredComponentsUnavailable"
-  | "componentRepo:starredComponentsUnavailableDescription"
   | "componentRepo:startUpload"
   | "componentRepo:status"
   | "componentRepo:subscriptionLevel"

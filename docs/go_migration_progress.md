@@ -2,7 +2,7 @@
 
 > 后续领域专项：[2D 像素化与拼接方案 Go 迁移](go_pixel_2d_migration.md)（P2D，独立记录；不计入 Component Repo G0～G8）。
 
-> 最后更新：2026-09-13（Component Preview v6 / Feed renderer v4 材质 Profile）
+> 最后更新：2026-09-16（Star 偏移清理）
 > 状态依据：[go_component_migration_plan.md](./go_component_migration_plan.md)
 > 跟进指南：[go_migration_followup_guide.md](./go_migration_followup_guide.md)
 > 记录规则：本文只保留当前状态、已验证里程碑和未关闭门禁；过程细节由专项文档、测试和 Git 历史承载。
@@ -23,7 +23,7 @@
 
 当前仓库 schema head 为 **v24**（v19 属于独立 P2D 路线，v20 为 Watch Feed 索引，v21 补齐 official 发布事件
 受信发布者，v22 为公共 Feed 事件索引，v23 为 Feed 图片终态投影和索引，v24 为 Component 目录/审核翻译共享投影与
-keyset/search 索引）；真实 Supabase 已于 2026-09-12 从 v20 升级到 v23，v24 尚未部署。Component Preview v6 与 renderer v4 已在仓库实现 `ldraw-studio-pbr-v1`，本地 Blender 集成通过；v6 Artifact 重建范围、v4 服务器运行、浏览器视觉与生产资源/查询计划验收仍待统一执行。Go API 已覆盖目录、公共广场 Feed、版本、分组、Star、Watch/Feed、Artifact、上传、Import、Candidate、
+keyset/search 索引）；真实 Supabase 已于 2026-09-15 从 v23 升级到 v24。Component Preview v6 与 renderer v4 已在仓库实现 `ldraw-studio-pbr-v1`，本地 Blender 集成通过；应用发布、v6 Artifact 重建范围、v4 服务器运行、浏览器视觉与生产资源/查询计划验收仍待统一执行。Go API 已覆盖目录、公共广场 Feed、版本、分组、Star、Watch/Feed、Artifact、上传、Import、Candidate、
 关系审核、Part Library、任务、BOM、Preview、Search 和 Version Diff。Component Repo 不再新增 Python task；
 `component.import.parse` 与 `component.relations.detect` 已由 Go Worker 执行。
 
@@ -52,7 +52,7 @@ schema head，也不代表浏览器、RLS、冷热缓存或生产 SLO 已验收�
 | Group | root/custom、移动、成员管理 | root 仅代表 owned；Star 是独立集合 |
 | Star | 幂等 Star/Unstar、列表、计数、详情/目录投影 | 不授予权限、不通知、不公开 actor 列表 |
 | Watch | 幂等 Watch/Unwatch、筛选/keyset 管理页、详情投影、组件广场个人订阅 Feed、发布领域事件、mutation 指标 | 不做推荐、recipient snapshot、fan-out Worker、通知或未读中心 |
-| 组件广场 | 公共/个人订阅双页签；公共卡片展示发布人 ID、Worker 生成的 1200×800 图片和事件内容；个人页签展示当前 Watch 更新 | Go 持久任务优先调用 Blender 4.1 Cycles，失败时 Go raster fallback；pending 图片事件本次跳过，ready/fallback 都发布成功并进入流；两个 Feed 成员资格独立且不返回 exact count |
+| 组件广场 | 独立广场壳层承载公共/个人订阅双页签；两个页签共用发布人、1200×800 图片、描述、发布说明、Star 和详情入口的大图事件卡片 | Go 持久任务优先调用 Blender 4.1 Cycles，失败时 Go raster fallback；pending 图片事件本次跳过，ready/fallback 都发布成功并进入流；两个 Feed 成员资格独立且不返回 exact count |
 | Upload/Import | owner-scoped 直传、complete `202`、持久处理链、状态恢复 | complete 是写交互终点，不等待 Worker |
 | Task | logical job、execution/attempt、依赖、租约、重试、取消、事件 | PostgreSQL 是权威状态，不使用进程内队列 |
 | Scene/Candidate | Studio/LDraw 解析、多 root expansion、hash/signature、relation 审核 | source 与 derived Artifact 分离 |
@@ -91,13 +91,18 @@ schema head，也不代表浏览器、RLS、冷热缓存或生产 SLO 已验收�
 | 2026-09-13 / G8 Component Preview v6 / Feed renderer v4 | `ldraw-studio-pbr-v1` 成为 GLB、Three.js 与 Cycles 的共同材质事实源 | 固定 Studio 2.0 `LDConfig.ldr` 148 色与源码 hash；九类材质映射线性颜色、alpha、roughness、metallic、IOR、specular、clearcoat、transmission、emission；GLB 写标准可选扩展和 Profile extras；浏览器使用共享 RoomEnvironment/Neutral tone mapping 并移除黑色边线；完整 Go `make check`、前端 21 文件/93 项、typed i18n、build 和 Python 296 项通过，旧 v4 黄车 GLB 经新版 sidecar 的 Go Worker + Blender 4.1 集成 46.59 秒成功；未写 Supabase、未生成真实 v6 Artifact |
 | 2026-09-13 / WATCH-DEPLOY 队列准备 | 真实 Supabase 非终态任务按持久任务取消语义清空，v6 Preview 与 v4 Feed 图片暂缓 | 操作前仅有 2 个 artifact verify 与 2 个 import parse，均 queued、attempts=0、无 lease；事务取消后 queued/running 均为 0，保留 4 个任务行并写入 4 个 task event 与 4 个 outbox event；Goose 保持 v23，v6 Preview/v4 Feed Artifact 均为 0；正式联合验收前仍须重新检查队列 |
 | 2026-09-13 / G8 前端数据完整性与结构清理 | 先关闭 Component Version/Group 候选固定首 100 条缺口，再拆分目录、详情与 API adapter 职责 | 第 101 条 Version/成员回归和 Group 候选续页 UI 测试通过；详情读取、mutation/权限和 presenter 独立；API 拆为 DTO、统一鉴权 transport 与五个领域模块，7 行兼容入口保留原调用名；未修改 Go API、SQL、迁移或部署状态 |
-| 2026-09-14 / G8 Component 目录一致性与共享投影 / Goose v24 | 关闭 COMPONENT-CLEAN-03/04/08：目录删除独立 Count 和 OFFSET，使用绑定筛选的 `(updated_at DESC,id DESC)` opaque cursor；Component/Group/Star/Watch/公共 Feed 共用 candidate/catalog/reviewed translation 投影 | API 改为 `{items,nextCursor}`；完整 UUID 等值，选择性名称/翻译走 trigram，高命中允许规划器扫描 100,000 条 Component 包络；所有场景无 Version 全表扫描与 spill，最深第 80,001 条 cursor 为 0.263 ms；v24 up/down/up、完整 Go `make check`、隔离 PostgreSQL database/component/httpapi、前端 22 文件/97 项、i18n 与 build 均通过；真实 Supabase 保持 v23 |
+| 2026-09-14 / G8 Component 目录一致性与共享投影 / Goose v24 | 关闭 COMPONENT-CLEAN-03/04/08：目录删除独立 Count 和 OFFSET，使用绑定筛选的 `(updated_at DESC,id DESC)` opaque cursor；Component/Group/Star/Watch/公共 Feed 共用 candidate/catalog/reviewed translation 投影 | API 改为 `{items,nextCursor}`；完整 UUID 等值，选择性名称/翻译走 trigram，高命中允许规划器扫描 100,000 条 Component 包络；所有场景无 Version 全表扫描与 spill，最深第 80,001 条 cursor 为 0.263 ms；v24 up/down/up、完整 Go `make check`、隔离 PostgreSQL database/component/httpapi、前端 22 文件/97 项、i18n 与 build 均通过 |
+| 2026-09-15 / G8 组件广场边界与双 Feed 卡片统一 | `ComponentPlazaPage` 从个人 `ComponentRepoPage` 拆出；个人订阅 Feed 直接复用公共大图事件卡片；订阅管理保留独立 Component Repo 列表并复用现有 Watch API | Watch Feed 保持 active Watch、7/30/90 天窗口与事件 keyset，补齐终态图片、发布人、locale-aware 描述、当页 Star 和当前 Component 投影；pending 不返回，ready/fallback 返回；Go `make check`、隔离 PostgreSQL v24 全契约、前端 23 文件/100 项、typed i18n/build 及 100 万 active/100 万 closed/92,700 Feed entry 计划门禁通过，资源键与 catalog 版本未变 |
+| 2026-09-15 / G8 真实 Supabase Goose v24 | 目标项目 `wkwffflomyrgqpilsozx` / `postgres` 从 v23 升级到 v24；数据库层共享 candidate/catalog/reviewed translation 投影与 Version 资格维护上线 | PostgreSQL 17.6；迁移前同一只读快照恢复包 13 个文件 SHA-256 全通过；22 个 Component、23 个 Version 守恒；资格差异 0；5 个目标索引有效、触发器启用、重复 up 无操作；queued/running task、非终态/非法终态 Feed entry、无效索引和长事务均为 0；唯一未验证约束属于 provider `realtime.messages`；当前 Watch Feed SQL 在生产空 actor 上执行 1.786 ms，无列/类型 PrepareError |
+| 2026-09-16 / G8 Watch 偏移清理 | 关闭 WATCH-CLEAN-01/02/04/05；03 保持已关闭 | activity advisory lock SQL 归入中性文件并由 sqlc 生成；strict/display locale 契约归入无业务依赖共享包；sequence 明确保留为审计与删除统一边界且不参与 Feed；v24 共享投影增加目录/详情/Watch 跨入口契约测试。API、schema、资源和查询形状均未改变；Go `make check`、隔离 PostgreSQL v24 0→head/down-up/重复 up、前端 23 文件/100 项、i18n 与 build 通过 |
+| 2026-09-16 / G8 Star 偏移清理 | 关闭 STAR-CLEAN-03/06/07 与 STAR-CONSISTENCY-01/STAR-A11Y-01；STAR-CLEAN-04 保持条件延期 | List SQL 窗口计数 + REPEATABLE READ 只读快照，`relationshipTotal` 退出公共 API/UI；页内计数修复百万关系全表扫描；统一双语可访问按钮。100,000 Component / 1,000,000 Star 权威 SQL 计划、Go check/PostgreSQL 集成、前端 24 文件/104 项、i18n/build 通过；资源版本 `frontend-2026.09.16.1` |
 
-## 5. 最新里程碑：Watch 偏好、发布事件与关系生命周期
+## 5. 最新里程碑：Component 关系、发布事件与 Star 收口
 
-日期：2026-09-11
+日期：2026-09-16
 阶段：G8 / Component Repo 关系能力
-状态：WATCH-1～4 complete in repository；仓库 schema head v24、真实 Supabase v23，Component Preview v6 / renderer v4 的运行部署、v24 部署、重建范围、真实浏览器与生产计划/资源验收待联合执行
+状态：WATCH-1～4 与本轮 Star 偏移清理 complete in repository；仓库 schema head 与真实 Supabase 均为 v24，
+Star 新公共契约仍待应用发布；Component Preview v6 / renderer v4 的运行部署、重建范围、真实浏览器与生产计划/资源验收待联合执行
 
 ### 5.1 已实现
 
@@ -366,14 +371,30 @@ Component、92,700 发布事件（90,000 窗口外、2,700 窗口内）和 100 �
 
 ```text
 backend-go make check                                      PASS
-backend-go make test-postgres                              PASS（0 -> v23 -> v22 -> v23、启动与集成契约）
+backend-go make test-postgres                              PASS（0 -> v24 -> v23 -> v24、启动与集成契约）
 RUN_WATCH_LIST_PLAN_TEST=1 RUN_WATCH_FEED_PLAN_TEST=1 ... PASS（上述容量与计划门禁）
 RUN_PUBLIC_FEED_PLAN_TEST=1 ...                           PASS（100,000 事件/entry；0.138/53.097/0.142/0.128 ms）
 frontend npm run i18n:check                                PASS（2 locales / 10 namespaces）
-frontend npm test                                          PASS（20 files / 90 tests）
+frontend npm test                                          PASS（23 files / 100 tests）
 frontend npm run build                                     PASS
-backend .venv-app/bin/python -m pytest                     PASS（296 tests）
 ```
+
+### 5.11 Star 一致性、公共契约与可访问性收口
+
+2026-09-16 冻结 Star 页内 `items/total` 必须来自同一数据库快照。独立 Count SQL 已删除；List SQL 只维护一份
+可见性、翻译和筛选谓词，在 OFFSET 前使用窗口计数。Service 使用 `REPEATABLE READ READ ONLY`，越界空页复用
+同一查询读取第一页元数据。内部删除清理残留数不再通过 `relationshipTotal` 暴露，公共响应收敛为
+`{items,total,page,pageSize,totalPages}`。
+
+百万关系实际 SQL 计划首次发现页内 `starCount` 会顺序扫描全部 Star；相关聚合已改为固定页面后使用
+`component_stars_component_idx`。最终 fixture 为 100,000 Component、1,000 actor × 1,000 Star、90% user /
+10% official 和 100 条 reviewed translation；PostgreSQL 14.17 warm-cache 的八组场景为 0.447～32.851 ms，
+无 Component/Version/Star 全表扫描、外部排序或临时文件。完整数字与 cold-cache/生产 SLO 限制见 Star 路线第 23 节。
+
+前端列表、详情和公共 Feed 统一使用原生 `ComponentStarButton`，复用既有双语 Star/Unstar key；冲突的“关系
+保留并恢复显示”资源删除。`backend-go make check`、`make test-postgres`、Star 百万关系计划门禁、前端
+`i18n:check`、24 文件/104 项测试及 build 均通过。本切片没有新增迁移，真实 Supabase schema 仍为 v24；
+公共 API 变化需随下次应用发布上线，不能把仓库完成写成已部署。
 
 ## 6. 未关闭门禁
 
@@ -394,9 +415,12 @@ backend .venv-app/bin/python -m pytest                     PASS（296 tests）
 
 - [ ] `STAR-PERF-01`（Deferred）：产品决定保留页码交互；当前 1,000 条/actor 最深页计划已验证。只有交互变更获批、容量提高或观测接近边界时重新开启 cursor/keyset。
 - [x] `STAR-PERF-02`：v18 权威规范化投影已由发布/Preview 事务维护，并通过 1,000,000 总关系、1,000 条/actor 的尺寸计划门禁。
-- [ ] `STAR-CONSISTENCY-01`：冻结 Count/List 一致性语义；需要一致时改为单语句或显式一致读快照。
-- [ ] `STAR-UI-01`：custom Group 候选去除前端 first-100 假完整集合，补服务端分页/搜索和连续操作测试。
-- [ ] `STAR-A11Y-01`：为 Star 图标按钮补 typed `aria-label` 与双 locale 键盘测试。
+- [x] `STAR-CONSISTENCY-01`：2026-09-16 冻结为响应内一致；唯一 List SQL 在分页前窗口计数，Service 使用
+  `REPEATABLE READ READ ONLY` 快照，越界空页复用同一 SQL，`relationshipTotal` 退出公共 API。
+- [x] `STAR-UI-01`：custom Group 候选已按 owned/Star/member 分页搜索、合并去重并显示续页；完整 membership
+  独立逐页加载，第 101 条候选/成员测试通过。
+- [x] `STAR-A11Y-01`：列表、详情与公共 Feed 统一使用 `ComponentStarButton`；typed `aria-label`、原生键盘
+  button 语义及 zh-CN/en-US 的 Star/Unstar 状态测试通过。
 - [ ] STAR-3：1,000,000 总关系、多 actor 与 warm-cache 计划已完成；冷缓存、生产版本/参数、限流、指标和灰度验收仍待完成。
 
 上述编号的评审原文、量化证据和客观关闭条件保存在 Star 方案与路线跟踪文档中。
@@ -416,11 +440,11 @@ backend .venv-app/bin/python -m pytest                     PASS（296 tests）
 - [x] WATCH-3（仓库）：当前 active Watch 动态 Feed API、事件复合索引、冻结窗口 cursor、发布前后 Watch/Unwatch
   语义和 active 1,000/actor + 100 万 closed 计划门禁均已实现；不创建 delivery/notification 或专属 Worker。
 - [x] WATCH-4（仓库）：组件广场“个人订阅”Feed、7/30/90 天窗口、刷新/滚动续页，以及独立“我的订阅”管理页和双语言资源已完成。
-- [ ] WATCH-DEPLOY：真实 Supabase 已应用 v23，公共 Feed API、renderer v3 基准、renderer v4 材质集成及 Docker 生产封装通过；2026-09-13 已将当时 4 个非终态任务安全取消并确认 queued/running 为 0。队列状态会变化，联合验收开始前仍须重新检查；镜像/服务器运行、v6 Preview 与 v4 Worker 真实任务、浏览器以及生产 PostgreSQL/渲染资源计划验收按产品决定留待后续一起完成。
+- [ ] WATCH-DEPLOY：真实 Supabase 已应用 v24，公共 Feed API、renderer v3 基准、renderer v4 材质集成及 Docker 生产封装通过；2026-09-15 迁移后 queued/running 与非终态 Feed entry 均为 0。应用/镜像发布、服务器运行、v6 Preview 与 v4 Worker 真实任务、浏览器以及生产 PostgreSQL/渲染资源计划验收按产品决定留待后续一起完成；开始前仍须重新检查会变化的队列状态。
 
 ## 7. 下一步顺序
 
-1. 在联合验收时先备份并把真实 Supabase 从 v23 升级到仓库 v24，再确认没有旧 renderer version 的 queued/running task；构建并启动固定标签的三个镜像，受控生成 v6 Preview 并发布一条新版本，确认 GLB/图片 metadata 分别为 `ldraw-studio-pbr-v1` 与 `blender_cycles_4_1`，完成 Watch、目录 cursor、真实浏览器、渲染资源和生产 PostgreSQL 计划/延迟验收。
+1. 发布当前 Go API/前端并在联合验收开始前再次确认没有旧 renderer version 的 queued/running task；构建并启动固定标签的三个镜像，受控生成 v6 Preview 并发布一条新版本，确认 GLB/图片 metadata 分别为 `ldraw-studio-pbr-v1` 与 `blender_cycles_4_1`，完成 Watch、目录 cursor、真实浏览器、渲染资源和生产 PostgreSQL 计划/延迟验收。
 2. 持续采集 active Watch/actor、Feed 窗口内发布量、Rewatch 频率、closed 总量、表/索引大小与
    autovacuum/bloat；接近当前包络 70% 或包络提高时重新执行计划门禁。本地时间不得作为生产 SLO。
 

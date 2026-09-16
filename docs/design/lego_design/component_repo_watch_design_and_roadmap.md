@@ -1,7 +1,7 @@
 # Component Repo Watch 功能方案与路线跟踪文档（用途：实现、验收与容量重评）
 
 > 文档状态：Approved / Implemented in repository
-> 最后更新：2026-09-09
+> 最后更新：2026-09-16
 > 当前方案：读取时基于当前 active Watch 动态聚合发布 Feed
 > 非目标：推荐算法、recipient fan-out、推送通知、通知中心、Watch 专属 Worker
 
@@ -137,6 +137,7 @@ GLB/几何计算 Worker 的职责与运行方式不因本功能改变。
 - `actor_id/component_id/watch_level`；
 - `started_seq/watched_at`；
 - `ended_seq/unwatched_at/ended_reason`；
+- sequence 只表达 Watch/Rewatch 审计和 Component 删除统一生命周期边界，不参与 Feed 成员资格或 cursor；
 - `(actor_id,component_id) WHERE ended_seq IS NULL` 保证唯一 active period；
 - actor active-time partial index支持管理列表。
 
@@ -147,6 +148,7 @@ closed period 当前 append-only、永久保留，单独按 Rewatch 频率和保
 每次 Draft 首次成功发布追加一个 `component.version.published.v1`：
 
 - 事件与 Version 发布同事务提交；
+- `event_seq` 只保留发布审计顺序，不与 Watch period 比较来推导 recipient；
 - 同一 Version 的同类事件唯一；
 - 数据库拒绝 UPDATE/DELETE；
 - user 事件 actor 必须是 Component owner；official 没有 owner，事件 actor 必须是 Version `created_by`；
@@ -266,7 +268,7 @@ Component 排名超过页面大小的事件，所以该截断结果等价，并�
 - 双语言页面、API adapter、Go unit/integration、空库 migration up/down/up；
 - 上述 SQL 计划门禁。
 
-真实 Supabase 部署与仓库代码完成分开判断。v20 已在 2026-09-11 的受限前置操作中部署，v21～v23 已在 2026-09-12 部署；完整浏览器、Worker 图片和生产计划验收仍未执行。
+真实 Supabase 部署与仓库代码完成分开判断。v20 已在 2026-09-11 的受限前置操作中部署，v21～v23 已在 2026-09-12 部署，v24 已在 2026-09-15 部署；当前 Go API/前端/Worker 镜像发布、完整浏览器、Worker 图片和生产计划验收仍未执行。
 
 ## 14. 路线状态
 
@@ -277,7 +279,7 @@ Component 排名超过页面大小的事件，所以该截断结果等价，并�
 | WATCH-2 | Complete in repository | 发布事务追加不可变领域事件和指标；v21 补齐 official Version 发布者约束 |
 | WATCH-3 | Complete in repository | 当前 active Watch 的动态 Feed API、索引、cursor、语义/性能测试 |
 | WATCH-4 | Complete in repository | “我的订阅”管理与 Feed UI、7/30/90 天、双语言和取消订阅联动 |
-| WATCH-DEPLOY | In progress | 真实 Supabase 已应用仓库 head v23，公共 Feed API 已恢复；仍需统一完成 Watch/广场真实浏览器、Worker 图片与生产版本计划验收 |
+| WATCH-DEPLOY | In progress | 真实 Supabase 已应用仓库 head v24，迁移后任务队列和 Feed 终态回查通过；仍需发布当前应用并统一完成 Watch/广场真实浏览器、Worker 图片与生产版本计划验收 |
 
 ## 15. 重新设计触发条件
 
@@ -301,3 +303,5 @@ Component 排名超过页面大小的事件，所以该截断结果等价，并�
   方案被明确废止；“先发布后 Watch 可见、发布后 Unwatch 不可见”成为权威语义。
 - 2026-09-11：实现审查发现管理 cursor 未绑定筛选条件，并且 official Component 没有 owner 时无法写合法发布事件；
   仓库通过筛选绑定 cursor 与 v21 official Version 发布者约束补齐，部署和完整验收统一后置。
+- 2026-09-16：关闭 WATCH-CLEAN-01～05。activity lock SQL 归入中性文件；strict/display locale 使用共享无业务依赖包；
+  sequence 明确保留为审计和删除统一边界，但不参与 read-time Feed；v24 共享投影由目录/详情/Watch 跨入口契约测试约束。

@@ -18,14 +18,13 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import appConfig from '../app/appConfig';
 import { resolvedLocale, useAppTranslation, useDynamicTranslation, type TranslationKey } from '../i18n';
 import { formatNumber } from '../i18n/formatters';
 import {
   deleteComponentGroup,
   listComponentGroups,
-  listComponentPublicFeed,
   listComponentStars,
   listComponentVersions,
   moveComponentGroup,
@@ -43,7 +42,6 @@ import {
   ComponentGroupSidebar,
   GroupComponentMembershipDialog,
 } from './ComponentGroupControls';
-import { ComponentPublicFeedCard } from './ComponentPublicFeedCard';
 import {
   buildLibraryItems,
   ComponentLogicalSize,
@@ -57,38 +55,26 @@ import {
   VersionDropdown,
   type LibraryFilter,
 } from './ComponentRepoPresenters';
+import { ComponentStarButton } from './ComponentStarButton';
 import { ComponentUploadDialog } from './ComponentUploadDialog';
-import { ComponentWatchFeedPanel } from './ComponentWatchFeedPanel';
-import {
-  appendPublicFeedItems,
-  projectPublicFeedItems,
-  type PublicFeedComponentResponse,
-} from './componentPublicFeed';
 
 type ComponentRepoListState = {
   status: 'loading' | 'ready' | 'error';
-  components: PublicFeedComponentResponse[];
+  components: ComponentResponse[];
   error: string | null;
   total: number;
   page: number;
   totalPages: number;
   statusCounts: Record<string, number>;
-  relationshipTotal: number;
-  nextCursor: string | null;
-  loadingMore: boolean;
 };
 
-type LibraryView = 'library' | 'starred' | 'community';
+type LibraryView = 'library' | 'starred';
 
 const componentSearchPageSize = 20;
 const componentSearchDebounceMs = 300;
 
-/** 复用分页列表展示公开广场或个人仓库；广场不加载个人分组，也不提供导入入口。 */
-export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }) {
-  const isPlaza = mode === 'plaza';
-  const [searchParams] = useSearchParams();
-  const plazaTab = isPlaza && searchParams.get('tab') === 'subscriptions' ? 'subscriptions' : 'public';
-  const isPlazaSubscriptions = isPlaza && plazaTab === 'subscriptions';
+/** ComponentRepoPage 只管理当前 actor 的个人仓库、分组、收藏和版本入口。 */
+export function ComponentRepoPage() {
   const navigate = useNavigate();
   const tr = useAppTranslation();
   const trDynamic = useDynamicTranslation();
@@ -101,15 +87,12 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
     page: 1,
     totalPages: 0,
     statusCounts: {},
-    relationshipTotal: 0,
-    nextCursor: null,
-    loadingMore: false,
   });
   const [queries, setQueries] = React.useState<string[]>([]);
   const [queryDraft, setQueryDraft] = React.useState('');
   const [filter, setFilter] = React.useState<LibraryFilter>('all');
   const [category, setCategory] = React.useState('');
-  const [libraryView, setLibraryView] = React.useState<LibraryView>(isPlaza ? 'community' : 'library');
+  const [libraryView, setLibraryView] = React.useState<LibraryView>('library');
   const [page, setPage] = React.useState(1);
   const [refreshRevision, setRefreshRevision] = React.useState(0);
   const [isUploadOpen, setIsUploadOpen] = React.useState(false);
@@ -124,8 +107,6 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
   const selectedGroupIdRef = React.useRef<string | null>(null);
   const groupRequestIdRef = React.useRef(0);
   const searchRequestIdRef = React.useRef(0);
-  const feedSentinelRef = React.useRef<HTMLDivElement | null>(null);
-  const feedLoadingRef = React.useRef(false);
   const [groupEditor, setGroupEditor] = React.useState<{
     mode: 'create' | 'edit';
     group?: ComponentGroupResponse;
@@ -162,9 +143,9 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
   }, []);
 
   const refreshLibrary = React.useCallback(() => {
-    if (!isPlaza) void loadLibrary();
+    void loadLibrary();
     setRefreshRevision((current) => current + 1);
-  }, [isPlaza, loadLibrary]);
+  }, [loadLibrary]);
 
   const selectGroup = React.useCallback((groupId: string) => {
     selectedGroupIdRef.current = groupId;
@@ -174,26 +155,21 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
 
   React.useEffect(() => {
     // 重新请求可确保已进入错误态的结构化错误随当前语言重新渲染，避免把切换前的译文固化在页面中。
-    if (!isPlaza) void loadLibrary();
+    void loadLibrary();
     return () => {
       groupRequestIdRef.current += 1;
       searchRequestIdRef.current += 1;
     };
-  }, [contentLocale, isPlaza, loadLibrary]);
+  }, [contentLocale, loadLibrary]);
 
   React.useEffect(() => {
-    if (isPlazaSubscriptions) return undefined;
     if (libraryView === 'library' && !selectedGroupId) return undefined;
     const requestId = ++searchRequestIdRef.current;
     const timeoutId = window.setTimeout(() => {
-      feedLoadingRef.current = false;
       setState((current) => ({
         ...current,
         status: 'loading',
-        components: libraryView === 'community' ? [] : current.components,
         error: null,
-        nextCursor: libraryView === 'community' ? null : current.nextCursor,
-        loadingMore: false,
       }));
       const request = libraryView === 'starred'
         ? listComponentStars({
@@ -206,25 +182,12 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
           ...result,
           statusCounts: { active: result.total },
         }))
-        : libraryView === 'community'
-          ? listComponentPublicFeed({
-            limit: componentSearchPageSize,
-            query: queries.join(' '),
-          }).then((result) => ({
-            items: projectPublicFeedItems(result.items),
-            total: result.items.length,
-            page: 1,
-            totalPages: 0,
-            statusCounts: { active: result.items.length, draft: 0 },
-            relationshipTotal: 0,
-            nextCursor: result.nextCursor,
-          }))
-          : searchComponentGroupComponents(selectedGroupId!, {
+        : searchComponentGroupComponents(selectedGroupId!, {
           queries,
           statuses: statusesForFilter(filter),
           page,
           pageSize: componentSearchPageSize,
-          }).then((result) => ({ ...result, relationshipTotal: 0 }));
+          });
       void request
         .then((result) => {
           if (requestId !== searchRequestIdRef.current) return;
@@ -236,9 +199,6 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
             page: result.page,
             totalPages: result.totalPages,
             statusCounts: result.statusCounts,
-            relationshipTotal: result.relationshipTotal,
-            nextCursor: 'nextCursor' in result ? result.nextCursor : null,
-            loadingMore: false,
           });
         })
         .catch((error: Error) => {
@@ -254,61 +214,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
       window.clearTimeout(timeoutId);
       searchRequestIdRef.current += 1;
     };
-  }, [category, contentLocale, filter, isPlazaSubscriptions, libraryView, page, queries, refreshRevision, selectedGroupId]);
-
-  // 广场使用事件游标增量追加；请求完成前保持单飞，搜索或刷新会使旧请求 ID 失效。
-  const loadMoreCommunity = React.useCallback(async () => {
-    if (libraryView !== 'community' || !state.nextCursor || feedLoadingRef.current || state.status !== 'ready') return;
-    const requestId = searchRequestIdRef.current;
-    const cursor = state.nextCursor;
-    feedLoadingRef.current = true;
-    setState((current) => ({ ...current, loadingMore: true }));
-    try {
-      const result = await listComponentPublicFeed({
-        limit: componentSearchPageSize,
-        cursor,
-        query: queries.join(' '),
-      });
-      if (requestId !== searchRequestIdRef.current) {
-        feedLoadingRef.current = false;
-        return;
-      }
-      feedLoadingRef.current = false;
-      setState((current) => {
-        if (current.nextCursor !== cursor) return current;
-        const components = appendPublicFeedItems(current.components, result.items);
-        return {
-          ...current,
-          components,
-          total: components.length,
-          statusCounts: { active: components.length, draft: 0 },
-          nextCursor: result.nextCursor,
-          loadingMore: false,
-        };
-      });
-    } catch (error) {
-      if (requestId !== searchRequestIdRef.current) {
-        feedLoadingRef.current = false;
-        return;
-      }
-      feedLoadingRef.current = false;
-      setState((current) => ({
-        ...current,
-        loadingMore: false,
-        error: error instanceof Error ? error.message : appConfig.texts.loadFailed,
-      }));
-    }
-  }, [libraryView, queries, state.nextCursor, state.status]);
-
-  React.useEffect(() => {
-    const target = feedSentinelRef.current;
-    if (libraryView !== 'community' || !target || !state.nextCursor || typeof IntersectionObserver === 'undefined') return undefined;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) void loadMoreCommunity();
-    }, { rootMargin: '240px 0px' });
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, [libraryView, loadMoreCommunity, state.nextCursor]);
+  }, [category, contentLocale, filter, libraryView, page, queries, refreshRevision, selectedGroupId]);
 
   const items = React.useMemo(
     () => buildLibraryItems(state.components),
@@ -347,9 +253,6 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
         } : item)
         .filter((item) => libraryView !== 'starred' || item.starredByActor),
       total: libraryView === 'starred' && !nextStarred ? Math.max(0, current.total - 1) : current.total,
-      relationshipTotal: libraryView === 'starred' && !nextStarred
-        ? Math.max(0, current.relationshipTotal - 1)
-        : current.relationshipTotal,
     }));
     try {
       if (nextStarred) await starComponent(component.id);
@@ -357,7 +260,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
       setActionNotice(tr(nextStarred ? 'componentRepo:componentStarred' : 'componentRepo:componentUnstarred'));
       if (shouldMoveToPreviousPage) setPage((current) => Math.max(1, current - 1));
       setRefreshRevision((current) => current + 1);
-      if (!isPlaza) void loadLibrary();
+      void loadLibrary();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : appConfig.texts.loadFailed);
       setRefreshRevision((current) => current + 1);
@@ -415,11 +318,11 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
         <div className="component-library-heading">
           <span className="component-library-heading-icon"><Boxes aria-hidden="true" /></span>
           <div>
-            <h1>{tr(isPlaza ? 'app:navigation.modelPlaza' : 'app:navigation.myModels')}</h1>
-            <p>{tr(isPlaza ? 'app:navigation.modelPlazaDescription' : 'app:navigation.myModelsDescription')}</p>
+            <h1>{tr('app:navigation.myModels')}</h1>
+            <p>{tr('app:navigation.myModelsDescription')}</p>
           </div>
         </div>
-        {!isPlaza ? <nav aria-label={tr('componentRepo:componentLibrarySections')} className="component-library-tabs">
+        <nav aria-label={tr('componentRepo:componentLibrarySections')} className="component-library-tabs">
           <button
             aria-pressed={libraryView === 'library'}
             className={`component-library-tab ${libraryView === 'library' ? 'component-library-tab-active' : ''}`}
@@ -451,53 +354,29 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
             <Bell aria-hidden="true" />
             {tr('componentRepo:mySubscriptions')}
           </Link>
-        </nav> : <nav aria-label={tr('componentRepo:plazaFeedTabs')} className="component-library-tabs">
-          <Link
-            aria-current={plazaTab === 'public' ? 'page' : undefined}
-            className={`component-library-tab ${plazaTab === 'public' ? 'component-library-tab-active' : ''}`}
-            to={routeFor('modelPlaza')}
-          >
-            <Boxes aria-hidden="true" />
-            {tr('componentRepo:publicFeedTab')}
-          </Link>
-          <Link
-            aria-current={plazaTab === 'subscriptions' ? 'page' : undefined}
-            className={`component-library-tab ${plazaTab === 'subscriptions' ? 'component-library-tab-active' : ''}`}
-            to={`${routeFor('modelPlaza')}?tab=subscriptions`}
-          >
-            <Bell aria-hidden="true" />
-            {tr('componentRepo:personalSubscriptionsTab')}
-          </Link>
-        </nav>}
+        </nav>
       </header>
 
-      {isPlazaSubscriptions ? <ComponentWatchFeedPanel /> : <>
-      {!isPlaza ? <section className="component-library-summary" aria-label={tr('componentRepo:componentStatusOverview')}>
+      <section className="component-library-summary" aria-label={tr('componentRepo:componentStatusOverview')}>
         <SummaryCard icon={<Boxes />} label={tr('componentRepo:allComponents')} tone="blue" value={stats.total} />
         <SummaryCard icon={<Layers3 />} label={tr('componentRepo:draft')} tone="purple" value={stats.draft} />
         <SummaryCard icon={<PackageCheck />} label={tr('componentRepo:published')} tone="green" value={stats.published} />
-      </section> : null}
+      </section>
 
       <section className="component-library-panel">
         <header className="component-library-panel-header">
           <div>
             <div className="component-library-title-row">
-              <h2>{libraryView === 'starred'
-                ? tr('componentRepo:myStarredComponents')
-                : libraryView === 'community'
-                  ? tr('componentRepo:communityFeed')
-                  : selectedGroupName}</h2>
-              {libraryView === 'community' ? null : <span>{stats.total}</span>}
+              <h2>{libraryView === 'starred' ? tr('componentRepo:myStarredComponents') : selectedGroupName}</h2>
+              <span>{stats.total}</span>
             </div>
             <p>{tr(libraryView === 'starred'
               ? 'componentRepo:starredComponentsDescription'
-              : libraryView === 'community'
-                ? 'componentRepo:communityLibraryDescription'
               : selectedGroup?.groupType === 'custom'
                 ? 'componentRepo:customGroupDescription'
                 : 'componentRepo:rootGroupDescription')}</p>
           </div>
-          {!isPlaza ? <div className="component-library-panel-actions">
+          <div className="component-library-panel-actions">
             <button onClick={() => navigate(routeFor('componentRepoImportHistory'))} type="button">
               <FileClock aria-hidden="true" />
               {tr('componentRepo:importHistory')}
@@ -506,7 +385,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
               <Upload aria-hidden="true" />
               {tr('componentRepo:uploadComponent')}
             </button>
-          </div> : null}
+          </div>
         </header>
 
         <div className={`component-library-workspace ${libraryView !== 'library' ? 'component-library-workspace-starred' : ''}`}>
@@ -528,7 +407,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
               event.preventDefault();
               const nextQuery = queryDraft.trim();
               if (!nextQuery) return;
-              // 个人分组支持多个 AND 条件；公共 Feed 与收藏 API 是单查询契约，因此新条件替换旧条件。
+              // 个人分组支持多个 AND 条件；收藏 API 是单查询契约，因此新条件替换旧条件。
               setQueries((current) => libraryView !== 'library'
                 ? [nextQuery]
                 : current.some(
@@ -543,9 +422,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
               <input
                 aria-label={tr('componentRepo:searchComponents')}
                 onChange={(event) => setQueryDraft(event.target.value)}
-                placeholder={tr(libraryView === 'community'
-                  ? 'componentRepo:searchComponentNameOrId'
-                  : 'componentRepo:searchComponentNameIdOrSize')}
+                placeholder={tr('componentRepo:searchComponentNameIdOrSize')}
                 value={queryDraft}
               />
             </label>
@@ -611,19 +488,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
         {actionError ? <div className="component-library-alert"><AlertCircle />{actionError}</div> : null}
         {actionNotice ? <div className="component-library-notice"><CheckCircle2 />{actionNotice}</div> : null}
 
-        {libraryView === 'community' ? (
-          <div className="component-public-feed" aria-label={tr('componentRepo:communityFeed')} role="feed">
-            {state.components.map((item) => (
-              <ComponentPublicFeedCard
-                detailPath={routeFor('componentRepoDetail').replace(':componentId', encodeURIComponent(item.id))}
-                item={item}
-                key={item.feedEventId}
-                onToggleStar={(component) => void toggleStar(component)}
-                starPending={starMutations.has(item.id)}
-              />
-            ))}
-          </div>
-        ) : <div className="component-library-table" role="table" aria-label={tr('componentRepo:myComponentList')}>
+        <div className="component-library-table" role="table" aria-label={tr('componentRepo:myComponentList')}>
           <div className="component-library-table-head" role="row">
             <span role="columnheader">{tr('componentRepo:component')}</span>
             <span role="columnheader">{tr('componentRepo:occupiedSize')}</span>
@@ -650,16 +515,14 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
                   <Link to={routeFor('componentRepoDetail').replace(':componentId', encodeURIComponent(item.id))}>
                     {tr('componentRepo:details')}<ChevronRight aria-hidden="true" />
                   </Link>
-                  {!item.data.ownedByActor ? <button
-                    aria-pressed={item.data.starredByActor}
+                  {!item.data.ownedByActor ? <ComponentStarButton
                     disabled={starMutations.has(item.id)}
                     onClick={() => void toggleStar(item.data)}
-                    title={tr(item.data.starredByActor ? 'componentRepo:unstarComponent' : 'componentRepo:starComponent')}
-                    type="button"
+                    starred={item.data.starredByActor}
                   >
                     {starMutations.has(item.id) ? <LoaderCircle className="component-library-spin" /> : <Star aria-hidden="true" fill={item.data.starredByActor ? 'currentColor' : 'none'} />}
                     {formatNumber(item.data.starCount)}
-                  </button> : <span className="component-library-star-count" title={tr('componentRepo:starCount')}>
+                  </ComponentStarButton> : <span className="component-library-star-count" title={tr('componentRepo:starCount')}>
                     <Star aria-hidden="true" />{formatNumber(item.data.starCount)}
                   </span>}
                   {item.data.ownedByActor || item.data.starredByActor || (libraryView === 'library' && selectedGroup?.groupType === 'custom') ? <button onClick={() => setMembershipComponent(item.data)} type="button">
@@ -687,7 +550,7 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
               </div>
             </article>
           ))}
-        </div>}
+        </div>
 
         {state.status === 'loading' && items.length === 0 ? (
           <div className="component-library-empty"><LoaderCircle className="component-library-spin" /><strong>{tr('componentRepo:loadingComponents')}</strong></div>
@@ -698,40 +561,21 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
             <strong>{tr(libraryView === 'starred'
               ? queries.length > 0 || category.trim() !== ''
                 ? 'componentRepo:noMatchingComponents'
-                : state.relationshipTotal > 0
-                  ? 'componentRepo:starredComponentsUnavailable'
-                  : 'componentRepo:noStarredComponents'
+                : 'componentRepo:noStarredComponents'
               : stats.total === 0
-                ? libraryView === 'community' && queries.length > 0
-                  ? 'componentRepo:noMatchingComponents'
-                  : libraryView === 'community'
-                    ? 'componentRepo:noCommunityUpdates'
-                    : 'componentRepo:noComponentsUploaded'
+                ? 'componentRepo:noComponentsUploaded'
                 : 'componentRepo:noMatchingComponents')}</strong>
             <p>{tr(libraryView === 'starred'
               ? queries.length > 0 || category.trim() !== ''
                 ? 'componentRepo:tryChangingStarFilters'
-                : state.relationshipTotal > 0
-                  ? 'componentRepo:starredComponentsUnavailableDescription'
-                  : 'componentRepo:browseComponentsToStar'
+                : 'componentRepo:browseComponentsToStar'
               : stats.total === 0
-                ? libraryView === 'community' && queries.length > 0
-                  ? 'componentRepo:tryChangingTheSearchTermOrStatusFilter'
-                  : libraryView === 'community'
-                    ? 'componentRepo:noCommunityUpdatesDescription'
-                    : 'componentRepo:uploadYourFirstComponentToStartBuildingYourLibrary'
+                ? 'componentRepo:uploadYourFirstComponentToStartBuildingYourLibrary'
                 : 'componentRepo:tryChangingTheSearchTermOrStatusFilter')}</p>
             {libraryView === 'library' && stats.total === 0 ? <button onClick={() => setIsUploadOpen(true)} type="button">{tr('componentRepo:uploadComponent')}</button> : null}
           </div>
         ) : null}
-        {libraryView === 'community' && state.nextCursor ? (
-          <div className="component-library-pagination" ref={feedSentinelRef}>
-            <button disabled={state.loadingMore} onClick={() => void loadMoreCommunity()} type="button">
-              {tr(state.loadingMore ? 'componentRepo:loadingMore' : 'componentRepo:loadMore')}
-            </button>
-          </div>
-        ) : null}
-        {libraryView !== 'community' && state.totalPages > 1 ? (
+        {state.totalPages > 1 ? (
           <nav aria-label={tr('componentRepo:componentSearchPagination')} className="component-library-pagination">
             <button disabled={state.status === 'loading' || state.page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))} type="button">
               {tr('componentRepo:previousPage')}
@@ -791,7 +635,6 @@ export function ComponentRepoPage({ mode = 'mine' }: { mode?: 'mine' | 'plaza' }
           rootGroup={groupTree.root}
         />
       ) : null}
-      </>}
     </section>
   );
 }

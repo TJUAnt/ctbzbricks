@@ -1,7 +1,7 @@
 # Component Repo Go API
 
 > 状态：Current implementation contract；目标漂移均显式标注为尚未实现
-> 更新日期：2026-09-12
+> 更新日期：2026-09-15
 > 范围：`backend-go` 当前注册的认证与 Component Repo HTTP API；不包含旧 FastAPI 路由
 > 长期原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)
 > 任务协议：[go_task_protocol.md](./go_task_protocol.md)
@@ -70,8 +70,8 @@ panic recovery。
 
 - 通用分页参数为 `page`、`pageSize`，默认 `1/20`，`pageSize` 最大为 `100`。
 - Feed 接口使用 `limit/cursor`，`limit` 默认 20、最大 100；cursor 是服务端不透明 keyset 边界，调用方不得解析或改写。
-- 展示 locale 规范化为 `zh-CN` 或 `en-US`；未提供或非法的只读展示 locale 当前回落到
-  `zh-CN`。用户内容写入接口要求有效的 `contentLocale`。
+- 展示 locale 通过无业务依赖的 `internal/localeutil.Display` 规范化为 `zh-CN` 或 `en-US`；未提供或非法的只读展示 locale 当前回落到
+  `zh-CN`。用户内容写入接口使用同包的严格 `Normalize`，要求有效的 `contentLocale`，不会静默保存 fallback。
 - 异步任务创建时冻结 locale 和 IANA timezone；Worker 不读取浏览器后续语言状态。
 
 ### 1.5 异步接口通用流程
@@ -224,7 +224,7 @@ go run ./cmd/component-diff --before base-document.json --after head-document.js
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
-| `GET /api/v1/component-stars` | Query：`page/pageSize/locale/query/category/sort`；`sort` 只允许 `starred_at_desc`；`200 {items,total,page,pageSize,totalPages,relationshipTotal}` | 读取当前 actor 的个人收藏。 | 先按 `actor_id` 物化当前用户的权威 Star 候选，再按候选索引探测 Component 与非 Draft Version；按 `starredAt DESC,componentId` 稳定排序。`query` 匹配展示名称/Component ID，完整 `axb/axbxc` 复用 Group 的轴无关 logical-size 开区间规则，`category` 精确匹配。尺寸候选直接读取 `components.current_logical_size_a/b/c`：该投影由发布事务和当前 Version Preview 完成事务维护，查询不再逐关系读取 Version 并执行 `LEAST/GREATEST`。只投影当前 `active` 且存在非 draft Version 的 Component；Component 删除提交后结果立即隐藏，持久 Worker 随后物理删除 Star。清理完成前 `relationshipTotal` 可能短暂包含已隐藏的待清理关系；`total` 始终是当前过滤后的可见数。计数在一条 SQL 中返回两个值；列表先分页再一次聚合页内 `starCount`，不公开收藏者列表。 |
+| `GET /api/v1/component-stars` | Query：`page/pageSize/locale/query/category/sort`；`sort` 只允许 `starred_at_desc`；`200 {items,total,page,pageSize,totalPages}` | 读取当前 actor 的个人收藏。 | 先按 `actor_id` 物化当前用户的权威 Star 候选，再按候选索引探测 Component 与非 Draft Version；按 `starredAt DESC,componentId` 稳定排序。`query` 匹配展示名称/Component ID，完整 `axb/axbxc` 复用 Group 的轴无关 logical-size 开区间规则，`category` 精确匹配。尺寸候选直接读取 `components.current_logical_size_a/b/c`：该投影由发布事务和当前 Version Preview 完成事务维护，查询不再逐关系读取 Version 并执行 `LEAST/GREATEST`。只投影当前 `active` 且存在非 draft Version 的 Component；Component 删除提交后结果立即隐藏，持久 Worker 随后物理删除 Star，内部残留关系数不进入公共响应。唯一一份筛选 SQL 在分页前用窗口函数返回 exact `total`；Service 使用 `REPEATABLE READ READ ONLY` 快照，越界空页在同一快照内复用同一查询探测第一页总数。页面固定后按 `component_id` 索引聚合页内 `starCount`，不公开收藏者列表。 |
 | `PUT /api/v1/components/:componentId/star` | `200 {componentId,starredAt}` | 收藏可见的非本人 Component。 | 使用轻量目标查询读取 Component 删除/可见性、owner、状态、非 draft Version 存在性和已有关系；不读取完整详情或收藏总数。首次创建要求目标未删除、非本人、`active` 且存在非 draft Version；已有关系直接返回原 `starredAt` 并跳过写入，并发首次收藏仍由 `(actor_id,component_id)` 唯一键收敛。创建事务取得 Component activity 共享锁，删除边界提交后不能再新增或恢复该关系；不产生 Watch 通知。 |
 | `DELETE /api/v1/components/:componentId/star` | `204` | 取消收藏。 | actor-scoped 删除 Star；Component 后续不可见或关系不存在时也按成功处理。 |
 
@@ -242,7 +242,7 @@ Watch 与 Star 使用独立表、API 和产品语义。WATCH-1 保存订阅偏�
 | `PUT /api/v1/components/:componentId/watch` | Body：`{level:"releases_only"}`；`200 {componentId,watching,level,watchedAt}` | 显式订阅公开非本人 Component 的新版本更新。 | serializable transaction 使用轻量目标投影检查未删除、非本人、`active` 和存在非 draft Version；存在 active period 时重复 PUT 直接返回且不修改开始边界，关闭后重新 Watch 会向 `component_watch_periods` 追加新 period。并发创建由 active partial unique 收敛，只保存偏好，不创建 Star、事件或通知。 |
 | `DELETE /api/v1/components/:componentId/watch` | `204` | 取消当前 actor 的更新订阅。 | actor-scoped 单条 UPDATE 使用共享数据库 sequence 分配 `ended_seq`，并写 `unwatched_at/ended_reason=user_unwatched`；只允许关闭仍处于 active Component 生命周期的当前 period 一次。目标已不可见或关系不存在时仍幂等成功，但不会抢写删除事务已冻结的生命周期边界；不删除或重新打开历史 period，不改变 Star、Group、Fork 或资源权限。 |
 | `GET /api/v1/component-watches` | Query：`locale/limit/cursor/query/category`；`query` 最长 200、`category` 最长 128；`200 {items,nextCursor}` | 读取 actor 当前仍公开可见的 active Watch。 | 从 `component_watch_periods` active-time 部分索引驱动，以 `watched_at DESC,component_id DESC` 做 row-value keyset；名称/ID leading-wildcard 搜索及 category 精确匹配只运行在当前 actor 的有界 active 候选集。搜索启用时才探测候选 reviewed translation，筛选后先固定 `limit+1` 页面，再读取展示翻译和 current published Version；不返回 exact count、watcher 身份或 watchCount。cursor 绑定规范化后的 `locale/query/category`，任一条件变化均返回 `request.validation_failed`。 |
-| `GET /api/v1/component-watch-feed` | Query：`locale/limit/cursor/since`；`since` 为 RFC 3339；默认最近 30 天；`200 {items,nextCursor,windowStart}` | 从当前订阅动态读取发布更新，当前前端入口为组件广场“个人订阅”页签。 | 先以 actor active partial index 限定最多约 1,000 个当前订阅，再按 `(component_id,occurred_at DESC,id DESC)` 读取 `since` 后的发布事件；按 `occurred_at DESC,event_id DESC` keyset 分页，不返回 exact count。首次响应把窗口起点写入 cursor，后续页沿用该起点；发布早于 Watch 但位于窗口内时可以出现，Unwatch 后下一次读取立即消失。页面固定后才读取 Version 和 Component 展示字段；Release Note 保持作者原文与 locale，official Component 名称只选 reviewed translation。 |
+| `GET /api/v1/component-watch-feed` | Query：`locale/limit/cursor/since`；`since` 为 RFC 3339；默认最近 30 天；`200 {items,nextCursor,windowStart}`。item 保留 `eventType`，并与公共 Feed 共用 `publisher/render/component` 事件卡片投影。 | 从当前订阅动态读取发布更新，当前前端入口为组件广场“个人订阅”页签。 | 先以 actor active partial index 限定最多约 1,000 个当前订阅，再按 `(component_id,occurred_at DESC,id DESC)` 读取 `since` 后且已有 `ready/fallback` Feed entry 的发布事件；pending 本次不返回。按 `occurred_at DESC,event_id DESC` keyset 分页，不返回 exact count。首次响应把窗口起点写入 cursor，后续页沿用该起点；发布早于 Watch 但位于窗口内时可以出现，Unwatch 后下一次读取立即消失。页面固定后才读取 Version、locale-aware Component、页内 Star 和 Artifact 元数据；图片 URL 按页批量签发，失败时降级为无图。Release Note 保持作者原文与 locale，official Component 名称、描述和 tags 只选 reviewed translation。 |
 
 当前 Web 契约采用数据库操作顺序的 last-write-wins：active period 存在时 PUT 是重复 Watch；没有 active period
 时 PUT 是首次 Watch 或 Rewatch。API 尚未接收 `mutationId`，因此跨越一次 DELETE 后才抵达的旧 PUT 会按新的
@@ -251,7 +251,8 @@ Rewatch 处理；引入离线队列或自动网络重放前必须先冻结强意
 Watch/Unwatch transaction 使用 Component UUID 稳定派生 key 的 PostgreSQL shared advisory xact lock。共享锁
 不串行化同一 Component 的多个 watcher；Publish transaction 复用同一 key 获取 exclusive advisory xact lock，
 并通过领域事件 INSERT 在锁内分配 `event_seq`。Feed 资格不再使用 started/ended sequence：该顺序域只保留
-关系审计和生命周期一致性意义，发布路径始终不枚举 watcher。
+关系审计、发布审计和生命周期一致性意义，发布路径始终不枚举 watcher。shared/exclusive 查询集中定义在
+`db/queries/component_activity.sql`；Watch、Star、Publish 与 Delete 通过同一 sqlc 接口使用，避免文件归属暗示错误。
 
 Component 删除复用同一 exclusive activity lock。删除事务只做有界的状态写入、公共结束边界分配和持久任务
 入队，不在 HTTP Handler 中遍历关系。清理任务将 active period 写为同一 `ended_seq/unwatched_at`，并记录稳定

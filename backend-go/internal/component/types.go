@@ -89,14 +89,13 @@ type StarListRequest struct {
 	Sort     string
 }
 
-// StarPage 返回稳定分页的个人收藏；RelationshipTotal 只诊断删除清理完成前短暂存在的隐藏关系。
+// StarPage 返回稳定分页的可见个人收藏；删除清理中的内部残留关系不进入公共契约。
 type StarPage struct {
-	Items             []StarredComponent `json:"items"`
-	Page              int                `json:"page"`
-	PageSize          int                `json:"pageSize"`
-	Total             int64              `json:"total"`
-	TotalPages        int                `json:"totalPages"`
-	RelationshipTotal int64              `json:"relationshipTotal"`
+	Items      []StarredComponent `json:"items"`
+	Page       int                `json:"page"`
+	PageSize   int                `json:"pageSize"`
+	Total      int64              `json:"total"`
+	TotalPages int                `json:"totalPages"`
 }
 
 // Component 是面向当前 actor 的展示投影；Star 与 Watch 都不授予资源权限。

@@ -6,6 +6,7 @@ import { useAppTranslation } from '../i18n';
 import { formatDateTime, formatNumber } from '../i18n/formatters';
 import { type ComponentPublicFeedItemResponse, type ComponentResponse } from './componentRepoApi';
 import type { PublicFeedComponentResponse } from './componentPublicFeed';
+import { ComponentStarButton } from './ComponentStarButton';
 
 type ComponentPublicFeedCardProps = {
   item: PublicFeedComponentResponse;
@@ -64,18 +65,16 @@ export function ComponentPublicFeedCard({
 
       <footer className="component-public-feed-actions">
         {!item.ownedByActor ? (
-          <button
-            aria-label={tr(item.starredByActor ? 'componentRepo:unstarComponent' : 'componentRepo:starComponent')}
-            aria-pressed={item.starredByActor}
+          <ComponentStarButton
             disabled={starPending}
             onClick={() => onToggleStar(item)}
-            type="button"
+            starred={item.starredByActor}
           >
             {starPending ? <LoaderCircle className="component-library-spin" /> : (
               <Star aria-hidden="true" fill={item.starredByActor ? 'currentColor' : 'none'} />
             )}
             {formatNumber(item.starCount)}
-          </button>
+          </ComponentStarButton>
         ) : (
           <span title={tr('componentRepo:starCount')}><Star aria-hidden="true" />{formatNumber(item.starCount)}</span>
         )}

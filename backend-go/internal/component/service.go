@@ -17,6 +17,7 @@ import (
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentactivity"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentdiff"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/feedrender"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/localeutil"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/observability"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
@@ -85,7 +86,7 @@ func (s *Service) CreateComponent(ctx context.Context, actor pgtype.UUID, input 
 	if strings.TrimSpace(input.Name) == "" || len(input.Name) > 255 {
 		return Component{}, validationError("name")
 	}
-	locale, ok := NormalizeLocale(input.ContentLocale)
+	locale, ok := localeutil.Normalize(input.ContentLocale)
 	if !ok {
 		return Component{}, validationError("contentLocale")
 	}
@@ -117,7 +118,7 @@ func (s *Service) GetComponent(ctx context.Context, actor pgtype.UUID, component
 	if err != nil {
 		return Component{}, err
 	}
-	locale := displayLocale(localeInput)
+	locale := localeutil.Display(localeInput)
 	row, err := s.q.GetVisibleComponent(ctx, db.GetVisibleComponentParams{
 		Locale: locale, ActorID: actor, ComponentID: id,
 	})
@@ -140,7 +141,7 @@ func (s *Service) ListComponents(ctx context.Context, actor pgtype.UUID, request
 	if limit < 1 || limit > maxPageSize {
 		return ComponentPage{}, validationError("limit")
 	}
-	locale := displayLocale(request.Locale)
+	locale := localeutil.Display(request.Locale)
 	query := strings.TrimSpace(request.Query)
 	category := strings.TrimSpace(request.Category)
 	status := strings.TrimSpace(request.Status)
@@ -296,7 +297,7 @@ func encodePublicFeedCursor(availableAt time.Time, eventID pgtype.UUID, query st
 	return base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
-// ListStars 返回 actor 当前仍公开可见的个人收藏；归档/删除提交后立即隐藏，持久任务随后删除关系。
+// ListStars 返回 actor 当前仍公开可见的个人收藏；分页行与精确总数固定在同一个只读快照中。
 func (s *Service) ListStars(ctx context.Context, actor pgtype.UUID, request StarListRequest) (StarPage, error) {
 	request.PageRequest = normalizePage(request.PageRequest)
 	if len(request.Query) > 200 || len(request.Category) > 128 {
@@ -313,20 +314,12 @@ func (s *Service) ListStars(ctx context.Context, actor pgtype.UUID, request Star
 		searchQuery = ""
 	}
 	params := db.ListStarredComponentsParams{
-		Locale: displayLocale(request.Locale), ActorID: actor,
+		Locale: localeutil.Display(request.Locale), ActorID: actor,
 		CategoryFilter: strings.TrimSpace(request.Category), SearchQuery: searchQuery,
 		SizeDimensionCount: sizeFilter.DimensionCount, SizeA: sizeFilter.A, SizeB: sizeFilter.B, SizeC: sizeFilter.C,
 		PageOffset: int32((request.Page - 1) * request.PageSize), PageSize: int32(request.PageSize),
 	}
-	counts, err := s.q.CountStarredComponents(ctx, db.CountStarredComponentsParams{
-		Locale: params.Locale, ActorID: actor,
-		CategoryFilter: params.CategoryFilter, SearchQuery: params.SearchQuery,
-		SizeDimensionCount: params.SizeDimensionCount, SizeA: params.SizeA, SizeB: params.SizeB, SizeC: params.SizeC,
-	})
-	if err != nil {
-		return StarPage{}, err
-	}
-	rows, err := s.q.ListStarredComponents(ctx, params)
+	rows, total, err := s.listStarRowsAtSnapshot(ctx, params)
 	if err != nil {
 		return StarPage{}, err
 	}
@@ -335,13 +328,57 @@ func (s *Service) ListStars(ctx context.Context, actor pgtype.UUID, request Star
 		items = append(items, starredComponentFromDB(row))
 	}
 	totalPages := 0
-	if counts.Total > 0 {
-		totalPages = int((counts.Total + int64(request.PageSize) - 1) / int64(request.PageSize))
+	if total > 0 {
+		totalPages = int((total + int64(request.PageSize) - 1) / int64(request.PageSize))
 	}
 	return StarPage{
 		Items: items, Page: request.Page, PageSize: request.PageSize,
-		Total: counts.Total, TotalPages: totalPages, RelationshipTotal: counts.RelationshipTotal,
+		Total: total, TotalPages: totalPages,
 	}, nil
+}
+
+// listStarRowsAtSnapshot 在同一个 REPEATABLE READ 只读事务内读取分页行和窗口总数。
+// 越界空页无法携带窗口值，因此复用完全相同的 SQL 探测第一页；这既避免第二份筛选谓词，也保持同一快照。
+func (s *Service) listStarRowsAtSnapshot(
+	ctx context.Context,
+	params db.ListStarredComponentsParams,
+) ([]db.ListStarredComponentsRow, int64, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		if err != nil {
+			return nil, 0, err
+		}
+		queries := db.New(tx)
+		rows, runErr := queries.ListStarredComponents(ctx, params)
+		total := int64(0)
+		if runErr == nil && len(rows) > 0 {
+			total = rows[0].Total
+		}
+		if runErr == nil && len(rows) == 0 && params.PageOffset > 0 {
+			probe := params
+			probe.PageOffset = 0
+			probe.PageSize = 1
+			var firstPage []db.ListStarredComponentsRow
+			firstPage, runErr = queries.ListStarredComponents(ctx, probe)
+			if runErr == nil && len(firstPage) > 0 {
+				total = firstPage[0].Total
+			}
+		}
+		if runErr != nil {
+			_ = tx.Rollback(ctx)
+			if retryableTransaction(runErr) {
+				continue
+			}
+			return nil, 0, runErr
+		}
+		if err = tx.Commit(ctx); err == nil {
+			return rows, total, nil
+		}
+		if !retryableTransaction(err) {
+			return nil, 0, err
+		}
+	}
+	return nil, 0, apierror.New("request.conflict", http.StatusConflict, nil)
 }
 
 func (s *Service) UpdateComponent(ctx context.Context, actor pgtype.UUID, componentID string, input UpdateComponentInput) (Component, error) {
@@ -362,7 +399,7 @@ func (s *Service) UpdateComponent(ctx context.Context, actor pgtype.UUID, compon
 	locale := ""
 	if input.ContentLocale != nil {
 		var ok bool
-		locale, ok = NormalizeLocale(*input.ContentLocale)
+		locale, ok = localeutil.Normalize(*input.ContentLocale)
 		if !ok {
 			return Component{}, validationError("contentLocale")
 		}
@@ -386,7 +423,7 @@ func (s *Service) UpdateComponent(ctx context.Context, actor pgtype.UUID, compon
 			return Component{}, mapDatabaseError(err, "request.conflict")
 		}
 		row, err := q.GetVisibleComponent(ctx, db.GetVisibleComponentParams{
-			Locale: displayLocale(locale), ActorID: actor, ComponentID: id,
+			Locale: localeutil.Display(locale), ActorID: actor, ComponentID: id,
 		})
 		return componentFromVisible(row), err
 	})
@@ -699,7 +736,7 @@ func (s *Service) UpdateVersion(ctx context.Context, actor pgtype.UUID, versionI
 			return ComponentVersion{}, validationError("releaseNoteLocale")
 		}
 		if releaseNoteLocale != nil {
-			normalized, ok := NormalizeLocale(*releaseNoteLocale)
+			normalized, ok := localeutil.Normalize(*releaseNoteLocale)
 			if !ok {
 				return ComponentVersion{}, validationError("releaseNoteLocale")
 			}
@@ -798,7 +835,7 @@ func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, 
 		statuses = append(statuses, status)
 	}
 	page := normalizePage(input.PageRequest)
-	locale := displayLocale(input.Locale)
+	locale := localeutil.Display(input.Locale)
 	textFilters := make([]string, 0, len(input.Queries))
 	sizeFilters := make([]componentSizeFilter, 0, len(input.Queries))
 	seenQueries := make(map[string]struct{}, len(input.Queries))
@@ -944,7 +981,7 @@ func (s *Service) UpdateGroup(ctx context.Context, actor pgtype.UUID, groupID st
 	locale := ""
 	if input.ContentLocale != nil {
 		var ok bool
-		locale, ok = NormalizeLocale(*input.ContentLocale)
+		locale, ok = localeutil.Normalize(*input.ContentLocale)
 		if !ok {
 			return Group{}, validationError("contentLocale")
 		}
@@ -1092,7 +1129,7 @@ func (s *Service) ListGroupMembers(ctx context.Context, actor pgtype.UUID, group
 	}
 	page = normalizePage(page)
 	rows, err := s.q.ListComponentGroupMembers(ctx, db.ListComponentGroupMembersParams{
-		Locale: displayLocale(localeInput), OwnerID: actor, GroupID: groupUUID,
+		Locale: localeutil.Display(localeInput), OwnerID: actor, GroupID: groupUUID,
 		PageOffset: int32((page.Page - 1) * page.PageSize), PageSize: int32(page.PageSize),
 	})
 	if err != nil {
@@ -1158,17 +1195,9 @@ func (s *Service) Unstar(ctx context.Context, actor pgtype.UUID, componentID str
 	return err
 }
 
+// NormalizeLocale 保留 Component Repo 写入边界的严格 locale 校验入口；规范化规则由无业务依赖的 localeutil 统一维护。
 func NormalizeLocale(input string) (string, bool) {
-	normalized := strings.TrimSpace(strings.ReplaceAll(input, "_", "-"))
-	lower := strings.ToLower(normalized)
-	switch {
-	case lower == "zh" || lower == "zh-cn" || strings.HasPrefix(lower, "zh-hans-"):
-		return "zh-CN", true
-	case lower == "en" || lower == "en-us" || strings.HasPrefix(lower, "en-"):
-		return "en-US", true
-	default:
-		return "", false
-	}
+	return localeutil.Normalize(input)
 }
 
 func withTx[T any](ctx context.Context, pool *pgxpool.Pool, fn func(*db.Queries) (T, error)) (T, error) {
@@ -1225,7 +1254,7 @@ func versionCreateParams(actor, componentID pgtype.UUID, input CreateVersionInpu
 		return db.CreateComponentVersionParams{}, validationError("releaseNoteLocale")
 	}
 	if input.ReleaseNoteLocale != nil {
-		normalized, ok := NormalizeLocale(*input.ReleaseNoteLocale)
+		normalized, ok := localeutil.Normalize(*input.ReleaseNoteLocale)
 		if !ok {
 			return db.CreateComponentVersionParams{}, validationError("releaseNoteLocale")
 		}
@@ -1276,7 +1305,7 @@ func validateGroupContent(nameInput, localeInput string) (string, string, error)
 	if strings.TrimSpace(name) == "" || len(name) > 100 {
 		return "", "", validationError("name")
 	}
-	locale, ok := NormalizeLocale(localeInput)
+	locale, ok := localeutil.Normalize(localeInput)
 	if !ok {
 		return "", "", validationError("contentLocale")
 	}
@@ -1285,14 +1314,6 @@ func validateGroupContent(nameInput, localeInput string) (string, string, error)
 
 func normalizeGroupName(name string) string {
 	return strings.ToLower(strings.Join(strings.Fields(name), " "))
-}
-
-func displayLocale(input string) string {
-	locale, ok := NormalizeLocale(input)
-	if !ok {
-		return "zh-CN"
-	}
-	return locale
 }
 
 func normalizePage(page PageRequest) PageRequest {

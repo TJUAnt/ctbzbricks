@@ -2,6 +2,13 @@
 
 资源版本只追加、不复用。前端资源内容由 SHA-256 锁定，服务端导出版本写入每个正式产物。
 
+## frontend-2026.09.16.1
+
+- Star 按钮复用既有“收藏组件 / 取消收藏组件”双语语义 key 作为列表、详情和公共 Feed 的可访问名称。
+- 删除了与实际删除清理语义冲突的“收藏关系保留并会恢复显示”双语空状态；不可见 Component 的残留关系只在服务端持久清理边界内处理，不作为 UI 状态。
+- 内容哈希：`d6ed665513812b98d8b79e3ba0299790dce0b56e2b89d1726ec48304bb16e293`
+- Component ID、`starredByActor`、`starCount`、`starredAt`、页码和 `sort=starred_at_desc` 继续保持稳定机器值；`relationshipTotal` 已退出公共 API。
+
 ## frontend-2026.09.12.2
 
 - 组件广场新增“公共 / 个人订阅”双页签，为个人订阅 Feed 增加订阅管理入口，并将原页面标题收敛为“管理订阅”。

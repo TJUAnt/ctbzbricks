@@ -67,23 +67,9 @@ export type ComponentWatchPageResponse = {
   nextCursor: string | null;
 };
 
-/** ComponentWatchFeedItemResponse 是当前 active Watch 动态聚合出的单条发布更新投影。 */
-export type ComponentWatchFeedItemResponse = {
-  eventId: string;
+/** ComponentWatchFeedItemResponse 复用公共事件卡片投影，并额外保留 Watch 领域的稳定事件类型。 */
+export type ComponentWatchFeedItemResponse = ComponentPublicFeedItemResponse & {
   eventType: 'component.version.published.v1';
-  occurredAt: string;
-  componentId: string;
-  contentKind: 'official' | 'user';
-  contentLocale: 'zh-CN' | 'en-US';
-  componentName: string;
-  category: string | null;
-  componentVersionId: string;
-  version: string;
-  revision: number;
-  publishedAt: string | null;
-  releaseNote: string | null;
-  releaseNoteLocale: 'zh-CN' | 'en-US' | null;
-  translationMissing: boolean;
 };
 
 /** ComponentWatchFeedPageResponse 使用冻结时间窗口和不透明 keyset cursor 继续读取。 */
@@ -103,7 +89,6 @@ export type ComponentStarPageResponse = {
   page: number;
   pageSize: number;
   totalPages: number;
-  relationshipTotal: number;
 };
 
 export type ComponentPageResponse = {

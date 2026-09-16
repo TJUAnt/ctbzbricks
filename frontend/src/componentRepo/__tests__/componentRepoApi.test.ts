@@ -133,7 +133,7 @@ describe('Component Repo Go API adapter', () => {
         items: [{ id: 'owned-1' }], total: 21, page: 1, pageSize: 20, totalPages: 2, statusCounts: {},
       }))
       .mockResolvedValueOnce(jsonResponse({
-        items: [{ id: 'shared-1' }], total: 1, page: 1, pageSize: 20, totalPages: 1, relationshipTotal: 1,
+        items: [{ id: 'shared-1' }], total: 1, page: 1, pageSize: 20, totalPages: 1,
       }))
       .mockResolvedValueOnce(jsonResponse({
         items: [{ id: 'shared-1' }, { id: 'member-1' }], total: 2, page: 1, pageSize: 20,
@@ -182,7 +182,7 @@ describe('Component Repo Go API adapter', () => {
     vi.stubGlobal('window', {
       location: { origin: String.fromCharCode(104, 116, 116, 112, 58, 47, 47) + 'localhost' },
     });
-    const page = { items: [], total: 0, page: 2, pageSize: 20, totalPages: 0, relationshipTotal: 0 };
+    const page = { items: [], total: 0, page: 2, pageSize: 20, totalPages: 0 };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse(page))
       .mockResolvedValueOnce(jsonResponse({ componentId: 'component-1', starredAt: '2026-08-29T00:00:00Z' }))

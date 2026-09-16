@@ -35,6 +35,7 @@ import {
   type ComponentVersionResponse,
 } from './componentRepoApi';
 import { ComponentVersionActions } from './ComponentVersionActions';
+import { ComponentStarButton } from './ComponentStarButton';
 import { ComponentDiffScene, type ComponentDiffFocus } from './ComponentDiffScene';
 import { ComponentImportHistoryList } from './ComponentImportHistoryPage';
 import {
@@ -272,20 +273,18 @@ export function ComponentDetailPage() {
             {appConfig.texts.componentRepoBackToList}
           </button>
           {canStarComponent && state.component ? (
-            <button
-              aria-pressed={state.component.starredByActor}
+            <ComponentStarButton
               className="component-detail-star-button"
               disabled={starring}
               onClick={() => void toggleStar()}
-              title={tr(state.component.starredByActor ? 'componentRepo:unstarComponent' : 'componentRepo:starComponent')}
-              type="button"
+              starred={state.component.starredByActor}
             >
               {starring
                 ? <LoaderCircle aria-hidden="true" className="component-library-spin" />
                 : <Star aria-hidden="true" fill={state.component.starredByActor ? 'currentColor' : 'none'} />}
               {tr(state.component.starredByActor ? 'componentRepo:starred' : 'componentRepo:star')}
               <span>{state.component.starCount}</span>
-            </button>
+            </ComponentStarButton>
           ) : state.component ? (
             <span className="component-detail-star-count" title={tr('componentRepo:starCount')}>
               <Star aria-hidden="true" />{state.component.starCount}

@@ -11,16 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const acquireSharedComponentActivityLock = `-- name: AcquireSharedComponentActivityLock :exec
-SELECT pg_advisory_xact_lock_shared($1::bigint)
-`
-
-// Watch/Unwatch 使用同一 Component 的共享事务锁；Publish 与 Component 删除使用独占锁冻结各自顺序边界。
-func (q *Queries) AcquireSharedComponentActivityLock(ctx context.Context, lockKey int64) error {
-	_, err := q.db.Exec(ctx, acquireSharedComponentActivityLock, lockKey)
-	return err
-}
-
 const closeActiveComponentWatchPeriod = `-- name: CloseActiveComponentWatchPeriod :execrows
 UPDATE component_repo.component_watch_periods
 SET ended_seq = nextval('component_repo.component_activity_sequence'),
@@ -45,6 +35,7 @@ type CloseActiveComponentWatchPeriodParams struct {
 }
 
 // 用户主动 Unwatch 仅关闭仍处于 active 生命周期的 Component；结束序号与时间在同一条语句中只写一次。
+// started_seq/ended_seq 是不可变关系审计与生命周期顺序，不参与 read-time Feed 成员资格判断。
 func (q *Queries) CloseActiveComponentWatchPeriod(ctx context.Context, arg CloseActiveComponentWatchPeriodParams) (int64, error) {
 	result, err := q.db.Exec(ctx, closeActiveComponentWatchPeriod, arg.ActorID, arg.ComponentID)
 	if err != nil {
@@ -162,7 +153,8 @@ type CreateComponentRelationshipEndBoundaryRow struct {
 	EndedAt  pgtype.Timestamptz
 }
 
-// Component 删除事务只分配一次公共边界并把它冻结进持久任务；回滚产生的 sequence 空洞没有业务含义。
+// Component 删除事务只分配一次公共生命周期边界并把它冻结进持久任务；所有 active Watch 共用该值。
+// sequence 只保证相对顺序并允许回滚空洞，不是 Feed cursor、recipient 或连续业务编号。
 func (q *Queries) CreateComponentRelationshipEndBoundary(ctx context.Context) (CreateComponentRelationshipEndBoundaryRow, error) {
 	row := q.db.QueryRow(ctx, createComponentRelationshipEndBoundary)
 	var i CreateComponentRelationshipEndBoundaryRow
@@ -355,16 +347,22 @@ func (q *Queries) ListActiveComponentWatches(ctx context.Context, arg ListActive
 
 const listCurrentComponentWatchFeed = `-- name: ListCurrentComponentWatchFeed :many
 WITH active_watches AS MATERIALIZED (
-    SELECT watch.component_id
+    SELECT watch.component_id, watch.watch_level, watch.watched_at
     FROM component_repo.component_watch_periods watch
-    WHERE watch.actor_id = $2
+    WHERE watch.actor_id = $1
       AND watch.ended_seq IS NULL
 ), feed_page AS MATERIALIZED (
     SELECT event.id AS event_id,
            event.event_type,
            event.component_id,
            event.component_version_id,
-           event.occurred_at
+           event.actor_id AS publisher_id,
+           event.occurred_at,
+           event.available_at,
+           event.render_status,
+           event.image_artifact_id,
+           watch.watch_level,
+           watch.watched_at
     FROM active_watches watch
     JOIN component_repo.component_catalog_candidates component
       ON component.id = watch.component_id
@@ -373,8 +371,15 @@ WITH active_watches AS MATERIALIZED (
     -- 全局一页不可能包含同一 Component 排名超过 page_size 的事件；先对每个 active Watch
     -- 截断到一页保持结果等价，同时强制历史增长时仍按 Component/time 索引做有界探测。
     JOIN LATERAL (
-        SELECT item.id, item.event_type, item.component_id, item.component_version_id, item.occurred_at
+        SELECT item.id, item.event_type, item.component_id, item.component_version_id, item.actor_id,
+               item.occurred_at, entry.available_at, entry.render_status, entry.image_artifact_id
         FROM component_repo.component_domain_events item
+        JOIN component_repo.component_feed_entries entry
+          ON entry.event_id = item.id
+         AND entry.component_id = item.component_id
+         AND entry.component_version_id = item.component_version_id
+         AND entry.render_status IN ('ready', 'fallback')
+         AND entry.available_at IS NOT NULL
         WHERE item.component_id = watch.component_id
           AND item.occurred_at >= $3::timestamptz
           AND (item.occurred_at, item.id) < (
@@ -390,19 +395,55 @@ WITH active_watches AS MATERIALIZED (
 SELECT page.event_id,
        page.event_type,
        page.occurred_at,
+       page.available_at,
+       CASE
+           WHEN page.render_status = 'ready' AND feed_image.id IS NOT NULL THEN 'ready'
+           ELSE 'fallback'
+       END::text AS render_status,
+       feed_image.id AS image_artifact_id,
+       feed_image.storage_provider AS image_storage_provider,
+       feed_image.storage_bucket AS image_storage_bucket,
+       feed_image.storage_key AS image_storage_key,
+       feed_image.sha256 AS image_sha256,
+       feed_image.file_size AS image_file_size,
        page.component_id,
+       component.owner_id,
        component.content_kind,
        (CASE WHEN translation.id IS NULL THEN component.content_locale ELSE translation.locale END)::text
            AS selected_content_locale,
        (CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END)::text AS selected_name,
+       COALESCE(CASE WHEN translation.id IS NULL THEN component.description ELSE translation.description END, '')::text
+           AS selected_description,
+       (CASE WHEN translation.id IS NULL THEN component.description IS NOT NULL ELSE translation.description IS NOT NULL END)::boolean
+           AS has_description,
+       (CASE WHEN translation.id IS NULL THEN component.tags ELSE translation.tags END)::text[] AS selected_tags,
        component.category,
+       component.status,
+       component.current_version_id,
+       component.logical_width_stud,
+       component.logical_depth_stud,
+       component.logical_height_plate,
+       component.metadata,
+       component.created_at,
+       component.updated_at,
        page.component_version_id,
+       page.publisher_id,
        version.version_label,
        version.revision,
        version.published_at,
        version.release_note,
        version.release_note_locale,
-       (component.content_kind = 'official' AND component.content_locale <> $1
+       false::boolean AS owned_by_actor,
+       EXISTS (
+           SELECT 1
+           FROM component_repo.component_stars actor_star
+           WHERE actor_star.actor_id = $1
+             AND actor_star.component_id = page.component_id
+       ) AS starred_by_actor,
+       page_star_count.star_count,
+       page.watch_level,
+       page.watched_at,
+       (component.content_kind = 'official' AND component.content_locale <> $2
         AND translation.id IS NULL)::boolean AS translation_missing
 FROM feed_page page
 JOIN component_repo.component_catalog_projection component ON component.id = page.component_id
@@ -410,19 +451,31 @@ JOIN component_repo.component_versions version
   ON version.id = page.component_version_id
  AND version.deleted_at IS NULL
 LEFT JOIN LATERAL (
-    SELECT item.id, item.locale, item.name
+    SELECT item.id, item.locale, item.name, item.description, item.tags
     FROM component_repo.component_reviewed_translations item
     WHERE component.content_kind = 'official'
       AND item.component_id = component.id
-      AND item.locale = $1
+      AND item.locale = $2
     LIMIT 1
 ) translation ON true
+JOIN LATERAL (
+    SELECT count(*)::bigint AS star_count
+    FROM component_repo.component_stars aggregate_star
+    WHERE aggregate_star.component_id = page.component_id
+    OFFSET 0
+) page_star_count ON true
+LEFT JOIN component_repo.artifacts feed_image
+  ON feed_image.id = page.image_artifact_id
+ AND feed_image.artifact_type = 'component_feed_image'
+ AND feed_image.source_kind = 'derived'
+ AND feed_image.verification_status = 'verified'
+ AND feed_image.deleted_at IS NULL
 ORDER BY page.occurred_at DESC, page.event_id DESC
 `
 
 type ListCurrentComponentWatchFeedParams struct {
-	Locale           string
 	ActorID          pgtype.UUID
+	Locale           string
 	WindowStart      pgtype.Timestamptz
 	CursorOccurredAt pgtype.Timestamptz
 	CursorEventID    pgtype.UUID
@@ -433,27 +486,54 @@ type ListCurrentComponentWatchFeedRow struct {
 	EventID               pgtype.UUID
 	EventType             string
 	OccurredAt            pgtype.Timestamptz
+	AvailableAt           pgtype.Timestamptz
+	RenderStatus          string
+	ImageArtifactID       pgtype.UUID
+	ImageStorageProvider  *string
+	ImageStorageBucket    *string
+	ImageStorageKey       *string
+	ImageSha256           *string
+	ImageFileSize         *int64
 	ComponentID           pgtype.UUID
+	OwnerID               pgtype.UUID
 	ContentKind           string
 	SelectedContentLocale string
 	SelectedName          string
+	SelectedDescription   string
+	HasDescription        bool
+	SelectedTags          []string
 	Category              *string
+	Status                string
+	CurrentVersionID      pgtype.UUID
+	LogicalWidthStud      pgtype.Numeric
+	LogicalDepthStud      pgtype.Numeric
+	LogicalHeightPlate    pgtype.Numeric
+	Metadata              []byte
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
 	ComponentVersionID    pgtype.UUID
+	PublisherID           pgtype.UUID
 	VersionLabel          string
 	Revision              int32
 	PublishedAt           pgtype.Timestamptz
 	ReleaseNote           *string
 	ReleaseNoteLocale     *string
+	OwnedByActor          bool
+	StarredByActor        bool
+	StarCount             int64
+	WatchLevel            string
+	WatchedAt             pgtype.Timestamptz
 	TranslationMissing    bool
 }
 
 // Feed 成员资格在读取时按当前 active Watch 计算：发布早于 Watch 也可出现，Unwatch 后立即消失。
 // actor-scoped active partial index 先把候选限定为当前规划的最多 1,000 个 Component；页面固定后才读取
-// Component 翻译与 Version 展示字段，closed Watch 历史不参与任何执行节点。
+// Component 翻译、Star 和终态图片投影，closed Watch 历史不参与任何执行节点。
+// 聚合只对已经固定的一页 Component 做索引探测，禁止优化器为少量卡片扫描全部 Star 关系。
 func (q *Queries) ListCurrentComponentWatchFeed(ctx context.Context, arg ListCurrentComponentWatchFeedParams) ([]ListCurrentComponentWatchFeedRow, error) {
 	rows, err := q.db.Query(ctx, listCurrentComponentWatchFeed,
-		arg.Locale,
 		arg.ActorID,
+		arg.Locale,
 		arg.WindowStart,
 		arg.CursorOccurredAt,
 		arg.CursorEventID,
@@ -470,17 +550,43 @@ func (q *Queries) ListCurrentComponentWatchFeed(ctx context.Context, arg ListCur
 			&i.EventID,
 			&i.EventType,
 			&i.OccurredAt,
+			&i.AvailableAt,
+			&i.RenderStatus,
+			&i.ImageArtifactID,
+			&i.ImageStorageProvider,
+			&i.ImageStorageBucket,
+			&i.ImageStorageKey,
+			&i.ImageSha256,
+			&i.ImageFileSize,
 			&i.ComponentID,
+			&i.OwnerID,
 			&i.ContentKind,
 			&i.SelectedContentLocale,
 			&i.SelectedName,
+			&i.SelectedDescription,
+			&i.HasDescription,
+			&i.SelectedTags,
 			&i.Category,
+			&i.Status,
+			&i.CurrentVersionID,
+			&i.LogicalWidthStud,
+			&i.LogicalDepthStud,
+			&i.LogicalHeightPlate,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 			&i.ComponentVersionID,
+			&i.PublisherID,
 			&i.VersionLabel,
 			&i.Revision,
 			&i.PublishedAt,
 			&i.ReleaseNote,
 			&i.ReleaseNoteLocale,
+			&i.OwnedByActor,
+			&i.StarredByActor,
+			&i.StarCount,
+			&i.WatchLevel,
+			&i.WatchedAt,
 			&i.TranslationMissing,
 		); err != nil {
 			return nil, err

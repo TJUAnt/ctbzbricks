@@ -1,6 +1,9 @@
 package componentwatch
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ReleasesOnlyLevel 是 WATCH-1 唯一允许的稳定订阅级别机器值。
 const ReleasesOnlyLevel = "releases_only"
@@ -51,23 +54,80 @@ type ListRequest struct {
 }
 
 // FeedItem 是读取时由当前 active Watch 与不可变发布事件关联得到的动态条目。
-// Component 名称遵守用户原文/official reviewed translation 边界，ReleaseNote 始终保持作者原文。
+// 它与公共 Feed 共用卡片投影，但成员资格、时间窗口和 cursor 仍由 Watch 服务独立控制。
 type FeedItem struct {
-	EventID            string     `json:"eventId"`
-	EventType          string     `json:"eventType"`
-	OccurredAt         time.Time  `json:"occurredAt"`
-	ComponentID        string     `json:"componentId"`
-	ContentKind        string     `json:"contentKind"`
-	ContentLocale      string     `json:"contentLocale"`
-	ComponentName      string     `json:"componentName"`
-	Category           *string    `json:"category"`
-	ComponentVersionID string     `json:"componentVersionId"`
-	VersionLabel       string     `json:"version"`
-	Revision           int32      `json:"revision"`
-	PublishedAt        *time.Time `json:"publishedAt"`
-	ReleaseNote        *string    `json:"releaseNote"`
-	ReleaseNoteLocale  *string    `json:"releaseNoteLocale"`
-	TranslationMissing bool       `json:"translationMissing"`
+	EventID            string        `json:"eventId"`
+	EventType          string        `json:"eventType"`
+	OccurredAt         time.Time     `json:"occurredAt"`
+	ComponentVersionID string        `json:"componentVersionId"`
+	VersionLabel       string        `json:"version"`
+	Revision           int32         `json:"revision"`
+	PublishedAt        *time.Time    `json:"publishedAt"`
+	ReleaseNote        *string       `json:"releaseNote"`
+	ReleaseNoteLocale  *string       `json:"releaseNoteLocale"`
+	Publisher          FeedPublisher `json:"publisher"`
+	Render             FeedRender    `json:"render"`
+	Component          FeedComponent `json:"component"`
+}
+
+// FeedPublisher 是事件发布人的稳定身份投影；公开资料未建模时只返回用户 ID。
+type FeedPublisher struct {
+	ID string `json:"id"`
+}
+
+// FeedImage 是 Worker 生成并通过当前请求签发的 3:2 派生图片。
+type FeedImage struct {
+	ArtifactID string `json:"artifactId"`
+	URL        string `json:"url"`
+	Format     string `json:"format"`
+	SHA256     string `json:"sha256"`
+	ByteLength int64  `json:"byteLength"`
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
+}
+
+// FeedRender 表达个人 Feed 的终态图片准入；fallback 仍代表可展示的发布事件。
+type FeedRender struct {
+	Status      string     `json:"status"`
+	AvailableAt time.Time  `json:"availableAt"`
+	Image       *FeedImage `json:"image"`
+}
+
+// FeedComponent 是事件卡片需要的当前 Component 展示投影，字段与公共 Feed 的 Component 契约一致。
+type FeedComponent struct {
+	ID                 string           `json:"id"`
+	OwnerID            *string          `json:"ownerId"`
+	ContentKind        string           `json:"contentKind"`
+	ContentLocale      string           `json:"contentLocale"`
+	Name               string           `json:"name"`
+	Description        *string          `json:"description"`
+	Tags               []string         `json:"tags"`
+	Category           *string          `json:"category"`
+	Status             string           `json:"status"`
+	CurrentVersionID   *string          `json:"currentVersionId"`
+	LogicalSize        *FeedLogicalSize `json:"logicalSize"`
+	Metadata           json.RawMessage  `json:"metadata"`
+	OwnedByActor       bool             `json:"ownedByActor"`
+	StarredByActor     bool             `json:"starredByActor"`
+	StarCount          int64            `json:"starCount"`
+	Watch              *FeedWatchState  `json:"watch,omitempty"`
+	TranslationMissing bool             `json:"translationMissing"`
+	CreatedAt          time.Time        `json:"createdAt"`
+	UpdatedAt          time.Time        `json:"updatedAt"`
+}
+
+// FeedLogicalSize 是卡片共享的当前逻辑尺寸投影。
+type FeedLogicalSize struct {
+	WidthStud   float64 `json:"widthStud"`
+	DepthStud   float64 `json:"depthStud"`
+	HeightPlate float64 `json:"heightPlate"`
+}
+
+// FeedWatchState 明确该卡片来自当前 active Watch，供详情交互保持一致。
+type FeedWatchState struct {
+	Watching  bool       `json:"watching"`
+	Level     *string    `json:"level"`
+	WatchedAt *time.Time `json:"watchedAt"`
 }
 
 // FeedPage 返回冻结的查询窗口与 keyset cursor；它不返回 exact count，也不物化收件人或已读状态。

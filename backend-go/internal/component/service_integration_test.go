@@ -367,7 +367,7 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	deletedStars, err := service.ListStars(ctx, actorB, StarListRequest{
 		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US",
 	})
-	if err != nil || deletedStars.RelationshipTotal != 0 || len(deletedStars.Items) != 0 {
+	if err != nil || deletedStars.Total != 0 || len(deletedStars.Items) != 0 {
 		t.Fatalf("deleted Component remained in Star list: %+v, %v", deletedStars, err)
 	}
 	deletedWatches, err := watchService.List(ctx, actorC, componentwatch.ListRequest{Locale: "en-US", Limit: 20})
@@ -628,6 +628,17 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 	if published, err := service.PublishVersion(ctx, actorA, publishVersionID); err != nil || published.Status != "published" {
 		t.Fatalf("publish watched Component version: %+v, %v", published, err)
 	}
+	pendingWatchFeed, err := watchService.ListFeed(ctx, actorB, componentwatch.FeedRequest{
+		Locale: "en-US", Limit: 20, Since: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("read Watch Feed while image task is pending: %v", err)
+	}
+	for _, item := range pendingWatchFeed.Items {
+		if item.ComponentVersionID == publishVersionID {
+			t.Fatalf("pending render entered personal Watch Feed: %+v", item)
+		}
+	}
 	succeedFeedRenderTask(t, service.pool, mustUUID(t, publishVersionID))
 	var watchedEventSeq int64
 	if err := service.pool.QueryRow(ctx, `
@@ -760,7 +771,7 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 		t.Fatalf("current Watch Feed must include pre-Watch and watched releases: %+v, %v", feed, err)
 	}
 	feedSucceeded, feedFailed := watchMetrics.ComponentWatchFeedCounts()
-	if feedSucceeded != 2 || feedFailed != 0 {
+	if feedSucceeded != 3 || feedFailed != 0 {
 		t.Fatalf("Watch Feed metrics = succeeded %d failed %d", feedSucceeded, feedFailed)
 	}
 	watchSucceeded, watchFailed, unwatchSucceeded, unwatchFailed := watchMetrics.ComponentWatchMutationCounts()
@@ -772,8 +783,15 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 	stars, err := service.ListStars(ctx, actorB, StarListRequest{
 		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US",
 	})
-	if err != nil || stars.Total != 1 || stars.RelationshipTotal != 1 || len(stars.Items) != 1 || stars.Items[0].ID != componentID || stars.Items[0].StarredAt.IsZero() {
+	if err != nil || stars.Total != 1 || len(stars.Items) != 1 || stars.Items[0].ID != componentID || stars.Items[0].StarredAt.IsZero() {
 		t.Fatalf("star list: %+v, %v", stars, err)
+	}
+	// 越界页没有窗口行可携带 total；Service 必须在同一只读快照内复用同一查询读取精确总数。
+	outOfRangeStars, err := service.ListStars(ctx, actorB, StarListRequest{
+		PageRequest: PageRequest{Page: 2, PageSize: 1}, Locale: "en-US",
+	})
+	if err != nil || outOfRangeStars.Total != 1 || outOfRangeStars.TotalPages != 1 || len(outOfRangeStars.Items) != 0 {
+		t.Fatalf("out-of-range star page: %+v, %v", outOfRangeStars, err)
 	}
 	sizeStars, err := service.ListStars(ctx, actorB, StarListRequest{
 		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US", Query: "1x2x3", Sort: "starred_at_desc",
@@ -1025,6 +1043,31 @@ func testWatchKeysetPagination(t *testing.T, service *Service, creator, actor pg
 	if err != nil || len(translated.Items) != 1 || translated.Items[0].Name != "订阅分页车辆" {
 		t.Fatalf("translated watch search: %+v, %v", translated, err)
 	}
+	// Watch 管理页只保留关系专属字段；Component 的可见性、reviewed 翻译和当前版本必须与目录/详情共享同一投影契约。
+	projectionID := "21000000-0000-0000-0000-000000000002"
+	detail, err := service.GetComponent(ctx, actor, projectionID, "zh-CN")
+	if err != nil {
+		t.Fatalf("read Watch projection detail contract: %v", err)
+	}
+	catalog, err := service.ListComponents(ctx, actor, ComponentListRequest{
+		Locale: "zh-CN", Limit: 20, Query: projectionID,
+	})
+	if err != nil || len(catalog.Items) != 1 {
+		t.Fatalf("read Watch projection catalog contract: %+v, %v", catalog, err)
+	}
+	watchItem := translated.Items[0]
+	catalogItem := catalog.Items[0]
+	if watchItem.ComponentID != detail.ID || catalogItem.ID != detail.ID ||
+		watchItem.Name != detail.Name || catalogItem.Name != detail.Name ||
+		watchItem.ContentLocale != detail.ContentLocale || catalogItem.ContentLocale != detail.ContentLocale ||
+		watchItem.TranslationMissing != detail.TranslationMissing || catalogItem.TranslationMissing != detail.TranslationMissing ||
+		watchItem.CurrentVersionID == nil || detail.CurrentVersionID == nil || catalogItem.CurrentVersionID == nil ||
+		*watchItem.CurrentVersionID != *detail.CurrentVersionID || *catalogItem.CurrentVersionID != *detail.CurrentVersionID ||
+		detail.Watch == nil || !detail.Watch.Watching || detail.Watch.WatchedAt == nil ||
+		catalogItem.Watch == nil || !catalogItem.Watch.Watching || catalogItem.Watch.WatchedAt == nil ||
+		!watchItem.WatchedAt.Equal(*detail.Watch.WatchedAt) || !watchItem.WatchedAt.Equal(*catalogItem.Watch.WatchedAt) {
+		t.Fatalf("Watch/Component projection drift: watch=%+v detail=%+v catalog=%+v", watchItem, detail, catalogItem)
+	}
 }
 
 func testWatchFeedKeysetPagination(t *testing.T, service *Service, creator pgtype.UUID, userComponentID string) {
@@ -1096,6 +1139,16 @@ func testWatchFeedKeysetPagination(t *testing.T, service *Service, creator pgtyp
 	if err != nil {
 		t.Fatalf("seed official Watch Feed pages: %v", err)
 	}
+	_, err = service.pool.Exec(ctx, `
+		INSERT INTO component_repo.component_feed_entries
+			(event_id, component_id, component_version_id, render_profile, renderer_version, render_status, available_at)
+		SELECT event.id, event.component_id, event.component_version_id,
+		       'feed_card_3x2', 'component-feed-renderer-v4', 'fallback', event.occurred_at
+		FROM component_repo.component_domain_events event
+		WHERE event.component_id='21000000-0000-0000-0000-000000000020'`)
+	if err != nil {
+		t.Fatalf("seed terminal official Watch Feed entries: %v", err)
+	}
 	watchService := componentwatch.NewService(service.pool)
 	if _, err := watchService.Watch(ctx, watcher, "21000000-0000-0000-0000-000000000020", componentwatch.ReleasesOnlyLevel); err != nil {
 		t.Fatalf("watch official Feed fixture: %v", err)
@@ -1103,7 +1156,7 @@ func testWatchFeedKeysetPagination(t *testing.T, service *Service, creator pgtyp
 	since := fixtureTime.Add(-time.Hour).Format(time.RFC3339Nano)
 	first, err := watchService.ListFeed(ctx, watcher, componentwatch.FeedRequest{Locale: "zh-CN", Limit: 2, Since: since})
 	if err != nil || len(first.Items) != 2 || first.NextCursor == nil || first.Items[0].EventID != "21000000-0000-0000-0000-000000000034" ||
-		first.Items[0].ComponentName != "官方订阅更新" || first.Items[0].ReleaseNote == nil || *first.Items[0].ReleaseNote != "Official note 4" ||
+		first.Items[0].Component.Name != "官方订阅更新" || first.Items[0].ReleaseNote == nil || *first.Items[0].ReleaseNote != "Official note 4" ||
 		first.Items[0].ReleaseNoteLocale == nil || *first.Items[0].ReleaseNoteLocale != "en-US" {
 		t.Fatalf("first official Watch Feed page: %+v, %v", first, err)
 	}
@@ -1131,6 +1184,16 @@ func testWatchFeedKeysetPagination(t *testing.T, service *Service, creator pgtyp
 			 '21000000-0000-0000-0000-000000000025', $1, $2)`, creator, fixtureTime.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("insert concurrent Watch Feed event: %v", err)
+	}
+	_, err = service.pool.Exec(ctx, `
+		INSERT INTO component_repo.component_feed_entries
+			(event_id, component_id, component_version_id, render_profile, renderer_version, render_status, available_at)
+		VALUES
+			('21000000-0000-0000-0000-000000000035', '21000000-0000-0000-0000-000000000020',
+			 '21000000-0000-0000-0000-000000000025', 'feed_card_3x2', 'component-feed-renderer-v4',
+			 'fallback', $1)`, fixtureTime.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("insert concurrent terminal Watch Feed entry: %v", err)
 	}
 	items := append([]componentwatch.FeedItem{}, first.Items...)
 	cursor := first.NextCursor
@@ -1172,9 +1235,9 @@ func testWatchFeedKeysetPagination(t *testing.T, service *Service, creator pgtyp
 	}
 	userContentFound := false
 	for _, item := range withUser.Items {
-		if item.ComponentID == userComponentID && item.ReleaseNote != nil && *item.ReleaseNote == "保留用户原文" {
-			userContentFound = item.ComponentName == "  用户组件  " && item.ContentLocale == "zh-CN" &&
-				item.ReleaseNoteLocale != nil && *item.ReleaseNoteLocale == "zh-CN" && !item.TranslationMissing
+		if item.Component.ID == userComponentID && item.ReleaseNote != nil && *item.ReleaseNote == "保留用户原文" {
+			userContentFound = item.Component.Name == "  用户组件  " && item.Component.ContentLocale == "zh-CN" &&
+				item.ReleaseNoteLocale != nil && *item.ReleaseNoteLocale == "zh-CN" && !item.Component.TranslationMissing
 		}
 	}
 	if !userContentFound {

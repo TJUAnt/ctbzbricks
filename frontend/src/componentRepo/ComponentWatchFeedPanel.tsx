@@ -1,14 +1,18 @@
 import React from 'react';
-import { Activity, AlertCircle, Bell, ChevronRight, LoaderCircle, RefreshCw, Settings2 } from 'lucide-react';
+import { AlertCircle, Bell, CheckCircle2, LoaderCircle, RefreshCw, Settings2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 import appConfig from '../app/appConfig';
 import { resolvedLocale, useAppTranslation } from '../i18n';
-import { formatDateTime } from '../i18n/formatters';
 import {
   listComponentWatchFeed,
+  starComponent,
+  unstarComponent,
+  type ComponentResponse,
   type ComponentWatchFeedItemResponse,
 } from './componentRepoApi';
+import { ComponentPublicFeedCard } from './ComponentPublicFeedCard';
+import { projectPublicFeedItems } from './componentPublicFeed';
 
 const feedPageSize = 20;
 
@@ -26,6 +30,8 @@ export function ComponentWatchFeedPanel() {
   const requestIDRef = React.useRef(0);
   const sentinelRef = React.useRef<HTMLDivElement | null>(null);
   const [windowDays, setWindowDays] = React.useState(30);
+  const [starMutations, setStarMutations] = React.useState<Set<string>>(new Set());
+  const [notice, setNotice] = React.useState<string | null>(null);
   const [state, setState] = React.useState<WatchFeedState>({
     status: 'loading',
     items: [],
@@ -83,6 +89,46 @@ export function ComponentWatchFeedPanel() {
     return () => observer.disconnect();
   }, [load, state.nextCursor, state.status]);
 
+  /** 订阅 Feed 与公共 Feed 共用 Star 交互；同一 Component 的多条事件必须同步显示关系状态。 */
+  const toggleStar = async (component: ComponentResponse) => {
+    if (component.ownedByActor || starMutations.has(component.id)) return;
+    const starred = !component.starredByActor;
+    setNotice(null);
+    setStarMutations((current) => new Set(current).add(component.id));
+    setState((current) => ({
+      ...current,
+      error: null,
+      items: current.items.map((item) => item.component.id === component.id ? {
+        ...item,
+        component: {
+          ...item.component,
+          starredByActor: starred,
+          starCount: Math.max(0, item.component.starCount + (starred ? 1 : -1)),
+        },
+      } : item),
+    }));
+    try {
+      if (starred) await starComponent(component.id);
+      else await unstarComponent(component.id);
+      setNotice(tr(starred ? 'componentRepo:componentStarred' : 'componentRepo:componentUnstarred'));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        status: 'error',
+        error: error instanceof Error ? error.message : appConfig.texts.loadFailed,
+      }));
+      void load();
+    } finally {
+      setStarMutations((current) => {
+        const next = new Set(current);
+        next.delete(component.id);
+        return next;
+      });
+    }
+  };
+
+  const cards = React.useMemo(() => projectPublicFeedItems(state.items), [state.items]);
+
   return (
     <section className="component-library-panel component-watch-feed-panel component-plaza-watch-feed">
       <header className="component-library-panel-header component-watch-feed-header">
@@ -120,28 +166,16 @@ export function ComponentWatchFeedPanel() {
       </header>
 
       {state.error ? <div className="component-library-alert"><AlertCircle aria-hidden="true" />{state.error}</div> : null}
-      <div aria-busy={state.status === 'loading-more'} className="component-watch-feed-list" aria-label={tr('componentRepo:watchFeedList')} role="feed">
-        {state.items.map((item) => (
-          <article className="component-watch-feed-item" key={item.eventId}>
-            <span className="component-watch-feed-icon"><Activity aria-hidden="true" /></span>
-            <div className="component-watch-feed-content">
-              <div className="component-watch-feed-title">
-                <Link lang={item.contentLocale} to={appConfig.routePaths.componentRepoDetail.replace(':componentId', encodeURIComponent(item.componentId))}>
-                  {item.componentName}
-                </Link>
-                <strong>{tr('componentRepo:publishedVersionUpdate', { version: item.version, revision: item.revision })}</strong>
-              </div>
-              {item.releaseNote ? <p lang={item.releaseNoteLocale ?? item.contentLocale}>{item.releaseNote}</p> : null}
-              <span>{item.category ?? tr('componentRepo:uncategorized')} · {formatWatchDate(item.occurredAt)}</span>
-            </div>
-            <Link
-              aria-label={tr('componentRepo:componentDetails')}
-              className="component-watch-feed-link"
-              to={appConfig.routePaths.componentRepoDetail.replace(':componentId', encodeURIComponent(item.componentId))}
-            >
-              {tr('componentRepo:details')}<ChevronRight aria-hidden="true" />
-            </Link>
-          </article>
+      {notice ? <div className="component-library-notice"><CheckCircle2 aria-hidden="true" />{notice}</div> : null}
+      <div aria-busy={state.status === 'loading-more'} className="component-public-feed" aria-label={tr('componentRepo:watchFeedList')} role="feed">
+        {cards.map((item) => (
+          <ComponentPublicFeedCard
+            detailPath={appConfig.routePaths.componentRepoDetail.replace(':componentId', encodeURIComponent(item.id))}
+            item={item}
+            key={item.feedEventId}
+            onToggleStar={(component) => void toggleStar(component)}
+            starPending={starMutations.has(item.id)}
+          />
         ))}
       </div>
       {state.status === 'loading' && state.items.length === 0 ? (
@@ -177,14 +211,4 @@ export function mergeFeedItems(
 /** watchFeedSince 把页签的 7/30/90 天选择转换成首屏 RFC 3339 下界。 */
 export function watchFeedSince(days: number, nowMilliseconds = Date.now()): string {
   return new Date(nowMilliseconds - days * 24 * 60 * 60 * 1000).toISOString();
-}
-
-function formatWatchDate(value: string): string {
-  return formatDateTime(value, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }

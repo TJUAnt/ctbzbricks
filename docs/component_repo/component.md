@@ -3,7 +3,7 @@
 组件广场已按独立菜单模块拆分设计，其公共/个人订阅页签见[组件广场详细设计](./component_plaza.md)，公共发布事件、成员资格和滚动加载见
 [公共 Feed 详细设计](./public_feed.md)。本文件中的公开目录仅描述 Component 资源目录契约。
 
-> 代码核对日期：2026-09-13
+> 代码核对日期：2026-09-15
 >
 > 当前阶段：Component Repo 公开 API 和持久任务主链路已切换到 Go。
 >
@@ -22,7 +22,6 @@ BOM、Source 和 Diff 链路。Group、Star、Watch 是 Component DTO 的关联�
 | 页面/功能点 | 前端调用 | 结果用途 |
 |---|---|---|
 | 个人仓库 | `listComponentGroups` + `searchComponentGroupComponents` | root 表示自有 Component；custom Group 表示直接 membership |
-| 模型广场 | `listComponentPublicFeed(limit,cursor,query)` | 独立公共发布事件流；详见 [广场设计](public_feed.md) |
 | 收藏视图 | `listComponentStars` | 详见 [Star 设计](star.md) |
 | Component 详情 | `getComponent` + `listComponentVersions` | 选择 current published 或最新可见 Version |
 | Version 详情 | `getComponentVersion` | 切换历史版本并显示状态、发布说明和来源 |
@@ -39,7 +38,7 @@ BOM、Source 和 Diff 链路。Group、Star、Watch 是 Component DTO 的关联�
 
 页面代码：
 
-- 目录与列表控制器：[ComponentRepoPage.tsx](../../frontend/src/componentRepo/ComponentRepoPage.tsx)；Group 树和成员编辑：[ComponentGroupControls.tsx](../../frontend/src/componentRepo/ComponentGroupControls.tsx)；上传弹窗：[ComponentUploadDialog.tsx](../../frontend/src/componentRepo/ComponentUploadDialog.tsx)；列表纯展示：[ComponentRepoPresenters.tsx](../../frontend/src/componentRepo/ComponentRepoPresenters.tsx)。广场事件追加见 [componentPublicFeed.ts](../../frontend/src/componentRepo/componentPublicFeed.ts)，事件卡片见 [ComponentPublicFeedCard.tsx](../../frontend/src/componentRepo/ComponentPublicFeedCard.tsx)。
+- 个人目录与列表控制器：[ComponentRepoPage.tsx](../../frontend/src/componentRepo/ComponentRepoPage.tsx)；该页面只拥有个人 Group、收藏、上传和 Version 入口状态，不再承载广场。Group 树和成员编辑：[ComponentGroupControls.tsx](../../frontend/src/componentRepo/ComponentGroupControls.tsx)；上传弹窗：[ComponentUploadDialog.tsx](../../frontend/src/componentRepo/ComponentUploadDialog.tsx)；列表纯展示：[ComponentRepoPresenters.tsx](../../frontend/src/componentRepo/ComponentRepoPresenters.tsx)。广场由独立 [ComponentPlazaPage.tsx](../../frontend/src/componentRepo/ComponentPlazaPage.tsx) 承载，详见[组件广场设计](component_plaza.md)。
 - 详情控制器：[ComponentDetailPage.tsx](../../frontend/src/componentRepo/ComponentDetailPage.tsx)；读取编排：[useComponentDetailData.ts](../../frontend/src/componentRepo/useComponentDetailData.ts)；权限与写操作：[useComponentDetailMutations.ts](../../frontend/src/componentRepo/useComponentDetailMutations.ts)；纯展示：[ComponentDetailPresenters.tsx](../../frontend/src/componentRepo/ComponentDetailPresenters.tsx)
 - 上传入口：[ComponentImportPage.tsx](../../frontend/src/componentRepo/ComponentImportPage.tsx)
 - Import 历史/状态：[ComponentImportHistoryPage.tsx](../../frontend/src/componentRepo/ComponentImportHistoryPage.tsx)、[ComponentImportStatusPage.tsx](../../frontend/src/componentRepo/ComponentImportStatusPage.tsx)

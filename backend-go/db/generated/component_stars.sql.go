@@ -11,98 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countStarredComponents = `-- name: CountStarredComponents :one
-WITH actor_stars AS MATERIALIZED (
-    SELECT star.component_id, star.starred_at
-    FROM component_repo.component_stars star
-    WHERE star.actor_id = $8
-)
-SELECT count(*)::bigint AS total,
-       (SELECT count(*)::bigint
-        FROM actor_stars) AS relationship_total
-FROM actor_stars star
-JOIN component_repo.component_catalog_candidates component ON component.id = star.component_id
-LEFT JOIN LATERAL (
-    SELECT translation.id, translation.name
-    FROM component_repo.component_reviewed_translations translation
-    WHERE component.content_kind = 'official'
-      AND $1::text <> ''
-      AND translation.component_id = component.id
-      AND translation.locale = $2
-    LIMIT 1
-) translation ON true
-WHERE component.status = 'active'
-  AND component.public_version_available
-  AND ($3::text = '' OR component.category = $3)
-  AND (
-      $1::text = ''
-      OR CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END
-         ILIKE '%' || $1 || '%'
-      OR component.id::text ILIKE '%' || $1 || '%'
-  )
-  AND (
-      $4::integer = 0
-      OR COALESCE(
-          ($4::integer = 3
-           AND component.current_logical_size_a > $5::double precision - 1
-           AND component.current_logical_size_a < $5::double precision + 1
-           AND component.current_logical_size_b > $6::double precision - 1
-           AND component.current_logical_size_b < $6::double precision + 1
-           AND component.current_logical_size_c > $7::double precision - 1
-           AND component.current_logical_size_c < $7::double precision + 1)
-          OR
-          ($4::integer = 2 AND (
-              (component.current_logical_size_a > $5::double precision - 1
-               AND component.current_logical_size_a < $5::double precision + 1
-               AND component.current_logical_size_b > $6::double precision - 1
-               AND component.current_logical_size_b < $6::double precision + 1)
-              OR
-              (component.current_logical_size_a > $5::double precision - 1
-               AND component.current_logical_size_a < $5::double precision + 1
-               AND component.current_logical_size_c > $6::double precision - 1
-               AND component.current_logical_size_c < $6::double precision + 1)
-              OR
-              (component.current_logical_size_b > $5::double precision - 1
-               AND component.current_logical_size_b < $5::double precision + 1
-               AND component.current_logical_size_c > $6::double precision - 1
-               AND component.current_logical_size_c < $6::double precision + 1)
-          )), false)
-  )
-`
-
-type CountStarredComponentsParams struct {
-	SearchQuery        string
-	Locale             string
-	CategoryFilter     string
-	SizeDimensionCount int32
-	SizeA              float64
-	SizeB              float64
-	SizeC              float64
-	ActorID            pgtype.UUID
-}
-
-type CountStarredComponentsRow struct {
-	Total             int64
-	RelationshipTotal int64
-}
-
-// 先物化 actor 的有界权威关系集，再逐候选探测 Component 与可公开 Version；避免空/稀疏 actor 先构建全库哈希。
-func (q *Queries) CountStarredComponents(ctx context.Context, arg CountStarredComponentsParams) (CountStarredComponentsRow, error) {
-	row := q.db.QueryRow(ctx, countStarredComponents,
-		arg.SearchQuery,
-		arg.Locale,
-		arg.CategoryFilter,
-		arg.SizeDimensionCount,
-		arg.SizeA,
-		arg.SizeB,
-		arg.SizeC,
-		arg.ActorID,
-	)
-	var i CountStarredComponentsRow
-	err := row.Scan(&i.Total, &i.RelationshipTotal)
-	return i, err
-}
-
 const createComponentStar = `-- name: CreateComponentStar :one
 INSERT INTO component_repo.component_stars (actor_id, component_id, source)
 VALUES ($1, $2, 'user_action')
@@ -249,7 +157,8 @@ SELECT component.id, component.owner_id, component.content_kind,
        (component.content_kind = 'official' AND component.content_locale <> $2
         AND translation.id IS NULL)::boolean AS translation_missing,
        true::boolean AS starred_by_actor,
-       star.starred_at
+       star.starred_at,
+       count(*) OVER ()::bigint AS total
 FROM actor_stars star
 JOIN component_repo.component_catalog_candidates component ON component.id = star.component_id
 LEFT JOIN LATERAL (
@@ -299,12 +208,6 @@ WHERE component.status = 'active'
   )
 ORDER BY star.starred_at DESC, component.id
 LIMIT $10 OFFSET $9
-), page_star_counts AS (
-    -- 先固定当前页，再按 component_id 一次聚合，避免列表对每行执行一次 COUNT。
-    SELECT aggregate_star.component_id, count(*)::bigint AS star_count
-    FROM component_repo.component_stars aggregate_star
-    JOIN page ON page.id = aggregate_star.component_id
-    GROUP BY aggregate_star.component_id
 )
 SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        page.selected_name, page.selected_description, page.has_description,
@@ -313,11 +216,16 @@ SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        display_component.logical_height_plate,
        page.metadata, page.created_at, page.updated_at, page.owned_by_actor,
        page.translation_missing, page.starred_by_actor,
-       COALESCE(page_star_counts.star_count, 0)::bigint AS star_count,
-       page.starred_at
+       page_star_count.star_count,
+       page.starred_at, page.total
 FROM page
 JOIN component_repo.component_catalog_projection display_component ON display_component.id = page.id
-LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
+JOIN LATERAL (
+    -- 页面先固定到最多 100 行，再按 component_id 索引逐页项聚合；禁止优化器为少量卡片扫描全部 Star。
+    SELECT count(*)::bigint AS star_count
+    FROM component_repo.component_stars aggregate_star
+    WHERE aggregate_star.component_id = page.id
+) page_star_count ON true
 ORDER BY page.starred_at DESC, page.id
 `
 
@@ -357,9 +265,10 @@ type ListStarredComponentsRow struct {
 	StarredByActor        bool
 	StarCount             int64
 	StarredAt             pgtype.Timestamptz
+	Total                 int64
 }
 
-// 收藏列表只投影仍公开可见的 Component；归档/删除提交后立即隐藏，v17 Worker 最终物理删除关系且不恢复。
+// 收藏列表只维护一份可见性与筛选谓词，并在分页前用窗口计数固定 exact total；归档/删除提交后立即隐藏。
 func (q *Queries) ListStarredComponents(ctx context.Context, arg ListStarredComponentsParams) ([]ListStarredComponentsRow, error) {
 	rows, err := q.db.Query(ctx, listStarredComponents,
 		arg.ActorID,
@@ -403,6 +312,7 @@ func (q *Queries) ListStarredComponents(ctx context.Context, arg ListStarredComp
 			&i.StarredByActor,
 			&i.StarCount,
 			&i.StarredAt,
+			&i.Total,
 		); err != nil {
 			return nil, err
 		}

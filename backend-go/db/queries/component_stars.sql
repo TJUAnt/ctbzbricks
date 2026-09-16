@@ -39,67 +39,8 @@ LEFT JOIN component_repo.component_stars existing_star
 WHERE component.id = sqlc.arg(component_id)
   AND (component.owner_id = sqlc.arg(actor_id) OR component.status = 'active');
 
--- name: CountStarredComponents :one
--- 先物化 actor 的有界权威关系集，再逐候选探测 Component 与可公开 Version；避免空/稀疏 actor 先构建全库哈希。
-WITH actor_stars AS MATERIALIZED (
-    SELECT star.component_id, star.starred_at
-    FROM component_repo.component_stars star
-    WHERE star.actor_id = sqlc.arg(actor_id)
-)
-SELECT count(*)::bigint AS total,
-       (SELECT count(*)::bigint
-        FROM actor_stars) AS relationship_total
-FROM actor_stars star
-JOIN component_repo.component_catalog_candidates component ON component.id = star.component_id
-LEFT JOIN LATERAL (
-    SELECT translation.id, translation.name
-    FROM component_repo.component_reviewed_translations translation
-    WHERE component.content_kind = 'official'
-      AND sqlc.arg(search_query)::text <> ''
-      AND translation.component_id = component.id
-      AND translation.locale = sqlc.arg(locale)
-    LIMIT 1
-) translation ON true
-WHERE component.status = 'active'
-  AND component.public_version_available
-  AND (sqlc.arg(category_filter)::text = '' OR component.category = sqlc.arg(category_filter))
-  AND (
-      sqlc.arg(search_query)::text = ''
-      OR CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END
-         ILIKE '%' || sqlc.arg(search_query) || '%'
-      OR component.id::text ILIKE '%' || sqlc.arg(search_query) || '%'
-  )
-  AND (
-      sqlc.arg(size_dimension_count)::integer = 0
-      OR COALESCE(
-          (sqlc.arg(size_dimension_count)::integer = 3
-           AND component.current_logical_size_a > sqlc.arg(size_a)::double precision - 1
-           AND component.current_logical_size_a < sqlc.arg(size_a)::double precision + 1
-           AND component.current_logical_size_b > sqlc.arg(size_b)::double precision - 1
-           AND component.current_logical_size_b < sqlc.arg(size_b)::double precision + 1
-           AND component.current_logical_size_c > sqlc.arg(size_c)::double precision - 1
-           AND component.current_logical_size_c < sqlc.arg(size_c)::double precision + 1)
-          OR
-          (sqlc.arg(size_dimension_count)::integer = 2 AND (
-              (component.current_logical_size_a > sqlc.arg(size_a)::double precision - 1
-               AND component.current_logical_size_a < sqlc.arg(size_a)::double precision + 1
-               AND component.current_logical_size_b > sqlc.arg(size_b)::double precision - 1
-               AND component.current_logical_size_b < sqlc.arg(size_b)::double precision + 1)
-              OR
-              (component.current_logical_size_a > sqlc.arg(size_a)::double precision - 1
-               AND component.current_logical_size_a < sqlc.arg(size_a)::double precision + 1
-               AND component.current_logical_size_c > sqlc.arg(size_b)::double precision - 1
-               AND component.current_logical_size_c < sqlc.arg(size_b)::double precision + 1)
-              OR
-              (component.current_logical_size_b > sqlc.arg(size_a)::double precision - 1
-               AND component.current_logical_size_b < sqlc.arg(size_a)::double precision + 1
-               AND component.current_logical_size_c > sqlc.arg(size_b)::double precision - 1
-               AND component.current_logical_size_c < sqlc.arg(size_b)::double precision + 1)
-          )), false)
-  );
-
 -- name: ListStarredComponents :many
--- 收藏列表只投影仍公开可见的 Component；归档/删除提交后立即隐藏，v17 Worker 最终物理删除关系且不恢复。
+-- 收藏列表只维护一份可见性与筛选谓词，并在分页前用窗口计数固定 exact total；归档/删除提交后立即隐藏。
 WITH actor_stars AS MATERIALIZED (
     -- 该候选集受当前产品每 actor 1,000 条 Star 包络约束；物化用于阻止规划器改从全 Component/Version 驱动。
     SELECT star.component_id, star.starred_at
@@ -119,7 +60,8 @@ SELECT component.id, component.owner_id, component.content_kind,
        (component.content_kind = 'official' AND component.content_locale <> sqlc.arg(locale)
         AND translation.id IS NULL)::boolean AS translation_missing,
        true::boolean AS starred_by_actor,
-       star.starred_at
+       star.starred_at,
+       count(*) OVER ()::bigint AS total
 FROM actor_stars star
 JOIN component_repo.component_catalog_candidates component ON component.id = star.component_id
 LEFT JOIN LATERAL (
@@ -169,12 +111,6 @@ WHERE component.status = 'active'
   )
 ORDER BY star.starred_at DESC, component.id
 LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset)
-), page_star_counts AS (
-    -- 先固定当前页，再按 component_id 一次聚合，避免列表对每行执行一次 COUNT。
-    SELECT aggregate_star.component_id, count(*)::bigint AS star_count
-    FROM component_repo.component_stars aggregate_star
-    JOIN page ON page.id = aggregate_star.component_id
-    GROUP BY aggregate_star.component_id
 )
 SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        page.selected_name, page.selected_description, page.has_description,
@@ -183,9 +119,14 @@ SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        display_component.logical_height_plate,
        page.metadata, page.created_at, page.updated_at, page.owned_by_actor,
        page.translation_missing, page.starred_by_actor,
-       COALESCE(page_star_counts.star_count, 0)::bigint AS star_count,
-       page.starred_at
+       page_star_count.star_count,
+       page.starred_at, page.total
 FROM page
 JOIN component_repo.component_catalog_projection display_component ON display_component.id = page.id
-LEFT JOIN page_star_counts ON page_star_counts.component_id = page.id
+JOIN LATERAL (
+    -- 页面先固定到最多 100 行，再按 component_id 索引逐页项聚合；禁止优化器为少量卡片扫描全部 Star。
+    SELECT count(*)::bigint AS star_count
+    FROM component_repo.component_stars aggregate_star
+    WHERE aggregate_star.component_id = page.id
+) page_star_count ON true
 ORDER BY page.starred_at DESC, page.id;

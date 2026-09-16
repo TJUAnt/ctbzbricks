@@ -216,6 +216,9 @@ func assertWatchFeedPlan(t *testing.T, name, plan string) {
 	if strings.Contains(plan, "Seq Scan on component_watch_periods") {
 		t.Fatalf("%s scanned the complete Watch ledger:\n%s", name, plan)
 	}
+	if strings.Contains(plan, "Seq Scan on component_feed_entries") {
+		t.Fatalf("%s scanned the complete terminal Feed projection:\n%s", name, plan)
+	}
 	if !strings.Contains(plan, "component_watch_periods_active_unique_idx") &&
 		!strings.Contains(plan, "component_watch_periods_actor_active_time_idx") {
 		t.Fatalf("%s did not use an actor-scoped active Watch index:\n%s", name, plan)
@@ -465,12 +468,24 @@ func seedWatchListPlanEnvelope(t *testing.T, ctx context.Context, pool *pgxpool.
 		FROM generate_series(1, 1000) component_item
 		CROSS JOIN generate_series(1, 3) event_item
 		WHERE component_item % 10 <> 0;
+		-- 个人订阅卡片与公共卡片共用终态准入；性能 fixture 同时覆盖 92,700 条 Feed entry，
+		-- 防止测试因缺少派生投影而让图片连接成为 never executed 的假阳性。
+		INSERT INTO component_repo.component_feed_entries (
+			event_id, component_id, component_version_id, render_profile, renderer_version,
+			render_status, available_at
+		)
+		SELECT event.id, event.component_id, event.component_version_id,
+		       'feed_card_3x2', 'component-feed-renderer-v4', 'fallback', event.occurred_at
+		FROM component_repo.component_domain_events event
+		JOIN component_repo.components component ON component.id=event.component_id
+		WHERE component.name LIKE 'Watch filter %';
 		SELECT setval('component_repo.component_activity_sequence', 4000000, true);
 		ANALYZE component_repo.component_watch_periods;
 		ANALYZE component_repo.components;
 		ANALYZE component_repo.component_versions;
 		ANALYZE component_repo.component_translations;
 		ANALYZE component_repo.component_domain_events;
+		ANALYZE component_repo.component_feed_entries;
 	`)
 	if err != nil {
 		t.Fatalf("seed Watch list capacity envelope: %v", err)

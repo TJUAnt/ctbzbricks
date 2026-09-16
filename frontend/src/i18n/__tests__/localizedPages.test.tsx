@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { ComponentRepoPage } from '../../componentRepo/ComponentRepoPage';
+import { ComponentPlazaPage } from '../../componentRepo/ComponentPlazaPage';
 import { ComponentWatchListPage } from '../../componentRepo/ComponentWatchListPage';
 import { LegoDesignPage } from '../../archive/dem/LegacyLegoDesignPage';
 import { LegoTerrainBuilderPage } from '../../archive/dem/LegoTerrainBuilderPage';
@@ -42,7 +43,7 @@ describe('localized page shells', () => {
 
   it('separates the public plaza from personal management and hides DEM entry points', async () => {
     await i18n.changeLanguage('en-US');
-    const plaza = renderPage(<ComponentRepoPage mode="plaza" />);
+    const plaza = renderPage(<ComponentPlazaPage />);
     expect(plaza).toContain('Model plaza');
     expect(plaza).not.toContain('component-library-upload-button');
     expect(plaza).toContain('component-library-tabs');
@@ -81,7 +82,7 @@ describe('localized page shells', () => {
 
   it('renders the Watch Feed in the plaza subscription tab and keeps the management page separate', async () => {
     await i18n.changeLanguage('zh-CN');
-    const chinese = renderPage(<ComponentRepoPage mode="plaza" />, '/model-plaza?tab=subscriptions');
+    const chinese = renderPage(<ComponentPlazaPage />, '/model-plaza?tab=subscriptions');
     expect(chinese).toContain('个人订阅');
     expect(chinese).toContain('订阅更新');
     expect(chinese).toContain('最近 7 天');
@@ -90,7 +91,7 @@ describe('localized page shells', () => {
     expect(renderPage(<ComponentWatchListPage />)).not.toContain('订阅更新');
 
     await i18n.changeLanguage('en-US');
-    const english = renderPage(<ComponentRepoPage mode="plaza" />, '/model-plaza?tab=subscriptions');
+    const english = renderPage(<ComponentPlazaPage />, '/model-plaza?tab=subscriptions');
     expect(english).toContain('Subscription Updates');
     expect(english).toContain('Last 7 days');
     expect(english).toContain('Last 30 days');

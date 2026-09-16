@@ -294,8 +294,6 @@
   "componentUnwatched": "已取消组件更新订阅。",
   "noStarredComponents": "还没有收藏组件",
   "browseComponentsToStar": "从公开组件目录或组件详情页收藏感兴趣的组件。",
-  "starredComponentsUnavailable": "收藏的组件当前不可见",
-  "starredComponentsUnavailableDescription": "收藏关系仍然保留；组件恢复公开后会重新显示。",
   "tryChangingStarFilters": "试试调整名称、ID、尺寸或分类筛选。",
   "categoryFilter": "分类",
   "allCategories": "全部分类",

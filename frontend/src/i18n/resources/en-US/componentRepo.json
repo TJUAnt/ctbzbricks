@@ -294,8 +294,6 @@
   "componentUnwatched": "You stopped watching component updates.",
   "noStarredComponents": "No starred components yet",
   "browseComponentsToStar": "Star components from the public directory or a component detail page.",
-  "starredComponentsUnavailable": "Your starred components are currently unavailable",
-  "starredComponentsUnavailableDescription": "The star relationships are retained and the components will reappear if they become public again.",
   "tryChangingStarFilters": "Try changing the name, ID, size, or category filter.",
   "categoryFilter": "Category",
   "allCategories": "All categories",

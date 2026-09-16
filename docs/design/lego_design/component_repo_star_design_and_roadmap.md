@@ -670,9 +670,9 @@ Star 第一版应是一项简单、同步、强授权边界的收藏关系。最
 | --- | --- | --- | --- | --- | --- |
 | `STAR-PERF-01` | P1 | 收藏列表仍使用页码 `OFFSET`；历史 10 万关系实验中 `OFFSET 99,980 LIMIT 20` 约 `215 ms`，跳过成本随关系数线性增长。 | 2026-09-04 产品决定保留现有页码交互，不实施 cursor 改造。按单 actor Star 不超过 1,000 的容量包络验证首页与最深页；若产品批准改变交互、容量包络提高或观测数据接近 1,000，重新开启 keyset 方案。 | STAR-3 | Deferred |
 | `STAR-PERF-02` | P1 | logical-size 过滤仍需逐关系读取当前 published Version 的尺寸并现场规范化；历史 10 万全命中计数约 `364 ms`。 | Goose v18 已建立当前公开 Version 的事务一致规范化尺寸投影；发布与晚完成 Preview 均维护该投影，Star 过滤不再读取 Version 尺寸。1,000 actor × 1,000 Star 已覆盖无过滤、选择性/高/零命中和首/最深页计划。 | STAR-3 | Completed |
-| `STAR-CONSISTENCY-01` | P2 | Service 先执行 Count、后执行 List，两个独立的默认 `READ COMMITTED` 语句可能在并发 Star/Unstar 时读取不同快照，造成一次响应中的 `total/items` 暂时不一致。 | 冻结产品一致性要求；若要求响应内一致，则用单条 SQL 返回分页元数据，或使用显式一致性读事务/快照。增加并发变更测试，证明 `total`、`relationshipTotal`、页项及末页回退符合冻结语义。若接受最终一致，必须在 API 设计中明确而不是依赖偶然行为。 | STAR-3 | Open |
-| `STAR-UI-01` | P2 | custom Group 批量成员弹窗只各取 owned、Star、当前成员的前 100 条；虽然行级管理已能处理取消收藏后的成员，但超过上限的组件会静默消失。 | 增加服务端搜索与分页/游标，合并候选时保持去重和当前成员可回显；增加超过 100 条 owned/Star/member 的交互测试，证明用户可以发现、加入和移除任意可管理项，且 UI 不把首 100 条表示为全集。 | STAR-2 hardening | Open |
-| `STAR-A11Y-01` | P2 | Star 图标按钮缺少显式 `aria-label`；可访问名称可能只剩收藏数，`title` 不能替代稳定的按钮名称。 | 复用现有 Star/Unstar typed semantic key 设置随状态变化的 `aria-label`，保留计数但不把计数作为操作名称；增加可访问名称与键盘操作测试，并完成双 locale 验证。 | STAR-2 hardening | Open |
+| `STAR-CONSISTENCY-01` | P2 | Service 曾先执行 Count、后执行 List，两个独立的默认 `READ COMMITTED` 语句可能在并发 Star/Unstar 时读取不同快照，造成一次响应中的 `total/items` 暂时不一致。 | 2026-09-16 已冻结为响应内一致：唯一 List SQL 用窗口计数返回 exact `total`，Service 在 `REPEATABLE READ READ ONLY` 快照内执行；越界空页复用同一 SQL 探测第一页总数。`relationshipTotal` 已退出公共 API。越界页、删除隐藏与百万关系实际 SQL 计划均通过。 | STAR-3 | Completed |
+| `STAR-UI-01` | P2 | custom Group 批量成员弹窗曾只各取 owned、Star、当前成员的前 100 条，超过上限的组件会静默消失。 | owned、Star 与现有成员已分别分页搜索、合并去重并显示续页，完整 membership 独立逐页加载；`ComponentGroupControls.test.tsx` 覆盖第 101 条候选和成员。 | STAR-2 hardening | Completed |
+| `STAR-A11Y-01` | P2 | Star 图标按钮曾缺少显式 `aria-label`；可访问名称可能只剩收藏数，`title` 不能替代稳定的按钮名称。 | 列表、详情和公共 Feed 统一使用 `ComponentStarButton`，复用 Star/Unstar typed semantic key，保留原生 button 的 Enter/Space 语义；双 locale、双状态语义测试通过。 | STAR-2 hardening | Completed |
 
 设计复盘结论：
 
@@ -732,3 +732,57 @@ warm-cache 时间约为无筛选 1.130 ms、选择性 0.468 ms、高匹配 1.556
 
 结论：`STAR-PERF-02` 关闭。`STAR-PERF-01` 仍按产品决定延期，本次没有修改 API、页码模型、前端交互、
 用户文案或 i18n 资源。真实 Supabase 尚未执行 v18。
+
+## 23. 2026-09-16 / STAR-2～STAR-3 / 已知偏移清理预检
+
+本切片处理 `STAR-CONSISTENCY-01`、`STAR-A11Y-01` 以及详细设计中的 `STAR-CLEAN-07`。冻结以下产品与
+查询契约后再实施：
+
+- 收藏页继续使用页码并需要筛选后的 exact `total`；`items` 与 `total` 必须来自同一个一致性读快照。
+  `relationshipTotal` 只描述删除清理完成前的内部残留关系，不是用户可操作的收藏状态，也不再进入公共 API
+  或 UI。删除后不可见的 Component 不会因恢复公开而自动恢复 Star。
+- 容量包络仍为最多 1,000 用户、每 actor 最多 1,000 条 Star；总关系向 1,000,000 增长，但单次请求必须从
+  `component_stars(actor_id,starred_at,component_id)` 的 actor 索引驱动。验证空 actor、稀疏 actor 与 1,000
+  条热点 actor，筛选覆盖无筛选、选择性、高匹配和零匹配。
+- category 是可选精确筛选；完整尺寸表达式使用事务维护的规范化尺寸投影；普通名称/ID 搜索仍是 actor 有界
+  候选内的 leading-wildcard 匹配。official translation 只在当前 locale 投影或搜索需要时探测 reviewed
+  translation，用户内容保持原文。
+- 排序固定为 `starred_at DESC,component_id`，页码 `OFFSET` 在 1,000 条包络内保留。首、最深支持页都要复核；
+  当单 actor 关系接近 700、容量包络提高或产品批准改变交互时，重新开启 keyset 设计。该规划数字不是 API
+  拒绝阈值。
+- SQL 只保留一份可见性、translation、category、搜索和尺寸谓词；分页行通过窗口精确计数获得 `total`。
+  越界空页在同一个 `REPEATABLE READ READ ONLY` 事务中复用同一查询读取第一页元数据，因此不引入第二份
+  Count 谓词，且不会跨快照拼接行与总数。普通非空页只执行一次查询。
+- 不新增索引。actor 候选已被当前容量约束在 1,000 内；任何搜索或尺寸索引都必须有谓词与排序对应的真实
+  计划证据，不能以通用 B-tree 替代。
+- Star/Unstar 按钮继续使用原生 `button` 的 Enter/Space 键盘语义，并复用现有 typed `starComponent` /
+  `unstarComponent` 双语 key 作为随状态变化的 `aria-label`；不新增 locale 分支。
+
+关闭前必须完成：Go 单元与 PostgreSQL 集成测试、前端 i18n/test/build、1,000 actor × 1,000 Star 的
+`EXPLAIN (ANALYZE, BUFFERS, SETTINGS)` 规模门禁，并把实际计划、版本和 warm/cold-cache 限制回写本节。
+
+实施与验证结果：
+
+- `CountStarredComponents` 及重复谓词已删除。`ListStarredComponents` 在筛选结果上执行 `WindowAgg` 后分页；
+  非空页一次 SQL 同时得到 items/total，越界空页在同一个 `REPEATABLE READ READ ONLY` 事务中复用该查询读取
+  首页元数据。集成测试固定了 page=2、pageSize=1、total=1、items 为空的越界页契约。
+- `relationshipTotal` 从 Go/TypeScript DTO、页面状态和 `/api/v1/component-stars` 响应删除。删除提交后不可见
+  Component 只留下待 Worker 物理删除的内部关系，不再驱动 UI 空态；与该错误语义关联的双语资源已删除，目录
+  升级为 `frontend-2026.09.16.1`。
+- 页内 `starCount` 首次实际 SQL 计划发现会为 20 个卡片顺序扫描全部 1,000,000 Star，约 77 ms；已改为固定
+  页面后逐项使用 `component_stars_component_idx` 聚合，计划不再出现 Star 全表扫描。该发现说明页级聚合必须以
+  实际 loops/buffers 验证，不能仅从 SQL JOIN 文本判断驱动方向。
+- 扩展 fixture 包含 100,000 Component、1,000 actor × 每人 1,000 Star（共 1,000,000）、单 actor 1,000
+  候选、90% user / 10% official Component，以及 100 条 zh-CN reviewed translation。PostgreSQL 14.17，
+  `shared_buffers=128MB`、`work_mem=4MB`、`effective_cache_size=4GB`，已 ANALYZE。warm-cache 实际权威 SQL
+  计划中：无筛选约 10.087 ms、尺寸选择性 10 条约 32.851 ms、尺寸高匹配 990 条约 9.569 ms、零命中约
+  0.447 ms、reviewed translation 选择性 1 条约 2.348 ms、高匹配 100 条约 10.585 ms、首页约
+  10.650 ms、最深 OFFSET 980 页约 7.405 ms。所有场景从 actor 关系索引驱动，没有 Component、Version 或
+  Star 全表扫描，没有外部排序或临时文件；页内计数按 Component 索引访问。
+- 上述为本机 warm-cache 查询形状证据，未单独测量 cold-cache，也不是生产 SLO。OFFSET 仍按当前 1,000/actor
+  包络条件延期；接近 700 条、提高容量或批准交互改变时重开 keyset 设计。
+- `backend-go make check`、`make test-postgres`、`RUN_STAR_SIZE_PLAN_TEST=1 make test-postgres`、前端
+  `npm run i18n:check`、`npm test`（24 files / 104 tests）和 `npm run build` 均通过。
+
+结论：`STAR-CONSISTENCY-01`、`STAR-A11Y-01`、`STAR-CLEAN-03/06/07` 关闭；`STAR-PERF-01` /
+`STAR-CLEAN-04` 保持有客观重开条件的 Deferred，不以当前容量决定新增 API 硬限制。

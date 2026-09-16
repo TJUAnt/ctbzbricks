@@ -1,8 +1,8 @@
 # Component Repo Watch 详细设计
 
-> 代码核对日期：2026-09-12
+> 代码核对日期：2026-09-16
 >
-> 当前阶段：WATCH-1～WATCH-4 已在仓库完成；真实 Supabase 已部署到 v23，浏览器与生产查询计划验收待执行。
+> 当前阶段：WATCH-1～WATCH-4 已在仓库完成；WATCH-CLEAN-01～05 均已关闭。个人订阅 Feed 已与公共 Feed 共用大图事件卡片，管理页保持独立 Component Repo 订阅列表。真实 Supabase 与仓库 schema head 均为 v24；Go API/前端发布、浏览器与生产查询计划验收待执行。
 >
 > 接口权威定义：[Component Repo API](../api.md)；产品、容量与路线决策：[Watch 方案与路线](../design/lego_design/component_repo_watch_design_and_roadmap.md)。
 
@@ -26,7 +26,7 @@ Watch 是“当前用户订阅某个 Component 的版本发布更新”。它和
 | 详情页 Unwatch | 当前详情投影为 watching 时执行 | `unwatchComponent` | 乐观清空 Watch 投影 | 重新加载 Component，撤销错误本地状态 |
 | 管理列表 | `/component-repo/watches` 首屏及筛选变化重新读取，只管理 active Watch | `listComponentWatches` | 保存 items 与 opaque `nextCursor` | 保留错误 code 渲染结果；locale 改变时重新请求 |
 | 管理列表续页 | 点击“加载更多”时沿用同一筛选条件和 cursor | `listComponentWatches` | 按 `componentId` 去重并保留服务端顺序 | 当前页保留，状态转 error |
-| 动态 Feed | 组件广场 `/model-plaza?tab=subscriptions` 默认最近 30 天，可选 7/30/90 天 | `listComponentWatchFeed` | 首屏使用新的 `since`；进入底部哨兵后续页仅发送 cursor | 当前已加载事件保留 |
+| 动态 Feed | 组件广场 `/model-plaza?tab=subscriptions` 默认最近 30 天，可选 7/30/90 天；使用与公共 Feed 相同的大图事件卡片 | `listComponentWatchFeed`、`starComponent`、`unstarComponent` | 首屏使用新的 `since`；进入底部哨兵后续页仅发送 cursor；同一 Component 的卡片同步 Star 状态 | 当前已加载事件保留；Star 失败后重读首屏 |
 | Feed 刷新 | 丢弃旧 cursor，以当前时间重新计算窗口起点 | `listComponentWatchFeed` | 替换当前 Feed | 显示结构化错误 |
 | 管理页 Unwatch | 乐观移除管理条目；个人订阅 Feed 下次进入或刷新时按 read-time 语义重算 | `unwatchComponent` | 服务端 active period 关闭 | 请求失败时恢复管理条目 |
 
@@ -34,7 +34,8 @@ Watch 是“当前用户订阅某个 Component 的版本发布更新”。它和
 
 - 个人订阅 Feed：[ComponentWatchFeedPanel.tsx](../../frontend/src/componentRepo/ComponentWatchFeedPanel.tsx)
 - Watch 管理页：[ComponentWatchListPage.tsx](../../frontend/src/componentRepo/ComponentWatchListPage.tsx)
-- 组件广场页签：[ComponentRepoPage.tsx](../../frontend/src/componentRepo/ComponentRepoPage.tsx)、[组件广场详细设计](component_plaza.md)
+- 组件广场页签：[ComponentPlazaPage.tsx](../../frontend/src/componentRepo/ComponentPlazaPage.tsx)、[组件广场详细设计](component_plaza.md)
+- 共享事件卡片：[ComponentPublicFeedCard.tsx](../../frontend/src/componentRepo/ComponentPublicFeedCard.tsx)、[ComponentStarButton.tsx](../../frontend/src/componentRepo/ComponentStarButton.tsx)、[componentPublicFeed.ts](../../frontend/src/componentRepo/componentPublicFeed.ts)；Star 操作复用 typed 双语可访问名称和原生键盘按钮语义
 - 详情页入口：[ComponentDetailPage.tsx](../../frontend/src/componentRepo/ComponentDetailPage.tsx)
 - DTO 和请求适配：[componentRepoApi.ts](../../frontend/src/componentRepo/componentRepoApi.ts)
 - 路由和路径：[main.tsx](../../frontend/src/main.tsx)、[appConfig.json](../../frontend/src/app/appConfig.json)
@@ -89,15 +90,23 @@ cursor 是 base64url JSON，包含边界和规范化后的 `locale/query/categor
 只从 cursor 恢复窗口，并以 `(occurred_at DESC,event_id DESC)` 继续。
 
 SQL 先物化 actor 当前 active Watch，再从 v24 candidate projection 统一校验 Component 可见性和公开 Version 资格，并对每个 Component 使用
-`(component_id,occurred_at DESC,id DESC)` 索引取得至多一页事件，做全局 Top-N 后才加载 Version、Component 和
-`component_reviewed_translations`。Release Note 始终返回作者原文及 `releaseNoteLocale`。
+`(component_id,occurred_at DESC,id DESC)` 索引取得至多一页事件。事件必须已有 `ready/fallback` 的
+`component_feed_entries` 终态投影；pending 图片任务本次不返回，发布成功本身不受图片成功或失败影响。全局 Top-N
+固定页面后才读取 Version、当前 Component、reviewed translation、当页 Star 聚合和 Artifact 元数据。Storage key
+只在 Service 中按当页批量签发短期 URL，签名失败时对应卡片降级为统一无图占位。Release Note 始终返回作者原文及
+`releaseNoteLocale`。
+
+响应单项保留 `eventType`，其余事件卡片字段与公共 Feed 一致：`publisher`、`render`、`component` 以及事件发生时的
+Version/Revision/Release Note。`component` 是当前展示投影，事件版本字段是不可变发布事实，前端不得相互替代。
 
 后端代码：
 
+- 跨关系活动锁：[component_activity.sql](../../backend-go/db/queries/component_activity.sql)、[componentactivity/lock.go](../../backend-go/internal/componentactivity/lock.go)
 - 路由与参数：[componentwatch/handler.go](../../backend-go/internal/componentwatch/handler.go)
 - 业务服务与 cursor：[componentwatch/service.go](../../backend-go/internal/componentwatch/service.go)
 - 请求/响应模型：[componentwatch/types.go](../../backend-go/internal/componentwatch/types.go)
 - Watch 与 Feed SQL：[component_watches.sql](../../backend-go/db/queries/component_watches.sql)
+- 共享 locale 契约：[localeutil/locale.go](../../backend-go/internal/localeutil/locale.go)
 - sqlc 生成代码：[component_watches.sql.go](../../backend-go/db/generated/component_watches.sql.go)（禁止手工修改）
 
 ## 4. 发布事件生产
@@ -133,8 +142,9 @@ Artifact 或 Storage 历史。
 | 对象 | 作用 | 关键不变量 |
 |---|---|---|
 | `component_watch_periods` | 保存首次 Watch、Unwatch 和 Rewatch 历史 | 同 actor+Component 最多一个 active period；closed 行不重开 |
-| `component_activity_sequence` | 为 period、发布事件和删除边界分配共同顺序 | 允许回滚空洞；只比较先后，不承诺连续 |
+| `component_activity_sequence` | 为 Watch period 审计、发布事件审计和删除统一边界分配共同顺序 | 不参与 read-time Feed 成员资格或 cursor；允许回滚空洞，只比较先后，不承诺连续 |
 | `component_domain_events` | 保存不可变发布事实 | 每个 Version 的发布事件唯一；UPDATE/DELETE 被数据库拒绝 |
+| `component_feed_entries` | 保存图片任务的 Feed 准入终态 | pending 不返回；ready/fallback 都进入个人与公共 Feed |
 | active actor index | 管理列表和 Feed 的入口 | closed history 不进入读取计划 |
 | active component index | 删除 Worker 的批处理入口 | 支持按 actor keyset 继续 |
 | Component/time/event index | Feed 的事件探测 | 与窗口、排序和 cursor 谓词完全一致 |
@@ -145,7 +155,7 @@ Artifact 或 Storage 历史。
 
 - 所有 API 位于认证后的 `/api/v1`，actor 只来自 JWT；请求不能指定 owner。
 - Watch 不扩大 Component 可见性；目标不可见时统一走 not-found/不可用契约。
-- user Component 名称与 Release Note 保留原文；official 名称只选择 reviewed translation。
+- user Component 名称、描述与 Release Note 保留原文；official 名称、描述和 tags 只选择 reviewed translation。
 - UI 文案使用 typed semantic keys；level、ID、cursor、eventType 和时间是机器值。
 - API 错误只返回稳定 `code + params`，前端按当前 locale 渲染；locale 切换会重新读取页面数据。
 - 指标只有 `component_watch_mutation_total`、`component_watch_feed_requests_total`、
@@ -153,28 +163,44 @@ Artifact 或 Storage 历史。
 
 ## 8. 测试定位
 
-2026-09-14 的 Component 03/04/08 清理未改变 Watch HTTP/cursor/成员资格合约；Watch 管理列表和 Feed 已改读 v24
-candidate/catalog/reviewed translation 共享投影，候选阶段不读取 Version 展示尺寸，迁移往返与跨模块集成通过。Python legacy 回归不再属于完成门禁。真实 Supabase
-仍为 v23；本轮没有部署 v24，也不代表 Watch 浏览器流程或生产查询计划已经验收。
+2026-09-16 的偏移清理没有改变 API、schema、资源或查询形状。activity lock 查询移动后由 sqlc 重新生成；
+`localeutil` 单测冻结 strict/display 两套契约；PostgreSQL 集成新增 official Component 在目录、详情、Watch 管理页
+之间的投影一致性断言，并继续覆盖共享/独占锁、发布回滚、Rewatch sequence 与删除统一边界。`make check`、隔离
+PostgreSQL v24（0→24、24 down/up、重复 up）、前端 23 个测试文件/100 项、typed i18n 与生产构建均通过。
+
+2026-09-15 的广场清理没有改变 Watch URL、cursor、时间窗口或成员资格；Watch Feed 响应补齐公共事件卡片所需的
+终态图片、发布人、描述和 Star 投影，并覆盖 pending 不返回、终态返回与 official reviewed translation。Watch 管理
+列表继续直接使用 `listComponentWatches`，没有新增概要或 count API。Python legacy 回归不再属于完成门禁。前端
+23 个测试文件/100 项、typed i18n 与生产构建通过，Go `make check` 和隔离 PostgreSQL v24 完整契约通过。百万
+active、百万 closed 与 92,700 条 Feed entry 的首屏/宽窗口/90 天/深 cursor/空 actor 计划均无 Watch/Feed
+全表扫描、OFFSET 或 spill；固定页 Star 聚合使用 `component_stars_component_idx`。
+
+真实 Supabase PostgreSQL 17.6 已从 v23 升至 v24 并验证重复 `up`；22 个 Component、23 个 Version 守恒，
+Version 资格回填差异、queued/running task、非终态 Feed entry、非法终态和无效索引均为 0。迁移前恢复包及
+SHA-256 清单见[组件广场验证证据](component_plaza.md#6-验证证据)。数据库部署不代表新的 Go API/前端已经发布，
+也不代表 Watch 浏览器流程或完整生产查询计划已经验收。部署后用当前权威 Watch Feed SQL 对空 actor 执行生产
+`EXPLAIN (ANALYZE, BUFFERS, SETTINGS)`，查询成功且从 `component_watch_periods_actor_active_time_idx` 开始，
+其他业务节点 `never executed`，执行 1.786 ms；它排除了 v24 列/类型造成的新 `PrepareError`，但不能替代非空 actor
+和深 cursor 的生产样本。
 
 - Go Service/cursor 单测：[service_test.go](../../backend-go/internal/componentwatch/service_test.go)
 - Component、发布、并发、分页和删除集成：[service_integration_test.go](../../backend-go/internal/component/service_integration_test.go)
 - HTTP 契约：[component_integration_test.go](../../backend-go/internal/httpapi/component_integration_test.go)
 - Schema/触发器：[schema_integration_test.go](../../backend-go/internal/database/schema_integration_test.go)
 - 百万关系计划：[watch_list_performance_integration_test.go](../../backend-go/internal/component/watch_list_performance_integration_test.go)
-- 前端状态与窗口：[ComponentWatchListPage.test.ts](../../frontend/src/componentRepo/__tests__/ComponentWatchListPage.test.ts)（Feed helper 从 `ComponentWatchFeedPanel` 导入）
+- 前端状态、窗口与广场边界：[ComponentWatchListPage.test.ts](../../frontend/src/componentRepo/__tests__/ComponentWatchListPage.test.ts)、[ComponentPlazaBoundary.test.ts](../../frontend/src/componentRepo/__tests__/ComponentPlazaBoundary.test.ts)
 - API adapter：[componentRepoApi.test.ts](../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
 - 双语言页面：[localizedPages.test.tsx](../../frontend/src/i18n/__tests__/localizedPages.test.tsx)
 
-## 9. 已发现的偏移与清理准备
+## 9. 已发现的偏移与清理结果
 
-| 编号 | 证据与问题 | 影响 | 清理前置条件 |
+| 编号 | 原问题 | 关闭结果 | 验证与后续约束 |
 |---|---|---|---|
-| WATCH-CLEAN-01 | shared activity lock SQL 分别放在 `component_watches.sql` 和 `component_domain_events.sql`，但 Star、Publish、Delete 都在调用 | 文件归属暗示错误，未来修改锁协议容易漏掉调用方 | 新建中性 `component_activity.sql`，只移动手写查询并重新生成 sqlc；跑并发、删除和迁移测试 |
-| WATCH-CLEAN-02 | `componentwatch.displayLocale` 与 `component` 中的 locale 规范化职责重复 | 支持语言或规范变化时可能漂移 | 先冻结“严格校验”与“展示 fallback”两个契约，再提取无业务依赖的共享包 |
-| WATCH-CLEAN-03（已关闭） | 旧 `mergeFeedItems` 用 `Date.parse` 重排 PostgreSQL 微秒时间 | 迁移 Feed 组件时改为保留服务端 cursor 页顺序，仅按 event ID 去重；helper 测试锁定该行为 | 2026-09-12 已关闭；后续不得在前端以毫秒时间重新排序 |
-| WATCH-CLEAN-04 | `component_activity_sequence` 的 event-time recipient 用途已废止，但 period/event 仍保存 sequence | 字段真实用途比旧设计窄，维护者容易误以为 Feed 依赖它 | 先确认是否继续保留审计和统一删除边界；没有数据迁移、回滚与历史兼容方案前不得删除 |
-| WATCH-CLEAN-05 | Watch 投影同时存在于 Component 列表/详情 SQL 与独立 Watch 服务 | 可见性、locale 或 active 条件变更时存在多处同步成本 | 建立投影契约测试清单；评估共享 SQL 片段/视图时必须重新执行 EXPLAIN，不能为去重牺牲查询形状 |
+| WATCH-CLEAN-01（已关闭） | shared/exclusive activity lock SQL 分散在 Watch 与 Domain Event 查询文件，但 Star、Publish、Delete 都会调用 | 两条锁查询移动到中性 `component_activity.sql`，sqlc 生成 `component_activity.sql.go`；业务调用名与锁协议不变 | sqlc vet/generate、共享/独占互斥、Publish 回滚、关系删除与 PostgreSQL 集成测试必须继续通过；禁止手工维护生成文件 |
+| WATCH-CLEAN-02（已关闭） | `componentwatch.displayLocale` 与 `component` 的 locale 规范化职责重复 | 新增无业务依赖的 `internal/localeutil`；`Normalize` 只接受受支持别名并供写入严格校验，`Display` 对缺省/非法只读 locale 回落 `zh-CN` | 单测覆盖 `zh/zh_CN/zh-Hans-*`、`en/en-*`、空值、未知语言与 `zh-Hant-*`；未改变资源目录或 API 错误契约 |
+| WATCH-CLEAN-03（已关闭） | 旧 `mergeFeedItems` 用 `Date.parse` 重排 PostgreSQL 微秒时间 | Feed 保留服务端 cursor 页顺序，仅按 event ID 去重 | 2026-09-12 已关闭；后续不得在前端以毫秒时间重新排序 |
+| WATCH-CLEAN-04（已关闭，保留字段） | event-time recipient 已废止，但 period/event 仍保存 sequence，真实用途不够明确 | 明确保留 sequence：`started_seq/ended_seq` 记录不可变 Watch/Rewatch 审计，`event_seq` 记录发布审计，Component 删除用一个冻结 `ended_seq` 关闭全部 active period | Feed 成员资格只看当前 active Watch，Feed cursor 只用时间+UUID；集成测试锁定 `start < event < user end < rewatch start`、删除统一边界和回滚空洞容忍。未来删除字段必须另做 migration/历史兼容决策 |
+| WATCH-CLEAN-05（已关闭） | Component 列表/详情与 Watch 服务各自拼装展示投影，存在漂移风险 | v24 的 `component_catalog_candidates`、`component_catalog_projection`、`component_reviewed_translations` 已成为可见性/展示/审核翻译事实源；Watch 仅保留 actor 关系、cursor 与 Feed 成员资格专属逻辑 | 新增跨入口契约测试，同一 official Component 在目录、详情、Watch 管理页的名称、实际 content locale、translation missing、current Version 和 active Watch 必须一致；保持页面固定后 enrichment，沿用既有百万关系 EXPLAIN 证据，不为文本去重改变查询形状 |
 
-优先顺序建议：下一步整理 WATCH-CLEAN-01 的文件边界；02、04、05 需要先做契约决策。v21 部署属于发布验收，
-不属于代码清理。
+这批清理不改变 URL、请求/响应 JSON、授权边界、read-time Feed 语义、schema head 或前端资源版本。v21/v24 部署与
+WATCH-DEPLOY 仍属于发布验收，不属于上述代码清理。

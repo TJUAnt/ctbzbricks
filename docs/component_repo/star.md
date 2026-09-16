@@ -1,6 +1,6 @@
 # Component Repo Star 详细设计
 
-> 代码核对日期：2026-09-13
+> 代码核对日期：2026-09-16
 >
 > 当前阶段：STAR-1～STAR-3 核心能力已实现；产品容量按每 actor 最多 1,000 Star 规划。
 >
@@ -16,12 +16,14 @@ Star 只有当前关系，没有历史 period。Unstar 物理删除 actor 自己
 
 ## 2. 前端功能点
 
-### 2.1 目录与广场收藏按钮
+### 2.1 收藏列表与广场收藏按钮
 
-`ComponentRepoPage` 的个人仓库、收藏和广场共用一套列表。非 owner 行展示 Star 图标按钮：
+`ComponentRepoPage` 管理个人仓库和“我的收藏”；独立 `ComponentPlazaPage` 通过 `ComponentPublicFeedCard` 展示公共
+发布流。列表、详情和公共 Feed 的非 owner 操作统一复用 `ComponentStarButton`：原生 `button` 保留 Enter/Space
+键盘语义，`aria-label` 随 Star 状态使用 typed `starComponent/unstarComponent` 双语 key。
 
 1. 点击后先乐观翻转 `starredByActor` 和 `starCount`；
-2. 在收藏视图中执行 Unstar 时立即移除该行，并同步调整 `total/relationshipTotal`；
+2. 在收藏视图中执行 Unstar 时立即移除该行，并同步调整可见 `total`；
 3. 调用 `starComponent` 或 `unstarComponent`；
 4. 成功后刷新当前列表和 Group 树；
 5. 失败后显示结构化错误并重新读取，服务端状态覆盖乐观状态；
@@ -38,12 +40,15 @@ Star 只有当前关系，没有历史 period。Unstar 物理删除 actor 自己
 名称/ID 或 Box 尺寸搜索、category 精确筛选，并固定 `sort=starred_at_desc`。返回：
 
 - `total`：当前筛选后仍可见的收藏数；
-- `relationshipTotal`：actor 的关系总数，删除清理完成前可能包含已隐藏关系；
 - `starredAt`：收藏时间，用作列表排序和展示。
+
+删除清理完成前的物理残留关系不是用户可操作状态，不进入公共 DTO 或空状态判断；列表为空时只区分“尚未收藏”
+和“当前筛选无结果”。
 
 前端代码：
 
-- 列表、乐观状态与筛选：[ComponentRepoPage.tsx](../../frontend/src/componentRepo/ComponentRepoPage.tsx)；Group 联动与续页：[ComponentGroupControls.tsx](../../frontend/src/componentRepo/ComponentGroupControls.tsx)
+- 列表、乐观状态与筛选：[ComponentRepoPage.tsx](../../frontend/src/componentRepo/ComponentRepoPage.tsx)；公共 Feed：[ComponentPlazaPage.tsx](../../frontend/src/componentRepo/ComponentPlazaPage.tsx)、[ComponentPublicFeedCard.tsx](../../frontend/src/componentRepo/ComponentPublicFeedCard.tsx)
+- 统一可访问按钮：[ComponentStarButton.tsx](../../frontend/src/componentRepo/ComponentStarButton.tsx)；Group 联动与续页：[ComponentGroupControls.tsx](../../frontend/src/componentRepo/ComponentGroupControls.tsx)
 - 详情页按钮组合：[ComponentDetailPage.tsx](../../frontend/src/componentRepo/ComponentDetailPage.tsx)；权限、Star/Watch 乐观更新：[useComponentDetailMutations.ts](../../frontend/src/componentRepo/useComponentDetailMutations.ts)
 - 稳定请求入口：[componentRepoApi.ts](../../frontend/src/componentRepo/componentRepoApi.ts)；目录/Star/Group 实现：[componentCatalogApi.ts](../../frontend/src/componentRepo/api/componentCatalogApi.ts)
 - 路径配置：[appConfig.json](../../frontend/src/app/appConfig.json)
@@ -83,9 +88,10 @@ Star 只有当前关系，没有历史 period。Unstar 物理删除 actor 自己
 2. 关联 v24 candidate projection，只保留 active 且存在非 Draft Version 的 Component；固定页面后再从 catalog projection 读取展示尺寸；
 3. 从 `component_reviewed_translations` 读取唯一允许展示的 official translation；
 4. 尺寸筛选直接读取 Component 当前规范化 `current_logical_size_a/b/c`；
-5. 按 `starred_at DESC,component_id` 排序并用 OFFSET 分页；
-6. 固定页后一次聚合页内 `starCount`，再读取展示用原始方向尺寸；
-7. Count 查询返回过滤后 `total` 和未经可见性过滤的 `relationshipTotal`。
+5. 在唯一一份可见性、translation、category、搜索和尺寸谓词后执行 `count(*) OVER ()`，获得同一结果集的 exact `total`；
+6. 按 `starred_at DESC,component_id` 排序并用 OFFSET 分页；
+7. `Service` 在 `REPEATABLE READ READ ONLY` 事务中读取。越界空页没有窗口行时，在同一快照内把同一查询复用到第一页探测总数；
+8. 固定页后按 `component_id` 索引逐页项聚合 `starCount`，禁止为最多 100 个卡片扫描全部 Star，再读取展示用原始方向尺寸。
 
 后端代码：
 
@@ -114,7 +120,8 @@ Component 列表与详情都返回 `starredByActor` 和 `starCount`。Star 关�
 
 - actor 只来自认证上下文，API 不接收 owner 或 recipient。
 - user Component 文本保持原文；official 文本只选择请求 locale 的 reviewed translation。
-- Star、Component ID、sort 和 category 是机器值；按钮、空态和错误使用 typed semantic keys。
+- Star、Component ID、sort 和 category 是机器值；按钮、空态和错误使用 typed semantic keys。Star 按钮的
+  中英文可访问名称复用既有资源，删除了与物理清理语义冲突的“关系保留并会恢复显示”资源。
 - 结构化错误包括目标不存在、本人禁止收藏、目标不可收藏和通用 validation/conflict。
 - 当前没有 Star 专属 Prometheus 指标；公开计数来自权威关系表。
 
@@ -125,11 +132,13 @@ Component 列表与详情都返回 `starredByActor` 和 `starCount`。Star 关�
 - 百万关系与尺寸计划：[star_size_performance_integration_test.go](../../backend-go/internal/component/star_size_performance_integration_test.go)
 - Schema 与迁移：[schema_integration_test.go](../../backend-go/internal/database/schema_integration_test.go)
 - 前端 API adapter：[componentRepoApi.test.ts](../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
+- 双 locale 可访问名称与原生键盘按钮语义：[ComponentStarButton.test.tsx](../../frontend/src/componentRepo/__tests__/ComponentStarButton.test.tsx)
 - Group 候选完整性与可见续页：[ComponentGroupControls.test.tsx](../../frontend/src/componentRepo/__tests__/ComponentGroupControls.test.tsx)
 - 页面语言壳：[localizedPages.test.tsx](../../frontend/src/i18n/__tests__/localizedPages.test.tsx)
 
-2026-09-14 的 Component 03/04/08 清理未改变 Star HTTP 合约；Star SQL 已改读 v24 candidate/catalog/reviewed translation 共享投影，
-迁移往返、跨模块集成和十万 Component 查询计划通过。没有新增文案、资源键或 locale 分支；当前完整验证结果见迁移进度。
+2026-09-16 清理将 Star 响应收敛为 `{items,total,page,pageSize,totalPages}`，移除内部 `relationshipTotal`；
+`total/items` 改为一致性只读快照，双语按钮继续复用既有语义 key。资源目录升级为
+`frontend-2026.09.16.1`；当前完整验证结果见迁移进度。
 
 ## 7. 已发现的偏移与清理准备
 
@@ -137,10 +146,10 @@ Component 列表与详情都返回 `starredByActor` 和 `starCount`。Star 关�
 |---|---|---|---|
 | STAR-CLEAN-01（已关闭） | `ComponentRepoPage` 已移出 Group、上传和通用 presenter；详情 Star/Watch mutation 与权限投影进入独立 Hook | Star 列表、Group 候选和详情乐观状态不再集中在两个巨型页面中 | 关闭证据：页面与职责文件、现有 Feed/列表测试、Group 101 条 UI 测试 |
 | STAR-CLEAN-02（已关闭） | DTO、统一 transport 和 catalog/version/workbench/import/task 领域调用已拆分，原 adapter 仅兼容重导出 | Star/Group 改动不再直接耦合上传、Storage 和任务轮询实现 | 关闭证据：`componentRepoTypes.ts`、`componentRepoTransport.ts`、`api/` 与前端全量编译 |
-| STAR-CLEAN-03 | Count 与 List 是两个独立 SQL 调用，且重复可见性、translation 和尺寸谓词 | 默认 READ COMMITTED 下可能来自不同快照；人工同步谓词有漂移风险 | 产品先确认是否要求页与 total 同快照；若要求，改为单语句并重跑 100 万关系计划 |
-| STAR-CLEAN-04 | 页码 OFFSET 是线性深翻页 | 当前 1,000 Star/actor 包络内已测且产品保留页码；扩大包络后不适用 | 保持现状；接近包络 70%、提高容量或批准交互变化时重开 keyset 设计 |
+| STAR-CLEAN-03（已关闭） | 唯一 List SQL 在分页前用窗口计数；Service 用 `REPEATABLE READ READ ONLY` 固定快照，越界空页复用同一 SQL 探测总数 | 消除 Count/List 跨快照和重复谓词漂移 | 关闭证据：越界页集成测试、百万关系实际 SQL 计划与 `STAR-CONSISTENCY-01` |
+| STAR-CLEAN-04（条件延期） | 页码 OFFSET 仍是线性深翻页 | 当前 1,000 Star/actor 包络内已测且产品保留页码；扩大包络后不适用 | 接近 700 条、提高容量或批准交互变化时重开 keyset；当前不引入 API 硬限制 |
 | STAR-CLEAN-05（已关闭） | 候选编辑器分页调用自有、Star 与现有成员搜索，合并去重并显示续页；完整 membership 另行逐页加载 | 超过 100 条时仍可搜索或续载收藏并加入 Group | 关闭证据：`listComponentGroupMembershipCandidates`、`ComponentGroupControls.test.tsx` |
-| STAR-CLEAN-06 | 列表图标按钮主要依赖 `title`/`aria-pressed`，缺少完整键盘与双 locale 可访问性验证 | 辅助技术反馈可能不完整 | 补 typed `aria-label` 和键盘测试；对应 `STAR-A11Y-01` |
-| STAR-CLEAN-07 | `relationshipTotal` 与 `total` 在删除清理窗口内有意不同，但同屏统计容易被误读 | UI 可能把物理关系量当作可见收藏量 | 明确产品展示是否需要 relationshipTotal；不需要时停止暴露，需保留则增加解释文案与契约测试 |
+| STAR-CLEAN-06（已关闭） | 列表、详情和公共 Feed 统一使用 `ComponentStarButton`，状态驱动 typed `aria-label/aria-pressed`，保留原生按钮键盘语义 | 辅助技术获得稳定操作名称 | 关闭证据：`ComponentStarButton.test.tsx` 覆盖 zh-CN/en-US 与 Star/Unstar 状态；`STAR-A11Y-01` |
+| STAR-CLEAN-07（已关闭） | `relationshipTotal` 已从 Go DTO、前端 DTO/状态和 API 文档移除；冲突空态资源一并删除 | UI 只展示可见、可操作的收藏总数，不泄露内部清理窗口 | 关闭证据：API adapter、删除生命周期集成测试、i18n 目录 `frontend-2026.09.16.1` |
 
-STAR-CLEAN-05 已先关闭，随后完成 01/02 的前端拆分。03、07 仍需要产品语义决定，04 只能在容量或交互条件触发后处理。
+STAR-CLEAN-01～03、05～07 已关闭；04 按已批准页码交互和当前容量包络条件延期，并保留客观重开条件。

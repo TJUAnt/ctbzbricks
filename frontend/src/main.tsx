@@ -28,6 +28,7 @@ import { ComponentImportPage } from './componentRepo/ComponentImportPage';
 import { ComponentImportHistoryPage } from './componentRepo/ComponentImportHistoryPage';
 import { ComponentImportStatusPage } from './componentRepo/ComponentImportStatusPage';
 import { ComponentRepoPage } from './componentRepo/ComponentRepoPage';
+import { ComponentPlazaPage } from './componentRepo/ComponentPlazaPage';
 import { ComponentDetailPage } from './componentRepo/ComponentDetailPage';
 import { ComponentWatchListPage } from './componentRepo/ComponentWatchListPage';
 import { LegoDesignPage } from './archive/dem/LegacyLegoDesignPage';
@@ -305,8 +306,8 @@ export function WorkbenchRoutes() {
       <Route element={<><PixelModelNavigation /><PixelArtProjectsPage /></>} path={routePathFor(appConfig.pages.pixelArtProjects as PageKey)} />
       <Route element={<PartSearchPage />} path={routePathFor(appConfig.pages.partSearch as PageKey)} />
       <Route element={<PartViewerPage />} path={routePathFor(appConfig.pages.partViewer as PageKey)} />
-      <Route element={<ComponentRepoPage key="plaza" mode="plaza" />} path={routePathFor(appConfig.pages.modelPlaza as PageKey)} />
-      <Route element={<ComponentRepoPage key="mine" />} path={routePathFor(appConfig.pages.componentRepo as PageKey)} />
+      <Route element={<ComponentPlazaPage />} path={routePathFor(appConfig.pages.modelPlaza as PageKey)} />
+      <Route element={<ComponentRepoPage />} path={routePathFor(appConfig.pages.componentRepo as PageKey)} />
       <Route element={<ComponentImportPage />} path={routePathFor(appConfig.pages.componentRepoImport as PageKey)} />
       <Route
         element={<ComponentImportHistoryPage />}

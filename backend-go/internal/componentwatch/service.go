@@ -12,7 +12,10 @@ import (
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentactivity"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/feedrender"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/localeutil"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/observability"
+	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -30,10 +33,12 @@ var errRetryWatchTransaction = errors.New("retry concurrent watch transaction")
 
 // Service 管理当前 actor 的 Watch 偏好与只读列表；它不负责发布事件或通知投递。
 type Service struct {
-	pool    *pgxpool.Pool
-	q       *db.Queries
-	metrics *observability.Registry
-	now     func() time.Time
+	pool            *pgxpool.Pool
+	q               *db.Queries
+	metrics         *observability.Registry
+	now             func() time.Time
+	feedImageStore  storage.Store
+	feedImageURLTTL time.Duration
 }
 
 // NewService 创建使用 PostgreSQL 权威关系数据的 Watch 应用服务。
@@ -44,6 +49,13 @@ func NewService(pool *pgxpool.Pool) *Service {
 // WithMetrics 为 Watch mutation 接入进程级低基数指标；未配置时业务行为保持不变。
 func (s *Service) WithMetrics(metrics *observability.Registry) *Service {
 	s.metrics = metrics
+	return s
+}
+
+// WithFeedImages 为个人订阅 Feed 当页终态图片批量签发短期 URL；签名失败时卡片稳定降级为无图。
+func (s *Service) WithFeedImages(store storage.Store, ttl time.Duration) *Service {
+	s.feedImageStore = store
+	s.feedImageURLTTL = ttl
 	return s
 }
 
@@ -144,7 +156,7 @@ func (s *Service) List(ctx context.Context, actor pgtype.UUID, request ListReque
 	if len(request.Category) > 128 {
 		return WatchPage{}, validationError("category")
 	}
-	locale := displayLocale(request.Locale)
+	locale := localeutil.Display(request.Locale)
 	query := strings.TrimSpace(request.Query)
 	category := strings.TrimSpace(request.Category)
 	cursor, err := decodeCursor(request.Cursor)
@@ -217,7 +229,7 @@ func (s *Service) ListFeed(ctx context.Context, actor pgtype.UUID, request FeedR
 		return FeedPage{}, validationError("since")
 	}
 	rows, err := s.q.ListCurrentComponentWatchFeed(ctx, db.ListCurrentComponentWatchFeedParams{
-		ActorID: actor, Locale: displayLocale(request.Locale), WindowStart: timestamp(windowStart),
+		ActorID: actor, Locale: localeutil.Display(request.Locale), WindowStart: timestamp(windowStart),
 		CursorOccurredAt: cursor.OccurredAt, CursorEventID: cursor.EventID, PageSize: int32(limit + 1),
 	})
 	if err != nil {
@@ -227,16 +239,25 @@ func (s *Service) ListFeed(ctx context.Context, actor pgtype.UUID, request FeedR
 	if hasMore {
 		rows = rows[:limit]
 	}
+	imageURLs := map[string]string{}
+	if s.feedImageStore != nil && s.feedImageURLTTL > 0 {
+		keys := make([]string, 0, len(rows))
+		for _, row := range rows {
+			if row.RenderStatus == "ready" && row.ImageStorageKey != nil &&
+				row.ImageStorageProvider != nil && *row.ImageStorageProvider == s.feedImageStore.Provider() &&
+				row.ImageStorageBucket != nil && *row.ImageStorageBucket == s.feedImageStore.Bucket() {
+				keys = append(keys, *row.ImageStorageKey)
+			}
+		}
+		if len(keys) > 0 {
+			if signed, signErr := s.feedImageStore.SignDownloads(ctx, keys, s.feedImageURLTTL); signErr == nil {
+				imageURLs = signed
+			}
+		}
+	}
 	items := make([]FeedItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, FeedItem{
-			EventID: uuidutil.String(row.EventID), EventType: row.EventType, OccurredAt: row.OccurredAt.Time,
-			ComponentID: uuidutil.String(row.ComponentID), ContentKind: row.ContentKind,
-			ContentLocale: row.SelectedContentLocale, ComponentName: row.SelectedName, Category: row.Category,
-			ComponentVersionID: uuidutil.String(row.ComponentVersionID), VersionLabel: row.VersionLabel,
-			Revision: row.Revision, PublishedAt: nullableTime(row.PublishedAt), ReleaseNote: row.ReleaseNote,
-			ReleaseNoteLocale: row.ReleaseNoteLocale, TranslationMissing: row.TranslationMissing,
-		})
+		items = append(items, watchFeedItemFromDB(row, imageURLs))
 	}
 	var next *string
 	if hasMore && len(rows) > 0 {
@@ -248,6 +269,40 @@ func (s *Service) ListFeed(ctx context.Context, actor pgtype.UUID, request FeedR
 		next = &encoded
 	}
 	return FeedPage{Items: items, NextCursor: next, WindowStart: windowStart}, nil
+}
+
+// watchFeedItemFromDB 把已固定的 Watch 事件页映射为共享大卡片契约；事件版本与当前 Component 投影不可混用。
+func watchFeedItemFromDB(row db.ListCurrentComponentWatchFeedRow, imageURLs map[string]string) FeedItem {
+	item := FeedItem{
+		EventID: uuidutil.String(row.EventID), EventType: row.EventType, OccurredAt: row.OccurredAt.Time,
+		ComponentVersionID: uuidutil.String(row.ComponentVersionID), VersionLabel: row.VersionLabel,
+		Revision: row.Revision, PublishedAt: nullableTime(row.PublishedAt), ReleaseNote: row.ReleaseNote,
+		ReleaseNoteLocale: row.ReleaseNoteLocale,
+		Publisher:         FeedPublisher{ID: uuidutil.String(row.PublisherID)},
+		Render:            FeedRender{Status: "fallback", AvailableAt: row.AvailableAt.Time},
+		Component: FeedComponent{
+			ID: uuidutil.String(row.ComponentID), OwnerID: uuidutil.NullableString(row.OwnerID),
+			ContentKind: row.ContentKind, ContentLocale: row.SelectedContentLocale, Name: row.SelectedName,
+			Description: selectedText(row.SelectedDescription, row.HasDescription), Tags: nonNilStrings(row.SelectedTags),
+			Category: row.Category, Status: row.Status, CurrentVersionID: uuidutil.NullableString(row.CurrentVersionID),
+			LogicalSize: watchLogicalSize(row.LogicalWidthStud, row.LogicalDepthStud, row.LogicalHeightPlate),
+			Metadata:    validJSON(row.Metadata), OwnedByActor: row.OwnedByActor,
+			StarredByActor: row.StarredByActor, StarCount: row.StarCount,
+			Watch:              &FeedWatchState{Watching: true, Level: &row.WatchLevel, WatchedAt: nullableTime(row.WatchedAt)},
+			TranslationMissing: row.TranslationMissing, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		},
+	}
+	if row.RenderStatus == "ready" && row.ImageArtifactID.Valid && row.ImageStorageKey != nil {
+		if url := imageURLs[*row.ImageStorageKey]; url != "" {
+			item.Render.Status = "ready"
+			item.Render.Image = &FeedImage{
+				ArtifactID: uuidutil.String(row.ImageArtifactID), URL: url, Format: "png",
+				SHA256: stringValue(row.ImageSha256), ByteLength: int64Value(row.ImageFileSize),
+				Width: feedrender.ImageWidth, Height: feedrender.ImageHeight,
+			}
+		}
+	}
+	return item
 }
 
 type cursorPayload struct {
@@ -376,14 +431,6 @@ func encodeCursor(watchedAt time.Time, componentID pgtype.UUID, locale, query, c
 	return base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
-func displayLocale(input string) string {
-	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(input, "_", "-")))
-	if normalized == "en" || normalized == "en-us" || strings.HasPrefix(normalized, "en-") {
-		return "en-US"
-	}
-	return "zh-CN"
-}
-
 func parseID(value, field string) (pgtype.UUID, error) {
 	id, err := uuidutil.Parse(value)
 	if err != nil {
@@ -398,6 +445,54 @@ func nullableTime(value pgtype.Timestamptz) *time.Time {
 	}
 	result := value.Time
 	return &result
+}
+
+func watchLogicalSize(width, depth, height pgtype.Numeric) *FeedLogicalSize {
+	if !width.Valid || !depth.Valid || !height.Valid {
+		return nil
+	}
+	w, wErr := width.Float64Value()
+	d, dErr := depth.Float64Value()
+	h, hErr := height.Float64Value()
+	if wErr != nil || dErr != nil || hErr != nil || !w.Valid || !d.Valid || !h.Valid {
+		return nil
+	}
+	return &FeedLogicalSize{WidthStud: w.Float64, DepthStud: d.Float64, HeightPlate: h.Float64}
+}
+
+func validJSON(value []byte) json.RawMessage {
+	if !json.Valid(value) {
+		return json.RawMessage(`{}`)
+	}
+	return json.RawMessage(value)
+}
+
+func selectedText(value string, present bool) *string {
+	if !present {
+		return nil
+	}
+	return &value
+}
+
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func int64Value(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func timestamp(value time.Time) pgtype.Timestamptz {

@@ -5249,8 +5249,7 @@ button {
 
 .component-watch-feed-header,
 .component-watch-feed-controls,
-.component-watch-feed-controls label,
-.component-watch-feed-title {
+.component-watch-feed-controls label {
   display: flex;
   align-items: center;
 }
@@ -5302,81 +5301,6 @@ button {
 .component-watch-manage-link svg {
   width: 16px;
   height: 16px;
-}
-
-.component-watch-feed-list {
-  display: grid;
-}
-
-.component-watch-feed-item {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
-  border-bottom: 1px solid #edf0f4;
-  padding: 16px 22px;
-}
-
-.component-watch-feed-icon {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border-radius: 10px;
-  background: #eef6ff;
-  color: #3975bd;
-}
-
-.component-watch-feed-icon svg {
-  width: 17px;
-  height: 17px;
-}
-
-.component-watch-feed-content {
-  display: grid;
-  min-width: 0;
-  gap: 5px;
-}
-
-.component-watch-feed-title {
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.component-watch-feed-title a {
-  color: #213d5b;
-  font-weight: 700;
-}
-
-.component-watch-feed-title strong {
-  color: #3975bd;
-  font-size: 12px;
-}
-
-.component-watch-feed-content p {
-  margin: 0;
-  color: #485c73;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
-.component-watch-feed-content > span {
-  color: #8a96a6;
-  font-size: 11px;
-}
-
-.component-watch-feed-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  color: #3975bd;
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.component-watch-feed-link svg {
-  width: 14px;
-  height: 14px;
 }
 
 .component-library-search-form {
@@ -6956,14 +6880,6 @@ button {
   .component-watch-feed-controls {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .component-watch-feed-item {
-    grid-template-columns: 38px minmax(0, 1fr);
-  }
-
-  .component-watch-feed-link {
-    grid-column: 2;
   }
 
   .component-library-table {
