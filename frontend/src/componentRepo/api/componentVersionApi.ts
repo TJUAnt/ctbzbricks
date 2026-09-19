@@ -43,6 +43,7 @@ type GoComponentVersionParts = {
     contentLocale: 'zh-CN' | 'en-US' | null;
     translationStatus: ComponentVersionPartSummary['translationStatus'];
     geometryStatus: ComponentVersionPartSummary['geometryStatus'];
+    previewModel: ComponentVersionPartSummary['previewModel'];
   }>;
 };
 
@@ -145,6 +146,7 @@ export async function loadComponentVersionParts(versionId: string): Promise<Comp
       contentLocale: item.contentLocale,
       translationStatus: item.translationStatus,
       geometryStatus: item.geometryStatus,
+      previewModel: item.previewModel ?? null,
     })),
   };
 }

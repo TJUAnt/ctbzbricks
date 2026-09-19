@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { Link } from 'react-router-dom';
 import { errorMessage } from '../api/client';
 import { authenticatedRequestJson } from '../api/authenticatedClient';
-import { useAppTranslation } from '../i18n';
+import { resolvedLocale, useAppTranslation } from '../i18n';
 import { formatNumber } from '../i18n/formatters';
 import appConfig from '../app/appConfig';
 import { loadGlbThumbnailBlob, type GlbThumbnailModel } from '../preview/glbThumbnailRenderer';
@@ -14,6 +14,12 @@ type PartSearchItem = {
   name: string;
   imageUrl: string | null;
   previewModel: GlbThumbnailModel | null;
+  logicalSize: {
+    widthStud: number;
+    depthStud: number;
+    heightPlate: number;
+  } | null;
+  logicalSizeDerivationStatus: string;
 };
 
 type RecallColumnCount = 2 | 3 | 4 | 5 | 6;
@@ -29,12 +35,16 @@ type PartSearchResponse = {
 };
 
 type RecallState = {
-  query: string;
+  description: string;
+  partNumber: string;
+  widthStud: string;
+  depthStud: string;
+  heightPlate: string;
   page: number;
   loading: boolean;
   error: string | null;
   response: PartSearchResponse | null;
-  setQuery: (value: string) => void;
+  setFilter: (field: 'description' | 'partNumber' | 'widthStud' | 'depthStud' | 'heightPlate', value: string) => void;
   recall: (page?: number) => Promise<void>;
 };
 
@@ -42,12 +52,16 @@ const rowsPerPage = 4;
 const columnsPerRow: RecallColumnCount = 5;
 
 const useRecallStore = create<RecallState>((set, get) => ({
-  query: '',
+  description: '',
+  partNumber: '',
+  widthStud: '',
+  depthStud: '',
+  heightPlate: '',
   page: 1,
   loading: false,
   error: null,
   response: null,
-  setQuery: (query) => set({ query }),
+  setFilter: (field, value) => set({ [field]: value } as Pick<RecallState, typeof field>),
   recall: async (requestedPage) => {
     const state = get();
     const page = requestedPage ?? state.page;
@@ -57,7 +71,12 @@ const useRecallStore = create<RecallState>((set, get) => ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          query: state.query,
+          description: state.description.trim(),
+          partNumber: state.partNumber.trim(),
+          widthStud: optionalPositiveNumber(state.widthStud),
+          depthStud: optionalPositiveNumber(state.depthStud),
+          heightPlate: optionalPositiveNumber(state.heightPlate),
+          locale: resolvedLocale(),
           page,
           pageSize: columnsPerRow * rowsPerPage,
         }),
@@ -104,20 +123,32 @@ export function PartSearchPage() {
               void state.recall(1);
             }}
           >
-            <div className="flex gap-3">
-              <div className="min-w-0 flex-1">
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
+              <label className="min-w-0 lg:col-span-2">
+                <span className="mb-1 block text-xs font-medium text-zinc-600">{tr('partSearch:description')}</span>
                 <input
                   className="h-11 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-950 focus:ring-1 focus:ring-zinc-950"
-                  aria-label={tr('partSearch:search')}
-                  onChange={(event) => state.setQuery(event.target.value)}
-                  placeholder={tr('partSearch:searchPlaceholder')}
+                  onChange={(event) => state.setFilter('description', event.target.value)}
+                  placeholder={tr('partSearch:descriptionPlaceholder')}
                   type="search"
-                  value={state.query}
+                  value={state.description}
                 />
-              </div>
-
+              </label>
+              <label className="min-w-0">
+                <span className="mb-1 block text-xs font-medium text-zinc-600">{tr('partSearch:partNumber')}</span>
+                <input
+                  className="h-11 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-950 focus:ring-1 focus:ring-zinc-950"
+                  onChange={(event) => state.setFilter('partNumber', event.target.value)}
+                  placeholder={tr('partSearch:partNumberPlaceholder')}
+                  type="search"
+                  value={state.partNumber}
+                />
+              </label>
+              <DimensionInput label={tr('partSearch:widthStud')} onChange={(value) => state.setFilter('widthStud', value)} value={state.widthStud} />
+              <DimensionInput label={tr('partSearch:depthStud')} onChange={(value) => state.setFilter('depthStud', value)} value={state.depthStud} />
+              <DimensionInput label={tr('partSearch:heightPlate')} onChange={(value) => state.setFilter('heightPlate', value)} value={state.heightPlate} />
               <button
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-6 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-11 items-center justify-center gap-2 self-end rounded-lg bg-blue-600 px-6 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 lg:col-span-2"
                 disabled={state.loading}
                 type="submit"
               >
@@ -125,6 +156,7 @@ export function PartSearchPage() {
                 {state.loading ? tr('partSearch:recalling') : tr('partSearch:recall')}
               </button>
             </div>
+            <p className="mt-3 text-xs text-zinc-500">{tr('partSearch:exactSizeHint')}</p>
           </form>
 
           {state.error ? (
@@ -188,6 +220,7 @@ function CandidateCard({
   candidate: PartSearchItem;
   partLibraryVersionId: string | null;
 }) {
+  const tr = useAppTranslation();
   const content = (
     <>
       <div className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-zinc-200">
@@ -201,6 +234,20 @@ function CandidateCard({
         {candidate.name}
       </h2>
       <div className="mt-1 break-all text-xs text-zinc-400">{candidate.ldrawPartNum}</div>
+      {candidate.logicalSize ? (
+        <div className="mt-2 text-xs tabular-nums text-zinc-500">
+          {tr('partSearch:sizeValue', {
+            width: formatNumber(candidate.logicalSize.widthStud),
+            depth: formatNumber(candidate.logicalSize.depthStud),
+            height: formatNumber(candidate.logicalSize.heightPlate),
+          })}
+          <span className="ml-1 text-zinc-400">
+            ({candidate.logicalSizeDerivationStatus === 'derived_exact'
+              ? tr('partSearch:sizeExact')
+              : tr('partSearch:sizeApproximate')})
+          </span>
+        </div>
+      ) : null}
     </>
   );
   const className = "block overflow-hidden rounded-xl border border-zinc-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2";
@@ -215,6 +262,27 @@ function CandidateCard({
       {content}
     </Link>
   );
+}
+
+function DimensionInput({ label, onChange, value }: { label: string; onChange: (value: string) => void; value: string }) {
+  return (
+    <label className="min-w-0">
+      <span className="mb-1 block text-xs font-medium text-zinc-600">{label}</span>
+      <input
+        className="h-11 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-950 focus:ring-1 focus:ring-zinc-950"
+        min="0.1"
+        onChange={(event) => onChange(event.target.value)}
+        step="0.1"
+        type="number"
+        value={value}
+      />
+    </label>
+  );
+}
+
+function optionalPositiveNumber(value: string): number | undefined {
+  const normalized = value.trim();
+  return normalized === '' ? undefined : Number(normalized);
 }
 
 /** CandidateImage 进入视口附近才下载 GLB，并只展示共享渲染器生成的静态图像。 */

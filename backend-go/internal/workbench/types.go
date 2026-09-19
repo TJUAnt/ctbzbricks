@@ -34,11 +34,16 @@ type PartLibraryVersion struct {
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
-// PartSearchRequest 是零件搜索的有界输入；query 同时承载名称/编号关键词和二维或三维精确尺寸片段。
+// PartSearchRequest 是零件搜索的结构化有界输入；各非空条件按 AND 组合，平面尺寸允许旋转，高度保持独立。
 type PartSearchRequest struct {
-	Query    string `json:"query"`
-	Page     int    `json:"page"`
-	PageSize int    `json:"pageSize"`
+	Description string   `json:"description"`
+	PartNumber  string   `json:"partNumber"`
+	WidthStud   *float64 `json:"widthStud"`
+	DepthStud   *float64 `json:"depthStud"`
+	HeightPlate *float64 `json:"heightPlate"`
+	Locale      string   `json:"locale"`
+	Page        int      `json:"page"`
+	PageSize    int      `json:"pageSize"`
 }
 
 // PartSearchPage 固定返回本次查询使用的 Part Library Version，避免 active library 切换后链接指向错误快照。
@@ -234,10 +239,11 @@ type VersionParts struct {
 
 // PartItem 表示一种 Part 的汇总数量、预览几何状态及 locale-aware 官方名称投影。
 type PartItem struct {
-	LDrawPartNum      string  `json:"ldrawPartNum"`
-	Quantity          int     `json:"quantity"`
-	Name              *string `json:"name"`
-	ContentLocale     *string `json:"contentLocale"`
-	TranslationStatus string  `json:"translationStatus"`
-	GeometryStatus    string  `json:"geometryStatus"`
+	LDrawPartNum      string                  `json:"ldrawPartNum"`
+	Quantity          int                     `json:"quantity"`
+	Name              *string                 `json:"name"`
+	ContentLocale     *string                 `json:"contentLocale"`
+	TranslationStatus string                  `json:"translationStatus"`
+	GeometryStatus    string                  `json:"geometryStatus"`
+	PreviewModel      *PartSearchPreviewModel `json:"previewModel"`
 }

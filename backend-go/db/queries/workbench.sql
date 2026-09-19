@@ -545,22 +545,50 @@ WHERE version.id = sqlc.arg(version_id)
   );
 
 -- name: ListLocalizedParts :many
+-- BOM 候选已由冻结 SceneSnapshot 的 distinct Part 编号固定；缩略图只点查当前生成器的 ready/verified Artifact，
+-- 不得从全 Part Library 或 Artifact 表反向驱动，也不得在读取接口中创建预览任务。
 SELECT requested.ldraw_part_num::text AS ldraw_part_num,
-       translation.name AS translated_name,
-       translation.locale AS translated_locale,
-       part.source_name,
-       part.content_locale AS source_locale,
-       COALESCE(geometry.geometry_status, 'missing')::text AS geometry_status
+       localized.translated_name,
+       localized.translated_locale,
+       COALESCE(localized.source_name, '')::text AS source_name,
+       COALESCE(localized.source_locale, '')::text AS source_locale,
+       COALESCE(localized.geometry_status, 'missing')::text AS geometry_status,
+       localized.preview_artifact_id,
+       localized.preview_storage_key,
+       localized.preview_sha256,
+       localized.preview_file_size
 FROM unnest(sqlc.arg(ldraw_part_nums)::text[]) requested(ldraw_part_num)
-LEFT JOIN component_repo.parts part
-  ON part.part_library_version_id = sqlc.arg(part_library_version_id)
- AND part.ldraw_part_num = requested.ldraw_part_num
-LEFT JOIN component_repo.part_geometries geometry
-  ON geometry.part_library_version_id = sqlc.arg(part_library_version_id)
- AND geometry.ldraw_part_num = requested.ldraw_part_num
-LEFT JOIN component_repo.part_translations translation
-  ON translation.part_library_version_id = part.part_library_version_id
- AND translation.ldraw_part_num = part.ldraw_part_num
- AND translation.locale = sqlc.arg(locale)
- AND translation.translation_status = 'reviewed'
+LEFT JOIN LATERAL (
+    SELECT translation.name AS translated_name,
+           translation.locale AS translated_locale,
+           part.source_name,
+           part.content_locale AS source_locale,
+           geometry.geometry_status,
+           preview.artifact_id AS preview_artifact_id,
+           artifact.storage_key AS preview_storage_key,
+           artifact.sha256 AS preview_sha256,
+           artifact.file_size AS preview_file_size
+    FROM component_repo.parts part
+    LEFT JOIN component_repo.part_geometries geometry
+      ON geometry.part_library_version_id = part.part_library_version_id
+     AND geometry.ldraw_part_num = part.ldraw_part_num
+    LEFT JOIN component_repo.part_translations translation
+      ON translation.part_library_version_id = part.part_library_version_id
+     AND translation.ldraw_part_num = part.ldraw_part_num
+     AND translation.locale = sqlc.arg(locale)
+     AND translation.translation_status = 'reviewed'
+    LEFT JOIN component_repo.part_previews preview
+      ON preview.part_library_version_id = part.part_library_version_id
+     AND preview.ldraw_part_num = part.ldraw_part_num
+     AND preview.status = 'ready'
+     AND preview.generator_version = sqlc.arg(generator_version)
+    LEFT JOIN component_repo.artifacts artifact
+      ON artifact.id = preview.artifact_id
+     AND artifact.artifact_type = 'part_preview_glb'
+     AND artifact.verification_status = 'verified'
+     AND artifact.deleted_at IS NULL
+    WHERE part.part_library_version_id = sqlc.arg(part_library_version_id)
+      AND part.ldraw_part_num = requested.ldraw_part_num
+    LIMIT 1
+) localized ON true
 ORDER BY requested.ldraw_part_num;

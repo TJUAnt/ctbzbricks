@@ -5,25 +5,9 @@ import (
 	"testing"
 )
 
-func TestParsePartSearchQuerySeparatesKeywordsAndExactDimensions(t *testing.T) {
-	keywords, dimensions, err := parsePartSearchQuery("Tile, 4x2 1×2×3 tile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(keywords, []string{"tile"}) {
-		t.Fatalf("keywords = %#v", keywords)
-	}
-	if !reflect.DeepEqual(dimensions, [][]float64{{2, 4}, {1, 2, 3}}) {
-		t.Fatalf("dimensions = %#v", dimensions)
-	}
-}
-
-func TestParsePartSearchQueryKeepsNonDimensionFragmentsAsSourceKeywords(t *testing.T) {
-	keywords, dimensions, err := parsePartSearchQuery("3001.dat red-brick")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(keywords, []string{"3001.dat", "red-brick"}) || len(dimensions) != 0 {
-		t.Fatalf("keywords/dimensions = %#v / %#v", keywords, dimensions)
+func TestNormalizePartDescriptionSearchUsesAllUniqueTokens(t *testing.T) {
+	phrase, patterns := normalizePartDescriptionSearch(" Plate，2 x 4 plate% ")
+	if phrase != "plate 2 x 4 plate%" || !reflect.DeepEqual(patterns, []string{"%plate%", "%2%", "%x%", "%4%", `%plate\%%`}) {
+		t.Fatalf("phrase/patterns = %q / %#v", phrase, patterns)
 	}
 }

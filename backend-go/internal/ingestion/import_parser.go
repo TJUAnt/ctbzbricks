@@ -98,12 +98,9 @@ func materializeImport(content []byte, artifactType, originalFilename, parserVer
 	if err != nil {
 		return materializedImport{}, err
 	}
-	serializedDocument, err := json.Marshal(document)
-	if err != nil {
-		return materializedImport{}, errImportParse
-	}
 	// BOM 必须来自场景实例展开结果，不能按模型定义去重或把未被入口引用的定义计入数量。
-	expanded, err := scene.ExpandJSON(serializedDocument)
+	// 解析器已拥有强类型模型，直接交给 scene 展开，避免为同一次导入额外执行完整 Document JSON 编码和解码。
+	expanded, err := scene.Expand(expansionDocument(models, rootModelID))
 	if err != nil {
 		return materializedImport{}, errImportParse
 	}
@@ -363,6 +360,37 @@ func modelToMap(model ldrawModel) map[string]any {
 		"metaLines":   model.MetaLines,
 		"references":  refsToMaps(model.References),
 	}
+}
+
+// expansionDocument 只投影实例展开需要的字段；持久 SceneSnapshot 仍保留完整 parser document。
+func expansionDocument(models []ldrawModel, rootModelID *string) scene.Document {
+	document := scene.Document{Models: make([]scene.Model, 0, len(models))}
+	if rootModelID != nil {
+		document.RootModelID = *rootModelID
+		document.RootInstances = []scene.RootInstance{{
+			InstanceID: "root_0001", TargetModelID: *rootModelID, Transform: scene.IdentityTransform(),
+		}}
+	}
+	for _, model := range models {
+		projected := scene.Model{ModelID: model.ModelID, References: make([]scene.Reference, 0, len(model.References))}
+		for _, reference := range model.References {
+			targetModelID := ""
+			if reference.TargetModelID != nil {
+				targetModelID = *reference.TargetModelID
+			}
+			projected.References = append(projected.References, scene.Reference{
+				InstanceID: reference.InstanceID, ReferenceName: reference.ReferenceName,
+				ReferenceKind: reference.ReferenceKind, TargetModelID: targetModelID,
+				ColorCode: reference.ColorCode,
+				Transform: scene.Transform{
+					Position: scene.Position{X: reference.Position[0], Y: reference.Position[1], Z: reference.Position[2]},
+					Matrix:   append([]float64(nil), reference.Matrix[:]...),
+				},
+			})
+		}
+		document.Models = append(document.Models, projected)
+	}
+	return document
 }
 
 func refsToMaps(references []ldrawReference) []map[string]any {

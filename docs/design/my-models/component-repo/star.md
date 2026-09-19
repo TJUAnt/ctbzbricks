@@ -1,10 +1,12 @@
 # Component Repo Star 详细设计
 
+> 功能需求：[个人仓库收藏视图](../../../requirements/my-models/component-repo/README.md#7-收藏视图) · [Component 详情](../../../requirements/my-models/component-repo/component-detail/README.md)
+>
 > 代码核对日期：2026-09-16
 >
 > 当前阶段：STAR-1～STAR-3 核心能力已实现；产品容量按每 actor 最多 1,000 Star 规划。
 >
-> 接口权威定义：[Component Repo API](../api.md)；产品与容量决策：[Star 方案与路线](../design/lego_design/component_repo_star_design_and_roadmap.md)。
+> 接口权威定义：[Component Repo API](../../../api.md)；产品与容量决策：[Star 方案与路线](./star-design-and-roadmap.md)。
 
 ## 1. 职责和边界
 
@@ -47,11 +49,11 @@ Star 只有当前关系，没有历史 period。Unstar 物理删除 actor 自己
 
 前端代码：
 
-- 列表、乐观状态与筛选：[ComponentRepoPage.tsx](../../frontend/src/componentRepo/ComponentRepoPage.tsx)；公共 Feed：[ComponentPlazaPage.tsx](../../frontend/src/componentRepo/ComponentPlazaPage.tsx)、[ComponentPublicFeedCard.tsx](../../frontend/src/componentRepo/ComponentPublicFeedCard.tsx)
-- 统一可访问按钮：[ComponentStarButton.tsx](../../frontend/src/componentRepo/ComponentStarButton.tsx)；Group 联动与续页：[ComponentGroupControls.tsx](../../frontend/src/componentRepo/ComponentGroupControls.tsx)
-- 详情页按钮组合：[ComponentDetailPage.tsx](../../frontend/src/componentRepo/ComponentDetailPage.tsx)；权限、Star/Watch 乐观更新：[useComponentDetailMutations.ts](../../frontend/src/componentRepo/useComponentDetailMutations.ts)
-- 稳定请求入口：[componentRepoApi.ts](../../frontend/src/componentRepo/componentRepoApi.ts)；目录/Star/Group 实现：[componentCatalogApi.ts](../../frontend/src/componentRepo/api/componentCatalogApi.ts)
-- 路径配置：[appConfig.json](../../frontend/src/app/appConfig.json)
+- 列表、乐观状态与筛选：[ComponentRepoPage.tsx](../../../../frontend/src/componentRepo/ComponentRepoPage.tsx)；公共 Feed：[ComponentPlazaPage.tsx](../../../../frontend/src/componentRepo/ComponentPlazaPage.tsx)、[ComponentPublicFeedCard.tsx](../../../../frontend/src/componentRepo/ComponentPublicFeedCard.tsx)
+- 统一可访问按钮：[ComponentStarButton.tsx](../../../../frontend/src/componentRepo/ComponentStarButton.tsx)；Group 联动与续页：[ComponentGroupControls.tsx](../../../../frontend/src/componentRepo/ComponentGroupControls.tsx)
+- 详情页按钮组合：[ComponentDetailPage.tsx](../../../../frontend/src/componentRepo/ComponentDetailPage.tsx)；权限、Star/Watch 乐观更新：[useComponentDetailMutations.ts](../../../../frontend/src/componentRepo/useComponentDetailMutations.ts)
+- 稳定请求入口：[componentRepoApi.ts](../../../../frontend/src/componentRepo/componentRepoApi.ts)；目录/Star/Group 实现：[componentCatalogApi.ts](../../../../frontend/src/componentRepo/api/componentCatalogApi.ts)
+- 路径配置：[appConfig.json](../../../../frontend/src/app/appConfig.json)
 
 ## 3. HTTP 接口与后端逻辑
 
@@ -95,13 +97,13 @@ Star 只有当前关系，没有历史 period。Unstar 物理删除 actor 自己
 
 后端代码：
 
-- Handler 与 Service：[handler.go](../../backend-go/internal/component/handler.go)、[service.go](../../backend-go/internal/component/service.go)
-- Star SQL：[component_stars.sql](../../backend-go/db/queries/component_stars.sql)
-- Component 展示投影：[components.sql](../../backend-go/db/queries/components.sql)
-- v14 数据模型与旧 subscription 迁移：[00014_component_stars.sql](../../backend-go/db/migrations/00014_component_stars.sql)
-- v17 删除生命周期：[00017_component_relationship_lifecycle.sql](../../backend-go/db/migrations/00017_component_relationship_lifecycle.sql)
-- v18 规范化尺寸：[00018_component_current_logical_size.sql](../../backend-go/db/migrations/00018_component_current_logical_size.sql)
-- v24 共享候选、展示与翻译投影：[00024_component_catalog_projection.sql](../../backend-go/db/migrations/00024_component_catalog_projection.sql)
+- Handler 与 Service：[handler.go](../../../../backend-go/internal/component/handler.go)、[service.go](../../../../backend-go/internal/component/service.go)
+- Star SQL：[component_stars.sql](../../../../backend-go/db/queries/component_stars.sql)
+- Component 展示投影：[components.sql](../../../../backend-go/db/queries/components.sql)
+- v14 数据模型与旧 subscription 迁移：[00014_component_stars.sql](../../../../backend-go/db/migrations/00014_component_stars.sql)
+- v17 删除生命周期：[00017_component_relationship_lifecycle.sql](../../../../backend-go/db/migrations/00017_component_relationship_lifecycle.sql)
+- v18 规范化尺寸：[00018_component_current_logical_size.sql](../../../../backend-go/db/migrations/00018_component_current_logical_size.sql)
+- v24 共享候选、展示与翻译投影：[00024_component_catalog_projection.sql](../../../../backend-go/db/migrations/00024_component_catalog_projection.sql)
 
 ## 4. DTO 投影和跨功能关系
 
@@ -127,14 +129,14 @@ Component 列表与详情都返回 `starredByActor` 和 `starCount`。Star 关�
 
 ## 6. 测试定位
 
-- Service、SQL、并发、删除和列表语义：[service_integration_test.go](../../backend-go/internal/component/service_integration_test.go)
-- HTTP 授权与 DTO：[component_integration_test.go](../../backend-go/internal/httpapi/component_integration_test.go)
-- 百万关系与尺寸计划：[star_size_performance_integration_test.go](../../backend-go/internal/component/star_size_performance_integration_test.go)
-- Schema 与迁移：[schema_integration_test.go](../../backend-go/internal/database/schema_integration_test.go)
-- 前端 API adapter：[componentRepoApi.test.ts](../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
-- 双 locale 可访问名称与原生键盘按钮语义：[ComponentStarButton.test.tsx](../../frontend/src/componentRepo/__tests__/ComponentStarButton.test.tsx)
-- Group 候选完整性与可见续页：[ComponentGroupControls.test.tsx](../../frontend/src/componentRepo/__tests__/ComponentGroupControls.test.tsx)
-- 页面语言壳：[localizedPages.test.tsx](../../frontend/src/i18n/__tests__/localizedPages.test.tsx)
+- Service、SQL、并发、删除和列表语义：[service_integration_test.go](../../../../backend-go/internal/component/service_integration_test.go)
+- HTTP 授权与 DTO：[component_integration_test.go](../../../../backend-go/internal/httpapi/component_integration_test.go)
+- 百万关系与尺寸计划：[star_size_performance_integration_test.go](../../../../backend-go/internal/component/star_size_performance_integration_test.go)
+- Schema 与迁移：[schema_integration_test.go](../../../../backend-go/internal/database/schema_integration_test.go)
+- 前端 API adapter：[componentRepoApi.test.ts](../../../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
+- 双 locale 可访问名称与原生键盘按钮语义：[ComponentStarButton.test.tsx](../../../../frontend/src/componentRepo/__tests__/ComponentStarButton.test.tsx)
+- Group 候选完整性与可见续页：[ComponentGroupControls.test.tsx](../../../../frontend/src/componentRepo/__tests__/ComponentGroupControls.test.tsx)
+- 页面语言壳：[localizedPages.test.tsx](../../../../frontend/src/i18n/__tests__/localizedPages.test.tsx)
 
 2026-09-16 清理将 Star 响应收敛为 `{items,total,page,pageSize,totalPages}`，移除内部 `relationshipTotal`；
 `total/items` 改为一致性只读快照，双语按钮继续复用既有语义 key。资源目录升级为

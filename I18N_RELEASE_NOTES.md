@@ -2,6 +2,21 @@
 
 资源版本只追加、不复用。前端资源内容由 SHA-256 锁定，服务端导出版本写入每个正式产物。
 
+## frontend-2026.09.19.2
+
+- Part Search 将描述、LDraw 编号、宽/深 stud 和高 plate 拆为独立双语筛选项，并补充精确标称尺寸与近似包围盒说明。
+- 搜索结果按请求 locale 选择 reviewed official Part 名称；缺失时回退 LDraw 源描述和源 locale。
+- 内容哈希：`0ba0d1c88b63295f0dbfcaa326eed2028eeb871b917e5135c532c076e7d8625d`
+- `ldrawPartNum`、尺寸数值、`logicalSizeDerivationStatus`、Part Library/Artifact ID 与 API 字段继续保持稳定机器值。
+
+## frontend-2026.09.19.1
+
+- Component 详情新增“图纸源文件”下载和 owner 更多操作可访问名称；删除动作移入低强调菜单。
+- Component Import 状态页新增“文件上传 / 解析与零件清单 / 3D 预览”三阶段双语说明和可访问进度名称。
+- 详情页说明移除暂不展示的连接能力；BOM 缩略图本身为装饰图，不新增需要翻译的领域内容。
+- 内容哈希：`2aef405ea9f8ebe9839bb35def4ed23f6b97210f7635bbed5f855cbd9a06fd33`
+- Task status、progress code/percent、Import/Component/Version/Part/Artifact ID 和下载文件内容继续保持稳定机器值；用户源文件名和 Component 内容保持原文。
+
 ## frontend-2026.09.16.1
 
 - Star 按钮复用既有“收藏组件 / 取消收藏组件”双语语义 key 作为列表、详情和公共 Feed 的可访问名称。

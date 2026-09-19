@@ -1,10 +1,14 @@
 # Component Repo Star：收藏能力落地与迭代路线跟踪文档
 
-> **主要用途**：定义 Component Repo 的 Star（收藏）产品语义、UI、API、数据与授权方案，并作为从现有 Subscription 半成品迁移到正式收藏能力的实施路线和验收台账。  
-> 状态：Implementation in progress / STAR-1、STAR-2 核心闭环、删除生命周期与首轮查询性能修正已验证  
-> 日期：2026-09-04  
-> 当前系统阶段：G8 进行中；Component Repo 已建立 Go-only API/Worker 主链  
-> 配套文档：[`Watch 设计与路线`](./component_repo_watch_design_and_roadmap.md)、[`Fork 设计与路线`](./component_repo_fork_design_and_roadmap.md)、[`docs/api.md`](../../api.md)
+> **主要用途**：定义 Component Repo 的 Star（收藏）产品语义、UI、API、数据与授权方案，并作为从现有 Subscription 半成品迁移到正式收藏能力的实施路线和验收台账。
+>
+> 状态：Implementation in progress / STAR-1、STAR-2 核心闭环、删除生命周期与首轮查询性能修正已验证
+>
+> 日期：2026-09-04
+>
+> 当前系统阶段：G8 进行中；Component Repo 已建立 Go-only API/Worker 主链
+>
+> 配套文档：[`Watch 设计与路线`](./watch-design-and-roadmap.md)、[`Fork 设计与路线`](../../lego_design/component_repo_fork_design_and_roadmap.md)、[`docs/api.md`](../../../api.md)
 
 ## 1. 文档目标
 

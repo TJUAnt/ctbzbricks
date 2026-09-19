@@ -176,9 +176,9 @@ func TestG7WorkbenchContract(t *testing.T) {
 			INSERT INTO component_repo.part_geometries (
 				part_library_version_id, ldraw_part_num, source_relative_path, source_file_hash,
 				bbox_min, bbox_max, logical_width_stud, logical_depth_stud, logical_height_plate,
-				vertex_count, face_count
+				vertex_count, face_count, logical_size_derivation_status
 			) VALUES ($1, $2, $3, $4,
-				ARRAY[0,0,0]::float8[], ARRAY[30,20,0]::float8[], 2, 4, 3, 3, 1)`,
+				ARRAY[0,0,0]::float8[], ARRAY[30,20,0]::float8[], 2, 4, 3, 3, 1, 'derived_exact')`,
 			testUUID(t, fixturePartLibraryID), partNumber, "parts/"+partNumber, hex.EncodeToString(partHash[:])); err != nil {
 			t.Fatal(err)
 		}
@@ -199,12 +199,17 @@ func TestG7WorkbenchContract(t *testing.T) {
 		parts.Items[1].GeometryStatus != "ready" || parts.Items[2].GeometryStatus != "failed" {
 		t.Fatalf("BOM geometry status = %+v error=%v", parts, err)
 	}
-	partSearch, err := service.SearchParts(ctx, PartSearchRequest{Query: "3001 4x2", Page: 1, PageSize: 20})
+	width, depth := 4.0, 2.0
+	partSearch, err := service.SearchParts(ctx, PartSearchRequest{
+		Description: "砖", PartNumber: "3001", WidthStud: &width, DepthStud: &depth,
+		Locale: "zh-CN", Page: 1, PageSize: 20,
+	})
 	if err != nil || partSearch.Total != 1 || len(partSearch.Items) != 1 ||
-		partSearch.Items[0].LDrawPartNum != "3001.dat" || partSearch.PartLibraryVersionID != fixturePartLibraryID {
+		partSearch.Items[0].LDrawPartNum != "3001.dat" || partSearch.PartLibraryVersionID != fixturePartLibraryID ||
+		partSearch.Items[0].Name != "2×4 砖" || partSearch.Items[0].TranslationStatus != "reviewed" {
 		t.Fatalf("Part search = %+v error=%v", partSearch, err)
 	}
-	failedGeometrySearch, err := service.SearchParts(ctx, PartSearchRequest{Query: "3003", Page: 1, PageSize: 20})
+	failedGeometrySearch, err := service.SearchParts(ctx, PartSearchRequest{PartNumber: "3003", Page: 1, PageSize: 20})
 	if err != nil || failedGeometrySearch.Total != 0 || len(failedGeometrySearch.Items) != 0 {
 		t.Fatalf("failed geometry leaked into Part search = %+v error=%v", failedGeometrySearch, err)
 	}
@@ -369,7 +374,13 @@ func TestG7WorkbenchContract(t *testing.T) {
 		t.Fatalf("ready Part preview = %+v error=%v", readyPart, err)
 	}
 	batchSignsBefore := store.batchSigns()
-	searchWithPreview, err := service.SearchParts(ctx, PartSearchRequest{Query: "3001", Page: 1, PageSize: 20})
+	bomWithPreview, err := service.GetVersionParts(ctx, owner, fixtureVersionID, "zh-CN")
+	if err != nil || len(bomWithPreview.Items) != 3 || bomWithPreview.Items[0].PreviewModel == nil ||
+		bomWithPreview.Items[0].PreviewModel.Compression != "meshopt" || store.batchSigns() != batchSignsBefore+1 {
+		t.Fatalf("BOM Part preview projection = %+v batchSigns=%d error=%v", bomWithPreview, store.batchSigns(), err)
+	}
+	batchSignsBefore = store.batchSigns()
+	searchWithPreview, err := service.SearchParts(ctx, PartSearchRequest{PartNumber: "3001", Page: 1, PageSize: 20})
 	if err != nil || len(searchWithPreview.Items) != 1 || searchWithPreview.Items[0].PreviewModel == nil ||
 		searchWithPreview.Items[0].PreviewModel.Compression != "meshopt" || store.batchSigns() != batchSignsBefore+1 {
 		t.Fatalf("Part search preview projection = %+v batchSigns=%d error=%v", searchWithPreview, store.batchSigns(), err)

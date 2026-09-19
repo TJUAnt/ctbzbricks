@@ -7,10 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -513,13 +512,22 @@ func (s *Service) GetActivePartLibraryVersion(ctx context.Context) (PartLibraryV
 	}, nil
 }
 
-var partSearchDimensionPattern = regexp.MustCompile(`^(\d+(?:\.\d+)?)[xX×](\d+(?:\.\d+)?)(?:[xX×](\d+(?:\.\d+)?))?$`)
-
-// SearchParts 在当前 active Studio Part Library 上执行同步、有界且稳定分页的源内容搜索。
-// API 不读取本地 LDraw 文件；名称、几何状态和尺寸都必须由离线 importer 预先持久化。
+// SearchParts 在当前 active Studio Part Library 上执行同步、有界且稳定分页的结构化搜索。
+// exact total 与页面来自同一只读快照；API 不读取本地 LDraw 文件，也不把 bbox 近似尺寸当作精确筛选值。
 func (s *Service) SearchParts(ctx context.Context, input PartSearchRequest) (PartSearchPage, error) {
-	if len([]rune(input.Query)) > 200 {
-		return PartSearchPage{}, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "query"})
+	if len([]rune(input.Description)) > 200 {
+		return PartSearchPage{}, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "description"})
+	}
+	partNumber := strings.ToLower(strings.TrimSpace(input.PartNumber))
+	if len([]rune(partNumber)) > 128 || strings.ContainsAny(partNumber, "/\\") || strings.Contains(partNumber, "..") {
+		return PartSearchPage{}, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "partNumber"})
+	}
+	for field, value := range map[string]*float64{
+		"widthStud": input.WidthStud, "depthStud": input.DepthStud, "heightPlate": input.HeightPlate,
+	} {
+		if value != nil && (*value <= 0 || *value > 1000 || math.IsNaN(*value) || math.IsInf(*value, 0)) {
+			return PartSearchPage{}, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": field})
+		}
 	}
 	page := input.Page
 	if page == 0 {
@@ -532,34 +540,46 @@ func (s *Service) SearchParts(ctx context.Context, input PartSearchRequest) (Par
 	if page < 1 || page > 1_000_000 || pageSize < 1 || pageSize > 200 {
 		return PartSearchPage{}, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "page"})
 	}
-	keywords, dimensions, err := parsePartSearchQuery(input.Query)
+	descriptionPhrase, descriptionPatterns := normalizePartDescriptionSearch(input.Description)
+	locale := normalizeLocale(input.Locale)
+	width, depth, height := optionalDimensionValue(input.WidthStud), optionalDimensionValue(input.DepthStud), optionalDimensionValue(input.HeightPlate)
+
+	// active version、精确总数与当前页必须共享快照，避免切库或重导入时返回互相矛盾的 page metadata。
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return PartSearchPage{}, err
 	}
-	dimensionsJSON, err := json.Marshal(dimensions)
-	if err != nil {
-		return PartSearchPage{}, err
-	}
-	library, err := s.q.GetPreviewActivePartLibraryVersion(ctx)
+	defer tx.Rollback(ctx)
+	q := db.New(tx)
+	library, err := q.GetPreviewActivePartLibraryVersion(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PartSearchPage{}, apierror.New("component_repo.part_library_not_found", http.StatusNotFound, nil)
 	}
 	if err != nil {
 		return PartSearchPage{}, err
 	}
-	count, err := s.q.CountSearchableParts(ctx, db.CountSearchablePartsParams{
-		PartLibraryVersionID: library.ID, Keywords: keywords, Dimensions: dimensionsJSON,
-	})
+	countParams := db.CountSearchablePartsParams{
+		Locale: locale, PartLibraryVersionID: library.ID, DescriptionPatterns: descriptionPatterns, PartNumber: partNumber,
+		HasWidth: input.WidthStud != nil, HasDepth: input.DepthStud != nil, HasHeight: input.HeightPlate != nil,
+		WidthStud: width, DepthStud: depth, HeightPlate: height,
+	}
+	count, err := q.CountSearchableParts(ctx, countParams)
 	if err != nil {
 		return PartSearchPage{}, err
 	}
 	offset := int32((page - 1) * pageSize)
 	previewGeneratorVersion := PartPreviewGeneratorVersion
-	rows, err := s.q.SearchParts(ctx, db.SearchPartsParams{
-		PartLibraryVersionID: library.ID, Keywords: keywords, Dimensions: dimensionsJSON,
-		GeneratorVersion: &previewGeneratorVersion, PageSize: int32(pageSize), PageOffset: offset,
+	rows, err := q.SearchParts(ctx, db.SearchPartsParams{
+		GeneratorVersion: &previewGeneratorVersion,
+		Locale:           locale, PartLibraryVersionID: library.ID, DescriptionPatterns: descriptionPatterns, PartNumber: partNumber,
+		HasWidth: input.WidthStud != nil, HasDepth: input.DepthStud != nil, HasHeight: input.HeightPlate != nil,
+		WidthStud: width, DepthStud: depth, HeightPlate: height, DescriptionPhrase: descriptionPhrase,
+		PageSize: int32(pageSize), PageOffset: offset,
 	})
 	if err != nil {
+		return PartSearchPage{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return PartSearchPage{}, err
 	}
 	type previewCandidate struct {
@@ -572,8 +592,8 @@ func (s *Service) SearchParts(ctx context.Context, input PartSearchRequest) (Par
 	previewKeys := make([]string, 0, len(rows))
 	for _, row := range rows {
 		item := PartSearchItem{
-			LDrawPartNum: row.LdrawPartNum, Name: row.SourceName, ContentLocale: row.ContentLocale,
-			TranslationStatus: "source", GeometryStatus: "ready",
+			LDrawPartNum: row.LdrawPartNum, Name: row.DisplayName, ContentLocale: row.DisplayLocale,
+			TranslationStatus: row.TranslationStatus, GeometryStatus: "ready",
 			LogicalSizeDerivationStatus: row.LogicalSizeDerivationStatus,
 		}
 		if row.LogicalWidthStud != nil && row.LogicalDepthStud != nil && row.LogicalHeightPlate != nil {
@@ -617,47 +637,36 @@ func (s *Service) SearchParts(ctx context.Context, input PartSearchRequest) (Par
 	}, nil
 }
 
-// parsePartSearchQuery 保留旧页面的一框语义：逗号/空格分段，尺寸片段精确匹配，名称关键词至少命中一个。
-func parsePartSearchQuery(value string) ([]string, [][]float64, error) {
+// normalizePartDescriptionSearch 把描述转为稳定小写 LIKE pattern；通配符按普通字符转义，所有 pattern 按 AND 匹配。
+func normalizePartDescriptionSearch(value string) (string, []string) {
 	fragments := strings.FieldsFunc(value, func(r rune) bool {
 		return r == ',' || r == '，' || unicode.IsSpace(r)
 	})
-	keywords := make([]string, 0, len(fragments))
-	dimensions := make([][]float64, 0, len(fragments))
-	seenKeywords := map[string]struct{}{}
-	seenDimensions := map[string]struct{}{}
+	tokens := make([]string, 0, len(fragments))
+	seen := map[string]struct{}{}
 	for _, fragment := range fragments {
-		fragment = strings.TrimSpace(fragment)
-		if match := partSearchDimensionPattern.FindStringSubmatch(fragment); match != nil {
-			values := make([]float64, 0, 3)
-			for _, raw := range match[1:] {
-				if raw == "" {
-					continue
-				}
-				parsed, parseErr := strconv.ParseFloat(raw, 64)
-				if parseErr != nil {
-					return nil, nil, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "query"})
-				}
-				values = append(values, parsed)
-			}
-			sort.Float64s(values)
-			key := fmt.Sprint(values)
-			if _, exists := seenDimensions[key]; !exists {
-				seenDimensions[key] = struct{}{}
-				dimensions = append(dimensions, values)
-			}
+		token := strings.ToLower(strings.TrimSpace(fragment))
+		if token == "" {
 			continue
 		}
-		keyword := strings.ToLower(fragment)
-		if keyword == "" {
-			continue
-		}
-		if _, exists := seenKeywords[keyword]; !exists {
-			seenKeywords[keyword] = struct{}{}
-			keywords = append(keywords, keyword)
+		if _, exists := seen[token]; !exists {
+			seen[token] = struct{}{}
+			tokens = append(tokens, token)
 		}
 	}
-	return keywords, dimensions, nil
+	patterns := make([]string, 0, len(tokens))
+	escapeLike := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	for _, token := range tokens {
+		patterns = append(patterns, "%"+escapeLike.Replace(token)+"%")
+	}
+	return strings.Join(tokens, " "), patterns
+}
+
+func optionalDimensionValue(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func (s *Service) GetPartPreview(ctx context.Context, partLibraryVersionID, partNumber, locale string) (PartPreview, error) {
@@ -822,7 +831,11 @@ func (s *Service) GetVersionParts(ctx context.Context, actor pgtype.UUID, versio
 	sort.Strings(refs)
 	localized := map[string]db.ListLocalizedPartsRow{}
 	if row.PartLibraryVersionID.Valid && len(refs) > 0 {
-		rows, queryErr := s.q.ListLocalizedParts(ctx, db.ListLocalizedPartsParams{LdrawPartNums: refs, PartLibraryVersionID: row.PartLibraryVersionID, Locale: normalizeLocale(locale)})
+		previewGeneratorVersion := PartPreviewGeneratorVersion
+		rows, queryErr := s.q.ListLocalizedParts(ctx, db.ListLocalizedPartsParams{
+			LdrawPartNums: refs, PartLibraryVersionID: row.PartLibraryVersionID,
+			Locale: normalizeLocale(locale), GeneratorVersion: &previewGeneratorVersion,
+		})
 		if queryErr != nil {
 			return VersionParts{}, queryErr
 		}
@@ -830,10 +843,17 @@ func (s *Service) GetVersionParts(ctx context.Context, actor pgtype.UUID, versio
 			localized[part.LdrawPartNum] = part
 		}
 	}
+	type previewCandidate struct {
+		itemIndex int
+		key       string
+		model     PartSearchPreviewModel
+	}
 	result := VersionParts{
 		VersionID: versionID, PartLibraryVersionID: uuidutil.NullableString(row.PartLibraryVersionID),
 		Items: make([]PartItem, 0, len(refs)),
 	}
+	previewCandidates := make([]previewCandidate, 0, len(refs))
+	previewKeys := make([]string, 0, len(refs))
 	for _, ref := range refs {
 		quantity := bom[ref]
 		if quantity == 0 {
@@ -849,12 +869,36 @@ func (s *Service) GetVersionParts(ctx context.Context, actor pgtype.UUID, versio
 			item.GeometryStatus = part.GeometryStatus
 			if part.TranslatedName != nil {
 				item.Name, item.ContentLocale, item.TranslationStatus = part.TranslatedName, part.TranslatedLocale, "reviewed"
-			} else if part.SourceName != nil {
-				item.Name, item.ContentLocale, item.TranslationStatus = part.SourceName, part.SourceLocale, "fallback"
+			} else if part.SourceName != "" {
+				sourceName, sourceLocale := part.SourceName, part.SourceLocale
+				item.Name, item.ContentLocale, item.TranslationStatus = &sourceName, &sourceLocale, "fallback"
+			}
+			if part.PreviewArtifactID.Valid && part.PreviewStorageKey != nil &&
+				part.PreviewSha256 != nil && part.PreviewFileSize != nil {
+				previewCandidates = append(previewCandidates, previewCandidate{
+					itemIndex: len(result.Items), key: *part.PreviewStorageKey,
+					model: PartSearchPreviewModel{
+						ArtifactID: uuidutil.String(part.PreviewArtifactID), Format: "glb", Compression: "meshopt",
+						SHA256: *part.PreviewSha256, ByteLength: *part.PreviewFileSize,
+					},
+				})
+				previewKeys = append(previewKeys, *part.PreviewStorageKey)
 			}
 		}
 		result.PartCount += quantity
 		result.Items = append(result.Items, item)
+	}
+	if s.store != nil && len(previewKeys) > 0 {
+		// 同一 BOM 的签名使用一次批量请求；任一 Storage 故障只降级缩略图，不影响权威 BOM 文本和数量。
+		if signedURLs, signErr := s.store.SignDownloads(ctx, previewKeys, s.signedURLTTL); signErr == nil {
+			for _, candidate := range previewCandidates {
+				if signedURL := signedURLs[candidate.key]; signedURL != "" {
+					model := candidate.model
+					model.URL = signedURL
+					result.Items[candidate.itemIndex].PreviewModel = &model
+				}
+			}
+		}
 	}
 	return result, nil
 }

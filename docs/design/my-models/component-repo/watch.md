@@ -1,10 +1,12 @@
 # Component Repo Watch 详细设计
 
+> 功能需求：[订阅管理](../../../requirements/my-models/component-repo/watch-management/README.md) · [Component 详情](../../../requirements/my-models/component-repo/component-detail/README.md)
+>
 > 代码核对日期：2026-09-16
 >
 > 当前阶段：WATCH-1～WATCH-4 已在仓库完成；WATCH-CLEAN-01～05 均已关闭。个人订阅 Feed 已与公共 Feed 共用大图事件卡片，管理页保持独立 Component Repo 订阅列表。真实 Supabase 与仓库 schema head 均为 v24；Go API/前端发布、浏览器与生产查询计划验收待执行。
 >
-> 接口权威定义：[Component Repo API](../api.md)；产品、容量与路线决策：[Watch 方案与路线](../design/lego_design/component_repo_watch_design_and_roadmap.md)。
+> 接口权威定义：[Component Repo API](../../../api.md)；产品、容量与路线决策：[Watch 方案与路线](./watch-design-and-roadmap.md)。
 
 ## 1. 职责和边界
 
@@ -32,14 +34,14 @@ Watch 是“当前用户订阅某个 Component 的版本发布更新”。它和
 
 相关代码：
 
-- 个人订阅 Feed：[ComponentWatchFeedPanel.tsx](../../frontend/src/componentRepo/ComponentWatchFeedPanel.tsx)
-- Watch 管理页：[ComponentWatchListPage.tsx](../../frontend/src/componentRepo/ComponentWatchListPage.tsx)
-- 组件广场页签：[ComponentPlazaPage.tsx](../../frontend/src/componentRepo/ComponentPlazaPage.tsx)、[组件广场详细设计](component_plaza.md)
-- 共享事件卡片：[ComponentPublicFeedCard.tsx](../../frontend/src/componentRepo/ComponentPublicFeedCard.tsx)、[ComponentStarButton.tsx](../../frontend/src/componentRepo/ComponentStarButton.tsx)、[componentPublicFeed.ts](../../frontend/src/componentRepo/componentPublicFeed.ts)；Star 操作复用 typed 双语可访问名称和原生键盘按钮语义
-- 详情页入口：[ComponentDetailPage.tsx](../../frontend/src/componentRepo/ComponentDetailPage.tsx)
-- DTO 和请求适配：[componentRepoApi.ts](../../frontend/src/componentRepo/componentRepoApi.ts)
-- 路由和路径：[main.tsx](../../frontend/src/main.tsx)、[appConfig.json](../../frontend/src/app/appConfig.json)
-- 双语言资源：[zh-CN/componentRepo.json](../../frontend/src/i18n/resources/zh-CN/componentRepo.json)、[en-US/componentRepo.json](../../frontend/src/i18n/resources/en-US/componentRepo.json)
+- 个人订阅 Feed：[ComponentWatchFeedPanel.tsx](../../../../frontend/src/componentRepo/ComponentWatchFeedPanel.tsx)
+- Watch 管理页：[ComponentWatchListPage.tsx](../../../../frontend/src/componentRepo/ComponentWatchListPage.tsx)
+- 组件广场页签：[ComponentPlazaPage.tsx](../../../../frontend/src/componentRepo/ComponentPlazaPage.tsx)、[组件广场详细设计](../../model-plaza/model-plaza/README.md)
+- 共享事件卡片：[ComponentPublicFeedCard.tsx](../../../../frontend/src/componentRepo/ComponentPublicFeedCard.tsx)、[ComponentStarButton.tsx](../../../../frontend/src/componentRepo/ComponentStarButton.tsx)、[componentPublicFeed.ts](../../../../frontend/src/componentRepo/componentPublicFeed.ts)；Star 操作复用 typed 双语可访问名称和原生键盘按钮语义
+- 详情页入口：[ComponentDetailPage.tsx](../../../../frontend/src/componentRepo/ComponentDetailPage.tsx)
+- DTO 和请求适配：[componentRepoApi.ts](../../../../frontend/src/componentRepo/componentRepoApi.ts)
+- 路由和路径：[main.tsx](../../../../frontend/src/main.tsx)、[appConfig.json](../../../../frontend/src/app/appConfig.json)
+- 双语言资源：[zh-CN/componentRepo.json](../../../../frontend/src/i18n/resources/zh-CN/componentRepo.json)、[en-US/componentRepo.json](../../../../frontend/src/i18n/resources/en-US/componentRepo.json)
 
 ## 3. HTTP 接口与后端执行
 
@@ -101,13 +103,13 @@ Version/Revision/Release Note。`component` 是当前展示投影，事件版本
 
 后端代码：
 
-- 跨关系活动锁：[component_activity.sql](../../backend-go/db/queries/component_activity.sql)、[componentactivity/lock.go](../../backend-go/internal/componentactivity/lock.go)
-- 路由与参数：[componentwatch/handler.go](../../backend-go/internal/componentwatch/handler.go)
-- 业务服务与 cursor：[componentwatch/service.go](../../backend-go/internal/componentwatch/service.go)
-- 请求/响应模型：[componentwatch/types.go](../../backend-go/internal/componentwatch/types.go)
-- Watch 与 Feed SQL：[component_watches.sql](../../backend-go/db/queries/component_watches.sql)
-- 共享 locale 契约：[localeutil/locale.go](../../backend-go/internal/localeutil/locale.go)
-- sqlc 生成代码：[component_watches.sql.go](../../backend-go/db/generated/component_watches.sql.go)（禁止手工修改）
+- 跨关系活动锁：[component_activity.sql](../../../../backend-go/db/queries/component_activity.sql)、[componentactivity/lock.go](../../../../backend-go/internal/componentactivity/lock.go)
+- 路由与参数：[componentwatch/handler.go](../../../../backend-go/internal/componentwatch/handler.go)
+- 业务服务与 cursor：[componentwatch/service.go](../../../../backend-go/internal/componentwatch/service.go)
+- 请求/响应模型：[componentwatch/types.go](../../../../backend-go/internal/componentwatch/types.go)
+- Watch 与 Feed SQL：[component_watches.sql](../../../../backend-go/db/queries/component_watches.sql)
+- 共享 locale 契约：[localeutil/locale.go](../../../../backend-go/internal/localeutil/locale.go)
+- sqlc 生成代码：[component_watches.sql.go](../../../../backend-go/db/generated/component_watches.sql.go)（禁止手工修改）
 
 ## 4. 发布事件生产
 
@@ -121,11 +123,11 @@ Version、发布目标、刷新 current version，最后插入唯一 `component.
 
 代码位置：
 
-- 发布事务：[component/service.go](../../backend-go/internal/component/service.go)
-- 事件 SQL：[component_domain_events.sql](../../backend-go/db/queries/component_domain_events.sql)
-- v16 事件表：[00016_component_domain_events.sql](../../backend-go/db/migrations/00016_component_domain_events.sql)
-- v20 Feed 索引：[00020_component_watch_feed.sql](../../backend-go/db/migrations/00020_component_watch_feed.sql)
-- v21 official actor 约束：[00021_component_official_publish_events.sql](../../backend-go/db/migrations/00021_component_official_publish_events.sql)
+- 发布事务：[component/service.go](../../../../backend-go/internal/component/service.go)
+- 事件 SQL：[component_domain_events.sql](../../../../backend-go/db/queries/component_domain_events.sql)
+- v16 事件表：[00016_component_domain_events.sql](../../../../backend-go/db/migrations/00016_component_domain_events.sql)
+- v20 Feed 索引：[00020_component_watch_feed.sql](../../../../backend-go/db/migrations/00020_component_watch_feed.sql)
+- v21 official actor 约束：[00021_component_official_publish_events.sql](../../../../backend-go/db/migrations/00021_component_official_publish_events.sql)
 
 ## 5. Component 删除联动
 
@@ -134,8 +136,8 @@ Version、发布目标、刷新 current version，最后插入唯一 `component.
 5,000 条为一批关闭 active Watch，并保留 closed history。该任务同时物理删除 Star，但不删除 Version、Import、
 Artifact 或 Storage 历史。
 
-相关代码：[component/service.go](../../backend-go/internal/component/service.go)、
-[worker](../../backend-go/internal/worker)、[tasks.sql](../../backend-go/db/queries/tasks.sql)。
+相关代码：[component/service.go](../../../../backend-go/internal/component/service.go)、
+[worker](../../../../backend-go/internal/worker)、[tasks.sql](../../../../backend-go/db/queries/tasks.sql)。
 
 ## 6. 数据、不变量与索引
 
@@ -177,20 +179,20 @@ active、百万 closed 与 92,700 条 Feed entry 的首屏/宽窗口/90 天/深 
 
 真实 Supabase PostgreSQL 17.6 已从 v23 升至 v24 并验证重复 `up`；22 个 Component、23 个 Version 守恒，
 Version 资格回填差异、queued/running task、非终态 Feed entry、非法终态和无效索引均为 0。迁移前恢复包及
-SHA-256 清单见[组件广场验证证据](component_plaza.md#6-验证证据)。数据库部署不代表新的 Go API/前端已经发布，
+SHA-256 清单见[组件广场验证证据](../../model-plaza/model-plaza/README.md#6-验证证据)。数据库部署不代表新的 Go API/前端已经发布，
 也不代表 Watch 浏览器流程或完整生产查询计划已经验收。部署后用当前权威 Watch Feed SQL 对空 actor 执行生产
 `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)`，查询成功且从 `component_watch_periods_actor_active_time_idx` 开始，
 其他业务节点 `never executed`，执行 1.786 ms；它排除了 v24 列/类型造成的新 `PrepareError`，但不能替代非空 actor
 和深 cursor 的生产样本。
 
-- Go Service/cursor 单测：[service_test.go](../../backend-go/internal/componentwatch/service_test.go)
-- Component、发布、并发、分页和删除集成：[service_integration_test.go](../../backend-go/internal/component/service_integration_test.go)
-- HTTP 契约：[component_integration_test.go](../../backend-go/internal/httpapi/component_integration_test.go)
-- Schema/触发器：[schema_integration_test.go](../../backend-go/internal/database/schema_integration_test.go)
-- 百万关系计划：[watch_list_performance_integration_test.go](../../backend-go/internal/component/watch_list_performance_integration_test.go)
-- 前端状态、窗口与广场边界：[ComponentWatchListPage.test.ts](../../frontend/src/componentRepo/__tests__/ComponentWatchListPage.test.ts)、[ComponentPlazaBoundary.test.ts](../../frontend/src/componentRepo/__tests__/ComponentPlazaBoundary.test.ts)
-- API adapter：[componentRepoApi.test.ts](../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
-- 双语言页面：[localizedPages.test.tsx](../../frontend/src/i18n/__tests__/localizedPages.test.tsx)
+- Go Service/cursor 单测：[service_test.go](../../../../backend-go/internal/componentwatch/service_test.go)
+- Component、发布、并发、分页和删除集成：[service_integration_test.go](../../../../backend-go/internal/component/service_integration_test.go)
+- HTTP 契约：[component_integration_test.go](../../../../backend-go/internal/httpapi/component_integration_test.go)
+- Schema/触发器：[schema_integration_test.go](../../../../backend-go/internal/database/schema_integration_test.go)
+- 百万关系计划：[watch_list_performance_integration_test.go](../../../../backend-go/internal/component/watch_list_performance_integration_test.go)
+- 前端状态、窗口与广场边界：[ComponentWatchListPage.test.ts](../../../../frontend/src/componentRepo/__tests__/ComponentWatchListPage.test.ts)、[ComponentPlazaBoundary.test.ts](../../../../frontend/src/componentRepo/__tests__/ComponentPlazaBoundary.test.ts)
+- API adapter：[componentRepoApi.test.ts](../../../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
+- 双语言页面：[localizedPages.test.tsx](../../../../frontend/src/i18n/__tests__/localizedPages.test.tsx)
 
 ## 9. 已发现的偏移与清理结果
 

@@ -1,6 +1,6 @@
 # Studio Part Library 基准路线图与数据来源依据
 
-> 状态：S1/S2/S5 与 active 切换已执行；S3/S4 和最终数据清理待完成
+> 状态：S1/S2/S5 与 active 切换已执行；S4 标准 Brick/Plate/Tile 基线已实现，S3、S4 扩展覆盖和最终数据清理待完成
 > 日期：2026-08-15  
 > 所属阶段：G8 后续 Part Library / Part preview 数据基准收口  
 > 迁移原则：[go_backend_migration_principles.md](./go_backend_migration_principles.md)  
@@ -90,7 +90,7 @@ source_system              bricklink_studio_ldraw
 source_root                /Applications/Studio 2.0/ldraw（仅开发环境记录）
 source_snapshot_label      Studio 2.0 local install snapshot / captured date
 source_manifest_sha256     对 manifest 内容计算的 hash
-importer_version           studio-part-library-importer-v3
+importer_version           studio-part-library-importer-v4
 connector_parser_version  studio-connectivity-v0-parser-v1
 geometry_generator_version part-preview-ldraw-glb-v1 或后续版本
 captured_at                timestamptz
@@ -383,6 +383,12 @@ API/Worker + Storage 完成真实 GLB Artifact materialize。当前状态以本�
 - preview 不因 logical size 缺失而失败；
 - 搜索/推荐如果使用 logical size，必须显式过滤 status 或降低 approximate 权重。
 
+2026-09-19 已完成第一阶段可解释基线：importer v4 将 LDraw header 描述规范化，并只把描述直接符合
+`Brick W x D`、`Plate W x D`、`Tile W x D` 的标准件写为 `derived_exact`；Brick 高度固定为 3 plate，
+Plate/Tile 高度固定为 1 plate。其他 ready Part 继续保留 bbox 换算值并标记 `derived_approximate`，Part Search
+只允许前者命中独立宽/深/高精确筛选。该实现关闭了“近似 bbox 被当成标称尺寸”的语义偏移，但不表示 slope、
+modified、round、minifig、sticker 等分类规则已经完成；扩展覆盖继续作为 S4 未完成范围。
+
 ### S5：connectivity 与 collider 接入
 
 目标：把 Studio connector/collider 作为下一阶段独立能力接入。
@@ -483,6 +489,13 @@ collider clearance/raycast 算法不属于本次 S5：未来应把压缩 collide
 
 ## 7. 当前未解决问题
 
+- importer v4 和 Goose v25 尚未写入真实 active Part Library；执行前必须确认精确数据库目标，并在重导入后核对
+  `3001.dat`、`3023.dat`、tile 样例的描述、`derived_exact` 尺寸和搜索结果。
+- S4 当前只覆盖描述可直接解释的标准 Brick/Plate/Tile；modified、slope、round、hinge、minifig、sticker 等
+  仍为 approximate 或后续应转 not-applicable，不能进入精确尺寸筛选。
+- Part Search 当前按 24,426 条 active snapshot 保留页码。PostgreSQL 14.17、`work_mem=4MB` 的最深页本地计划
+  约 54.703 ms，并产生约 3.6 MB external merge；按产品决定暂不做 100,000 候选排序/keyset 优化，单版本接近
+  100,000、生产 temp file/延迟异常或产品批准改变交互时重新开启。
 - 后续 Studio snapshot 更新仍必须由保留脚本确认精确数据库目标；同一 active/ready manifest
   默认 no-op，强制重建需显式设置 `FORCE_STUDIO_REIMPORT=1`。
 - 精确 collider clearance/raycast 算法尚未实现；S5 只完成数据接入、版本冻结和可用性标记。

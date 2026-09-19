@@ -18,7 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const StudioImporterVersion = "studio-part-library-importer-v3"
+const StudioImporterVersion = "studio-part-library-importer-v4"
 
 const (
 	ColliderStorageMetadataOnly = "metadata-only"
@@ -237,9 +237,8 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 			}
 		} else {
 			ready++
-			width := roundNonNegative((stats.BBoxMax[0] - stats.BBoxMin[0]) / 20)
-			depth := roundNonNegative((stats.BBoxMax[2] - stats.BBoxMin[2]) / 20)
-			height := roundNonNegative((stats.BBoxMax[1] - stats.BBoxMin[1]) / 8)
+			// 精确搜索只能使用可解释的标称规则；任意复杂零件的几何包围盒继续标记为近似值。
+			width, depth, height, derivationStatus := deriveLogicalSize(row.SourceName, stats)
 			row.Geometry = importGeometryRow{
 				SourceRelativePath: stats.SourceRelativePath,
 				SourceSHA256:       stats.SourceSHA256,
@@ -251,7 +250,7 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 				VertexCount:        stats.VertexCount,
 				FaceCount:          stats.FaceCount,
 				Status:             "ready",
-				DerivationStatus:   "derived_approximate",
+				DerivationStatus:   derivationStatus,
 			}
 		}
 		rows = append(rows, row)
@@ -342,6 +341,7 @@ func importRows(ctx context.Context, tx pgx.Tx, manifest Manifest, libraryID, cr
 		"canonicalPartCount":    len(manifest.CanonicalTopLevelParts),
 		"studioImporterVersion": StudioImporterVersion,
 		"geometryMode":          "ldraw_recursive_bbox_v1",
+		"logicalSizeAlgorithm":  LogicalSizeAlgorithmVersion,
 		"previewReady":          result.PreviewReady,
 		"relationReady":         result.RelationReady,
 		"connectorFileCount":    result.ConnectorFiles,

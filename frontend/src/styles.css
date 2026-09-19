@@ -3520,26 +3520,112 @@ button {
 }
 
 .component-import-processing-panel {
-  min-height: 220px;
-  place-items: center;
-  align-content: center;
-  text-align: center;
+  max-width: 760px;
+  min-height: 300px;
+  margin: 0 auto;
+  align-content: start;
+  gap: 22px;
 }
 
-.component-import-processing-panel > svg {
+.component-import-processing-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.component-import-processing-heading > svg {
   width: 34px;
   height: 34px;
   color: #1f7a5a;
 }
 
-.component-import-processing-panel > strong {
+.component-import-processing-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.component-import-processing-heading strong {
   color: #153d32;
   font-size: 20px;
 }
 
-.component-import-processing-panel > span:not(.component-repo-status) {
+.component-import-processing-heading span:not(.component-repo-status) {
   color: #65716b;
   font-size: 13px;
+}
+
+.component-import-durable-progress {
+  display: grid;
+  gap: 12px;
+}
+
+.component-import-progress-meta {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  color: #65716b;
+  font-size: 12px;
+}
+
+.component-import-progress-meta strong {
+  color: #153d32;
+  font-size: 16px;
+}
+
+.component-import-stage-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.component-import-stage-list li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  border: 1px solid #e2e8e4;
+  border-radius: 10px;
+  background: #f8faf9;
+  padding: 12px;
+}
+
+.component-import-stage-list li > svg {
+  width: 19px;
+  height: 19px;
+  color: #9aa6a0;
+}
+
+.component-import-stage-list li.is-complete > svg,
+.component-import-stage-list li.is-active > svg {
+  color: #1f7a5a;
+}
+
+.component-import-stage-list li.is-active {
+  border-color: rgba(31, 122, 90, 0.3);
+  background: #f1f8f5;
+}
+
+.component-import-stage-list li > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.component-import-stage-list strong {
+  color: #243b31;
+  font-size: 13px;
+}
+
+.component-import-stage-list small {
+  color: #718078;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .component-candidate-part-list {
@@ -6332,6 +6418,21 @@ button {
   justify-self: end;
 }
 
+.component-detail-owner-actions > summary {
+  width: 38px;
+  height: 38px;
+  border-color: rgba(23, 32, 27, 0.14);
+  background: #fff;
+  color: #153d32;
+}
+
+.component-repo-actions .component-detail-owner-actions .component-version-delete-action {
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  color: #bb3232;
+}
+
 .component-version-actions > summary {
   display: grid;
   width: 32px;
@@ -6617,6 +6718,10 @@ button {
 }
 
 @media (max-width: 860px) {
+  .component-import-stage-list {
+    grid-template-columns: 1fr;
+  }
+
   .workbench {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto minmax(0, 1fr);

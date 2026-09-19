@@ -429,7 +429,15 @@ describe('Component Repo Go API adapter', () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
       versionId: 'version-1', partLibraryVersionId: 'library-1', partCount: 2,
       items: [
-        { ldrawPartNum: '3001.dat', quantity: 1, name: 'Brick', contentLocale: 'en-US', translationStatus: 'fallback', geometryStatus: 'ready' },
+        {
+          ldrawPartNum: '3001.dat', quantity: 1, name: 'Brick', contentLocale: 'en-US',
+          translationStatus: 'fallback', geometryStatus: 'ready',
+          previewModel: {
+            artifactId: 'part-preview-1', format: 'glb', compression: 'meshopt',
+            url: `${String.fromCharCode(104, 116, 116, 112, 115, 58)}//storage.example/part.glb`,
+            sha256: 'a'.repeat(64), byteLength: 2048,
+          },
+        },
         { ldrawPartNum: 'missing.dat', quantity: 1, name: null, contentLocale: null, translationStatus: 'missing', geometryStatus: 'missing' },
       ],
     }));
@@ -441,6 +449,8 @@ describe('Component Repo Go API adapter', () => {
       ['3001.dat', 'ready'],
       ['missing.dat', 'missing'],
     ]);
+    expect(response.parts[0]?.previewModel).toMatchObject({ artifactId: 'part-preview-1', compression: 'meshopt' });
+    expect(response.parts[1]?.previewModel).toBeNull();
   });
 
   it('rejects a pending preview without asking the API to materialize it', async () => {

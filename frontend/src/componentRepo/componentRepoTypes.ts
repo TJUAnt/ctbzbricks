@@ -312,6 +312,7 @@ export type ComponentVersionPartSummary = {
   translationStatus: 'source' | 'draft' | 'reviewed' | 'rejected' | 'fallback' | null;
   geometryStatus: 'ready' | 'failed' | 'missing';
   quantity: number;
+  previewModel: ComponentPreviewResponse['model'] | null;
 };
 
 export type ComponentVersionPartsResponse = {

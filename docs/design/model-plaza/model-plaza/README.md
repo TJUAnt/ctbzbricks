@@ -1,5 +1,7 @@
 # 组件广场详细设计
 
+> 功能需求：[模型广场 / 模型广场](../../../requirements/model-plaza/model-plaza/README.md)
+>
 > 代码核对日期：2026-09-16
 >
 > 当前阶段：广场壳层已从个人仓库页面拆出，公共与个人订阅页签共用大图事件卡片；Cycles 优先/Go raster fallback 派生图片与 Docker 生产封装已在仓库实现。真实 Supabase 与仓库 schema head 均为 v24；Go API/前端发布、renderer v4 / Component Preview v6 的服务器运行与浏览器验收待统一执行。
@@ -10,8 +12,8 @@
 
 | 页签 | 地址 | 成员资格 | 详细领域设计 |
 |---|---|---|---|
-| 公共 | `/model-plaza` | 全部当前公开可见的用户 Component 发布事件，不考虑当前 actor 是否 Watch | [公共 Feed](public_feed.md) |
-| 个人订阅 | `/model-plaza?tab=subscriptions` | 当前 actor active Watch 对应的窗口内发布事件 | [Watch](watch.md) |
+| 公共 | `/model-plaza` | 全部当前公开可见的用户 Component 发布事件，不考虑当前 actor 是否 Watch | [公共 Feed](../../../component_repo/public_feed.md) |
+| 个人订阅 | `/model-plaza?tab=subscriptions` | 当前 actor active Watch 对应的窗口内发布事件 | [Watch](../../my-models/component-repo/watch.md) |
 
 未知或缺失的 `tab` 参数回到公共页签。页签使用 URL 而非只存在于 React 内存的状态，因此刷新、浏览器前进后退和分享链接都能恢复相同页面。
 
@@ -24,7 +26,7 @@
 `ComponentPlazaPage` 独立识别默认页签并请求 `listComponentPublicFeed`，不创建个人仓库的 Group、上传、Version
 或收藏列表状态。事件按游标追加，由
 `ComponentPublicFeedCard` 展示发布人、事件版本的 Worker 3:2 派生图片、Component 描述和发布说明。图片由 Go 持久任务优先调用 Blender 4.1 Cycles 离线生成，外部渲染失败时使用 Go raster 快速 fallback；pending 事件本次不返回，ready/fallback 终态都进入流。详细准入、渲染、Star 和
-空状态见[公共 Feed 设计](public_feed.md)。
+空状态见[公共 Feed 设计](../../../component_repo/public_feed.md)。
 卡片 Star 操作复用 `ComponentStarButton`，以现有 typed Star/Unstar key 提供随状态变化的双语 `aria-label`，
 并保留原生按钮的 Enter/Space 键盘语义。
 
@@ -100,7 +102,7 @@
 ## 6. 验证证据
 
 2026-09-12 已验证前端 typed i18n、事件投影、ready 图片/fallback 占位和生产构建；v23 隔离 PostgreSQL
-迁移往返、任务终态触发器及 100,000 事件/entry 查询计划通过。详细计时见[公共 Feed 设计](public_feed.md)。
+迁移往返、任务终态触发器及 100,000 事件/entry 查询计划通过。详细计时见[公共 Feed 设计](../../../component_repo/public_feed.md)。
 个人订阅页签继续复用 Watch 的 1,000 active/actor 与 1,000,000 closed period 计划证据。2026-09-12 真实
 Supabase 从 v20 升级到 v23，2 条已有用户发布事件均回填为 fallback；真实 Go API readiness 和公共 Feed
 请求返回 200。2026-09-13 同一黄色跑车 v4 GLB 已由 Blender 4.1 Cycles 完成 1200×800/128 samples

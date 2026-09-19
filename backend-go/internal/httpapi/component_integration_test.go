@@ -50,9 +50,9 @@ func TestPartSearchHTTPContract(t *testing.T) {
 		INSERT INTO component_repo.part_geometries
 			(part_library_version_id,ldraw_part_num,source_relative_path,source_file_hash,
 			 bbox_min,bbox_max,logical_width_stud,logical_depth_stud,logical_height_plate,
-			 vertex_count,face_count)
+			 vertex_count,face_count,logical_size_derivation_status)
 		VALUES ('31000000-0000-0000-0000-000000000001','3001.dat','parts/3001.dat',repeat('b',64),
-			ARRAY[0,0,0]::float8[],ARRAY[40,24,80]::float8[],2,4,3,3,1)`); err != nil {
+			ARRAY[0,0,0]::float8[],ARRAY[40,24,80]::float8[],2,4,3,3,1,'derived_exact')`); err != nil {
 		t.Fatalf("seed Part search fixture: %v", err)
 	}
 
@@ -61,10 +61,10 @@ func TestPartSearchHTTPContract(t *testing.T) {
 	router := NewApplicationRouter(cfg, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	unauthorized := httptest.NewRecorder()
-	router.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"query":"3001"}`)))
+	router.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"partNumber":"3001"}`)))
 	assertPublicError(t, unauthorized, http.StatusUnauthorized, "auth.authentication_required")
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"query":"3001 4x2","page":1,"pageSize":20}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"description":"brick","partNumber":"3001","widthStud":4,"depthStud":2,"heightPlate":3,"locale":"en-US","page":1,"pageSize":20}`))
 	request.Header.Set("Authorization", "Bearer "+integrationToken(t, "31000000-0000-0000-0000-000000000003"))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -74,7 +74,7 @@ func TestPartSearchHTTPContract(t *testing.T) {
 		t.Fatalf("Part search status/body = %d %s", response.Code, response.Body.String())
 	}
 
-	unknownRequest := httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"query":"3001","candidateTypes":["part"]}`))
+	unknownRequest := httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"partNumber":"3001","candidateTypes":["part"]}`))
 	unknownRequest.Header.Set("Authorization", "Bearer "+integrationToken(t, "31000000-0000-0000-0000-000000000003"))
 	unknownResponse := httptest.NewRecorder()
 	router.ServeHTTP(unknownResponse, unknownRequest)

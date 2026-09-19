@@ -209,6 +209,7 @@ export type TranslationKey =
   | "componentRepo:communityLibraryDescription"
   | "componentRepo:compareWithPreviousVersion"
   | "componentRepo:component"
+  | "componentRepo:componentActions"
   | "componentRepo:componentDetails"
   | "componentRepo:componentDetailsDescription"
   | "componentRepo:componentGroups"
@@ -286,6 +287,7 @@ export type TranslationKey =
   | "componentRepo:diffRemoved"
   | "componentRepo:diffReplaced"
   | "componentRepo:done"
+  | "componentRepo:downloadDrawingSource"
   | "componentRepo:downloadFailed"
   | "componentRepo:downloadSource"
   | "componentRepo:draft"
@@ -322,13 +324,25 @@ export type TranslationKey =
   | "componentRepo:groupNameRequired"
   | "componentRepo:groupRootName"
   | "componentRepo:groups"
+  | "componentRepo:importDurableProgress"
   | "componentRepo:importHistory"
   | "componentRepo:importHistoryDescription"
   | "componentRepo:importHistoryForComponent"
   | "componentRepo:importId"
+  | "componentRepo:importProgressValue"
   | "componentRepo:importRecordsLoadFailed"
   | "componentRepo:importRecordsPagination"
   | "componentRepo:importResult"
+  | "componentRepo:importStageParse"
+  | "componentRepo:importStageParseActive"
+  | "componentRepo:importStageParseComplete"
+  | "componentRepo:importStageParsePending"
+  | "componentRepo:importStagePreview"
+  | "componentRepo:importStagePreviewActive"
+  | "componentRepo:importStagePreviewComplete"
+  | "componentRepo:importStagePreviewPending"
+  | "componentRepo:importStageUpload"
+  | "componentRepo:importStageUploadComplete"
   | "componentRepo:importType"
   | "componentRepo:inReview"
   | "componentRepo:interface"
@@ -885,9 +899,14 @@ export type TranslationKey =
   | "partSearch:allowRotation"
   | "partSearch:bbox"
   | "partSearch:component"
+  | "partSearch:depthStud"
+  | "partSearch:description"
+  | "partSearch:descriptionPlaceholder"
   | "partSearch:dimensions"
   | "partSearch:exactDimensions"
+  | "partSearch:exactSizeHint"
   | "partSearch:height"
+  | "partSearch:heightPlate"
   | "partSearch:itemsPerRow"
   | "partSearch:keyMatch"
   | "partSearch:length"
@@ -902,6 +921,8 @@ export type TranslationKey =
   | "partSearch:noMatches"
   | "partSearch:noMatchesHint"
   | "partSearch:part"
+  | "partSearch:partNumber"
+  | "partSearch:partNumberPlaceholder"
   | "partSearch:partSearch"
   | "partSearch:plateUnit"
   | "partSearch:prev"
@@ -916,6 +937,9 @@ export type TranslationKey =
   | "partSearch:search"
   | "partSearch:searchFailed"
   | "partSearch:searchPlaceholder"
+  | "partSearch:sizeApproximate"
+  | "partSearch:sizeExact"
+  | "partSearch:sizeValue"
   | "partSearch:strictBbox"
   | "partSearch:stud"
   | "partSearch:substitutes"
@@ -954,6 +978,7 @@ export type TranslationKey =
   | "partSearch:viewerTitle"
   | "partSearch:viewerUnknownStatus"
   | "partSearch:width"
+  | "partSearch:widthStud"
   | "pixelArt:algorithms.options.logo_text.label"
   | "pixelArt:algorithms.options.photo_illustration.label"
   | "pixelArt:algorithms.options.side_mixed_plate_brick_pixel.label"
@@ -1121,6 +1146,9 @@ export type TranslationParamsByKey = {
   "componentRepo:diffBeforeVersion": {
     "version": InterpolationValue;
   };
+  "componentRepo:importProgressValue": {
+    "percent": number;
+  };
   "componentRepo:moreDiffChangesNotShown": {
     "count": number;
   };
@@ -1228,6 +1256,11 @@ export type TranslationParamsByKey = {
   };
   "partSearch:resultCount_other": {
     "count": number;
+  };
+  "partSearch:sizeValue": {
+    "depth": InterpolationValue;
+    "height": InterpolationValue;
+    "width": InterpolationValue;
   };
   "tasks:lego_design.progress.completed": {
     "percent": number;

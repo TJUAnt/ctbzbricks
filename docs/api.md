@@ -405,7 +405,7 @@ interface；这些接口继续由 Workbench `ownedCandidate` 边界保护。前�
 |---|---|---|---|
 | `POST /api/v1/component-candidates/:candidateId/validate` | `202 AcceptedTask` | 为 Candidate 当前关联的 Draft 或 Published Version 调度可选质量验证。 | 要求 owner Candidate 关联有效 Draft/Published Version；input hash 覆盖 interface/structure/geometry、Part Library source hash 和 validator version；创建或复用 `component.validate` Logical Job，由 Go Worker 写 durable ValidationReport，并把最近一次通过或失败报告关联到 Version。接口不发布版本，也不在 HTTP 请求内执行验证。 |
 | `GET /api/v1/validation-reports/:reportId` | `200 ValidationReport` | 读取结构化校验报告。 | Draft 报告只允许 owner；active Component 的非 Draft Version 报告沿用版本公开可见性。返回 candidate/version、level、passed、checks、issues 和 validator version；checks/issues 保存机器 `code + params`，不保存最终译文。 |
-| `GET /api/v1/component-versions/:versionId/parts` | Query：`locale`；`200 VersionParts` | 读取 Version 的冻结 BOM 展示投影及各 Part 的预览几何可用状态。 | 从可见 Version 的 SceneSnapshot 读取解析期持久化 BOM，不在 GET 中读取源文件或重新展开 Scene；BOM 由 Go parser v2 对全部显式 `rootInstances[]` 递归展开后生成：同一模型的多个 root/子模型实例分别计数，未被入口引用的 model definition 不计入。接口按 `ldrawPartNum` 排序，使用 Version 冻结的 Part Library 选择 reviewed Part translation，缺失时返回 source fallback/missing；再以同一冻结 Part Library LEFT JOIN `part_geometries`，返回 `ready/failed/missing`。 |
+| `GET /api/v1/component-versions/:versionId/parts` | Query：`locale`；`200 VersionParts` | 读取 Version 的冻结 BOM 展示投影、各 Part 的预览几何状态及可选缩略图模型定位符。 | 从可见 Version 的 SceneSnapshot 读取解析期持久化 BOM，不在 GET 中读取源文件、重新展开 Scene 或调度 Preview；BOM 由 Go parser v2 对全部显式 `rootInstances[]` 递归展开后生成。接口先用 `unnest(bom keys)` 固定候选，再按冻结 `(part_library_version_id,ldraw_part_num)` 逐键读取 Part、reviewed translation、geometry、当前生成器 ready Preview 和 verified Artifact；服务端对当页可用对象一次批量签名并返回 `previewModel`，不返回 Storage key。缺失或签名失败只令该项缩略图降级。 |
 
 `VersionParts` 响应：
 
@@ -421,7 +421,15 @@ interface；这些接口继续由 Workbench `ownedCandidate` 边界保护。前�
       "name": "Brick 2 x 4",
       "contentLocale": "en-US",
       "translationStatus": "reviewed",
-      "geometryStatus": "ready"
+      "geometryStatus": "ready",
+      "previewModel": {
+        "artifactId": "uuid",
+        "url": "https://signed.example/part.glb",
+        "format": "glb",
+        "compression": "meshopt",
+        "sha256": "hex",
+        "byteLength": 12345
+      }
     }
   ]
 }
@@ -431,6 +439,8 @@ interface；这些接口继续由 Workbench `ownedCandidate` 边界保护。前�
 `partCount` 和 `geometryStatus` 是稳定机器数据；`geometryStatus=ready` 表示冻结库存在可用于整体
 GLB 的几何，`failed` 表示几何导入失败，`missing` 表示没有几何记录；后两者仍保留在 BOM，但整体
 GLB 会跳过相应实例。`name/contentLocale/translationStatus` 是独立的官方内容展示投影。
+`previewModel` 是可选的短期只读定位符；其 URL 仅供客户端按需加载 ready Part Preview 并生成静态缩略图，
+不授予额外可见性，也不表示 GET 会创建或修复 Preview。
 parser v1 / snapshot v1 已有记录保持不可变，不在 GET 中静默改写；需要新计数语义的旧开发版本应从
 原始 Artifact 重新导入为 parser v2 / snapshot v2。
 
@@ -461,10 +471,10 @@ parser v1 / snapshot v1 已有记录保持不可变，不在 GET 中静默改写
 ```text
 POST upload complete -> 202
   -> 上传弹窗立即结束，导航到 /component-repo/imports/:importId
-  -> 状态页只读轮询 Import/processing projection
-  processing -> 仅显示本地化“解析中”，不挂载 Viewer、不请求预览 URL
-  ready      -> 并发读取 BOM 和 Preview，分别展示；连接数据保持未加载
-              -> 用户开启连接信息开关后，按需读取 relation/connector/interface
+  -> 状态页只读轮询 Import、taskId 指向的 Parse Task 和 previewTaskId 指向的 Preview Task
+  processing -> 映射为“已上传 -> 解析/BOM -> 3D 预览”三个 durable 阶段；队列等待不伪装成算法精确进度
+              -> Task 提供结构化 code/params/percent 时显示该进度；读取 Task 失败只降级阶段细节
+  ready      -> 导航 Candidate 工作台；详情页分别读取 BOM 和 Preview，不读取 relation/connector/interface
   failed     -> 使用结构化 code + params 展示失败，不展示旧/局部预览
 ```
 
@@ -477,7 +487,7 @@ POST upload complete -> 202
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
-| `POST /api/v1/parts/search` | Body：`{query,page,pageSize}`，默认 `page=1/pageSize=50`，本接口 `pageSize` 最大 `200`；`200 PartSearchPage` | 在当前 active Studio Part Library 中搜索可预览 Part，并返回本次查询绑定的 `partLibraryVersionId`。前端通过共享 authenticated API client 携带当前 Supabase Bearer token。 | 将 `query` 按空格、中英文逗号分段；完整 `axb`/`axbxc`（兼容 `x/X/×` 与小数）作为精确尺寸候选，其余片段作为源名称或 LDraw 编号关键词。至少命中一个关键词、至少命中一个尺寸候选，两个集合同时存在时按 AND 组合；二维尺寸允许平面旋转，三维尺寸按升序精确匹配。只返回 `geometry_status=ready`，排除源名称中的 sticker/decal；按命中关键词数、源名称、编号稳定排序。查询只读取 PostgreSQL，不读取 `LDRAW_ROOT`、不解析文件、不访问 legacy `public`、不创建 Task。结果名称来自 `parts.source_name` 并标记 `translationStatus=source`。若该 Part 已绑定当前 `part-preview-ldraw-meshopt-glb-v2` 的 ready/verified Artifact，item 额外返回 `previewModel={artifactId,format,compression,url,sha256,byteLength}`；Storage key 不出 API。Go 对当前页全部对象执行一次服务端批量签名，单个对象失败只令该 item 的 `previewModel=null`，整批 Storage 故障也降级为无预览的正常搜索结果。`imageUrl` 暂时保留为 `null`，不再代表列表缺少预览能力。 |
+| `POST /api/v1/parts/search` | Body：`{description,partNumber,widthStud,depthStud,heightPlate,locale,page,pageSize}`；筛选字段均可省略，默认 `page=1/pageSize=50`，`pageSize` 最大 `200`；`200 PartSearchPage` | 在当前 active Studio Part Library 中按描述、编号和标称尺寸组合搜索可预览 Part，并返回本次查询绑定的 `partLibraryVersionId`。前端通过共享 authenticated API client 携带当前 Supabase Bearer token。 | 所有非空筛选按 AND 组合；`description` 按空格/中英文逗号拆为去重 token 且全部命中源描述或请求 locale 的 reviewed translation，`partNumber` 独立匹配稳定 LDraw 编号。宽/深单位为 stud，两者同时给出时允许平面旋转；高单位为 plate，绝不参与换轴。任一尺寸筛选只接受 `logical_size_derivation_status=derived_exact`，不把 bbox `derived_approximate` 当成标称尺寸。只返回 `geometry_status=ready`，排除源名称中的 sticker/decal；按描述完整匹配优先、源描述、编号稳定排序。active version、exact total 与页面读取使用同一个 `REPEATABLE READ READ ONLY` 快照。查询只读取 PostgreSQL，不读取 `LDRAW_ROOT`、不解析文件、不访问 legacy `public`、不创建 Task。结果优先返回 reviewed official name，否则回退源描述和源 locale。若该 Part 已绑定当前 `part-preview-ldraw-meshopt-glb-v2` 的 ready/verified Artifact，item 额外返回 `previewModel={artifactId,format,compression,url,sha256,byteLength}`；Storage key 不出 API。Go 对当前页全部对象执行一次服务端批量签名，单个对象失败只令该 item 的 `previewModel=null`，整批 Storage 故障也降级为无预览的正常搜索结果。`imageUrl` 暂时保留为 `null`。 |
 | `GET /api/v1/part-library-versions/active` | `200 PartLibraryVersion` | 发现当前 runtime 默认 Part Library Version 及其能力。 | 读取唯一 active library 的 ID、source name/hash、status、`previewReady/relationReady`、connector/collider source count 和 created time；不存在返回 `part_library_not_found`。`colliderCount` 是已验证输入定义数，不保证逐行存入 PostgreSQL；存储模式由 library metadata 审计。该接口不改变 active 状态；能力字段来自数据库显式门禁，不由 `status` 推断。 |
 | `GET /api/v1/part-library-versions/:partLibraryVersionId/parts/:ldrawPartNum/preview` | Query：`locale`；`200 PartPreview` | 查询不可变 Part 的 geometry、名称翻译和 GLB 状态。 | 规范化 part number，拒绝路径字符；读取 Part、geometry 和 preview state；只选 reviewed translation，否则 source fallback。仅当前 `part-preview-ldraw-meshopt-glb-v2` ready Artifact 使用服务端 Storage 签名 URL；旧 generator 只投影为 pending，不把旧 GLB 暴露给前端。GET 不创建任务。 |
 | `POST /api/v1/part-library-versions/:partLibraryVersionId/parts/:ldrawPartNum/preview/materialize` | Body：`{locale,timezone}`；`202 AcceptedTask` | 显式生成单个 Part GLB。 | 要求 Part geometry ready 且 source hash 存在；当前版本 ready cache 存在时复用 succeeded task，pending/running 复用活动任务，failed、旧 generator 或缓存丢失时递增 generation。input hash 覆盖 Part Library source hash、Part source file hash 和 generator version。Go Worker 从只读 `LDRAW_ROOT` 递归展开 LDraw type 1/3/4，将坐标烘焙为项目 Y-up/stud 单位，生成折角法线与索引，再由原生 gltfpack 输出 `EXT_meshopt_compression`。最终 GLB 按 SHA-256 存入同一 Storage bucket 的 `component-repo/part-library-assets/glb/{generator}/{sha前缀}/{sha}.glb`；Artifact 为全局无 owner、不可变、内容寻址资源，`part_previews` 负责 Part 到 Artifact 的版本绑定。 |
@@ -496,15 +506,16 @@ POST upload complete -> 202
 |---|---|---|
 | Candidate 类型 | 支持 `part/submodel/component`，读取 `fitting_candidate_profiles`。 | 当前页面只请求 `part`；Go 新接口是专用 Part resource，不接受 candidate type。Component/Submodel 召回仍属于其他 fitting 算法调用者，不进入 Component Repo Go API。 |
 | Profile 状态与 irregular | 默认 `ready`，可选择 failed `non_grid_dimension` 异常 Part，并施加 penalty。 | 页面原本固定 `includeIrregular=false`；Go 只返回 active library 中 geometry ready 的 Part，不暴露 irregular 开关。 |
-| 搜索框解析 | 空格/中英文逗号拆分；`axb/axbxc` 为精确尺寸，其余为名称关键词。 | 已迁移；同时允许关键词匹配稳定 LDraw 编号。名称关键词仍是“至少一个命中”，尺寸候选也是“至少一个命中”。 |
-| 显式 bbox / logicalSize | 可指定 LDU bbox、stud/plate logical size、tolerance 和 planar rotation。 | 当前页面不传这些独立字段；Go 页面契约只保留 query 内精确尺寸，二维允许旋转。若 fitting 业务需要显式 bbox/tolerance，应在其自身 Go 路线中设计，不扩张本接口。 |
+| 搜索框解析 | 空格/中英文逗号拆分；`axb/axbxc` 为精确尺寸，其余为名称关键词。 | 页面已改为独立的描述、LDraw 编号、宽/深 stud 与高 plate 字段；已填写条件全部 AND，描述 token 也全部命中。 |
+| 显式 bbox / logicalSize | 可指定 LDU bbox、stud/plate logical size、tolerance 和 planar rotation。 | Go 页面契约提供独立标称 logical size 字段；宽/深允许旋转，高度保持 plate 轴。bbox/tolerance 仍属于 fitting 算法域，不扩张本接口。 |
 | Connector / category / color | 对画像 JSON 的 connector count、分类和颜色摘要做过滤并加分。 | 当前页面不传；未迁移到 Part Search。Part Library 已有 connector definitions，但不能把 relation 数据直接等同于旧画像评分。 |
-| `key` 模糊名称与评分 | `SequenceMatcher` 阈值、bbox/尺寸距离、过滤 bonus/irregular penalty 组成 score；再按 score/type/id 排序。 | 当前页面只传 `query`；Go 使用可解释的关键词命中数和稳定名称/编号排序，不复刻未被页面使用的算法 score。 |
+| `key` 模糊名称与评分 | `SequenceMatcher` 阈值、bbox/尺寸距离、过滤 bonus/irregular penalty 组成 score；再按 score/type/id 排序。 | Go 使用可解释的全部描述 token 包含匹配、完整描述优先及稳定源描述/编号排序，不复刻未被页面使用的算法 score。 |
 | 图片补全 | 从 legacy `rb_part_images/xref_part_numbers` 选择图片 URL。 | 不迁移 legacy 图片表。Go 基于当前版本化 Part GLB Artifact 返回可选 `previewModel`；前端进入视口附近后下载 GLB，通过单一共享 WebGL renderer 生成静态 256px WebP，并按 Artifact ID/SHA 缓存在内存与 IndexedDB。列表不创建 20 个常驻 3D Viewer/RAF，也不向 Storage 写 24k 份缩略图对象；生成或加载失败时仅显示既有占位图。 |
 | 分页 | 全量过滤和评分后进行页码分页，最大 200。 | 已迁移为 PostgreSQL count + stable page query，最大 200；响应绑定实际 `partLibraryVersionId`。 |
 
-Studio importer v3 在离线导入期从顶层 LDraw 文件头读取源语言描述并写入 `parts.source_name`；API
-不会在请求时读取本机 Studio。已有 importer v2 active snapshot 需要通过受控
+Studio importer v4 在离线导入期从顶层 LDraw 文件头读取并规范化源语言描述，标准
+`Brick/Plate/Tile W x D` 写入 `derived_exact` 标称尺寸，其他 ready 几何继续写 `derived_approximate`；API
+不会在请求时读取本机 Studio。已有 v2/v3 active snapshot 需要通过受控
 `backend-go/scripts/update-studio-part-library.sh` 重新导入后，`tile/plate` 等名称搜索才具备完整数据。
 脚本会比较 importer version，不会因 manifest hash 相同而错误 no-op；API/Worker startup 不执行该更新。
 

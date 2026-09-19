@@ -121,7 +121,7 @@ func TestLDrawSourceNameUsesDescriptionAndFallsBackToPartNumber(t *testing.T) {
 	root := t.TempDir()
 	ldraw := filepath.Join(root, "ldraw")
 	mustMkdir(t, filepath.Join(ldraw, "parts"))
-	mustWrite(t, filepath.Join(ldraw, "parts", "3001.dat"), "0 Brick 2 x 4\n0 Name: 3001.dat\n")
+	mustWrite(t, filepath.Join(ldraw, "parts", "3001.dat"), "0 Brick  2 x  4\n0 Name: 3001.dat\n")
 	mustWrite(t, filepath.Join(ldraw, "parts", "meta.dat"), "0 !LDRAW_ORG Part UPDATE 2026-01\n0 BFC CERTIFY CCW\n")
 	index, err := newLDrawIndex(ldraw)
 	if err != nil {
@@ -132,6 +132,23 @@ func TestLDrawSourceNameUsesDescriptionAndFallsBackToPartNumber(t *testing.T) {
 	}
 	if got := index.sourceName("parts/meta.dat", "meta.dat"); got != "meta.dat" {
 		t.Fatalf("fallback source name = %q", got)
+	}
+}
+
+func TestDeriveLogicalSizeSeparatesNominalExactFromBoundingBoxApproximation(t *testing.T) {
+	stats := GeometryStats{BBoxMin: [3]float64{0, 0, 0}, BBoxMax: [3]float64{80, 28, 40}}
+
+	width, depth, height, status := deriveLogicalSize("Brick 2 x 4", stats)
+	if width != 2 || depth != 4 || height != 3 || status != "derived_exact" {
+		t.Fatalf("brick logical size = %v x %v x %v (%s)", width, depth, height, status)
+	}
+	width, depth, height, status = deriveLogicalSize("Plate 1 x 2", stats)
+	if width != 1 || depth != 2 || height != 1 || status != "derived_exact" {
+		t.Fatalf("plate logical size = %v x %v x %v (%s)", width, depth, height, status)
+	}
+	width, depth, height, status = deriveLogicalSize("Slope Brick 2 x 4", stats)
+	if width != 4 || depth != 2 || height != 3.5 || status != "derived_approximate" {
+		t.Fatalf("approximate logical size = %v x %v x %v (%s)", width, depth, height, status)
 	}
 }
 

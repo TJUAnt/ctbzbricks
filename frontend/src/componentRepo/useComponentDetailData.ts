@@ -2,17 +2,13 @@ import React from 'react';
 import appConfig from '../app/appConfig';
 import {
   getComponent,
-  getConnectorAnalysis,
   getValidationReport,
   listComponentGroupIds,
   listComponentGroups,
   listComponentVersions,
-  listRelations,
   loadComponentVersionParts,
   loadComponentVersionPreview,
-  type ComponentConnectorAnalysisResponse,
   type ComponentGroupTreeResponse,
-  type ComponentRelationCandidateResponse,
   type ComponentResponse,
   type ComponentValidationReportResponse,
   type ComponentVersionPartsResponse,
@@ -27,19 +23,15 @@ export type ComponentDetailState = {
   versions: ComponentVersionResponse[];
   preview: ComponentVersionPreviewModelResponse | null;
   partDetails: ComponentVersionPartsResponse | null;
-  connectorAnalysis: ComponentConnectorAnalysisResponse | null;
-  relations: ComponentRelationCandidateResponse[];
   validationReport: ComponentValidationReportResponse | null;
   groupTree: ComponentGroupTreeResponse | null;
   groupIds: string[];
   loading: boolean;
   previewLoading: boolean;
-  connectorLoading: boolean;
   partsLoading: boolean;
   validationLoading: boolean;
   error: string | null;
   previewError: string | null;
-  connectorError: string | null;
 };
 
 const initialState: ComponentDetailState = {
@@ -48,25 +40,21 @@ const initialState: ComponentDetailState = {
   versions: [],
   preview: null,
   partDetails: null,
-  connectorAnalysis: null,
-  relations: [],
   validationReport: null,
   groupTree: null,
   groupIds: [],
   loading: true,
   previewLoading: true,
-  connectorLoading: true,
   partsLoading: true,
   validationLoading: true,
   error: null,
   previewError: null,
-  connectorError: null,
 };
 
 /**
  * useComponentDetailData 负责详情页的读取编排和陈旧响应隔离。
  *
- * Component/Version 是主数据；Preview、连接点、BOM 与验证报告分别降级，任一派生读取失败都不能
+ * Component/Version 是主数据；Preview、BOM 与验证报告分别降级，任一派生读取失败都不能
  * 清空已确认的 Component，也不能改变 owner 权限。refreshToken 只表达显式 mutation 后的权威重读。
  */
 export function useComponentDetailData(input: {
@@ -85,12 +73,10 @@ export function useComponentDetailData(input: {
         ...current,
         loading: true,
         previewLoading: true,
-        connectorLoading: true,
         partsLoading: true,
         validationLoading: true,
         error: null,
         previewError: null,
-        connectorError: null,
       }));
       try {
         const [component, versions] = await Promise.all([
@@ -103,17 +89,7 @@ export function useComponentDetailData(input: {
           : [null, [] as string[]];
         const version = preferredDetailVersion(component, versions);
         if (!version) throw new Error(input.noVersionsMessage);
-        // Relation/Connector 是 Candidate owner 的审核数据；公开详情只读取 Version 级公开投影。
-        const connectorAnalysisPromise = component.ownedByActor && version.componentCandidateId
-          ? getConnectorAnalysis(version.componentCandidateId)
-            .then((connectorAnalysis) => ({ connectorAnalysis, connectorError: null as string | null }))
-            .catch((analysisError: unknown) => ({
-              connectorAnalysis: null,
-              connectorError: analysisError instanceof Error
-                ? analysisError.message
-                : appConfig.texts.loadFailed,
-            }))
-          : Promise.resolve({ connectorAnalysis: null, connectorError: null });
+        // 连接分析属于 Candidate 工作台审核信息；详情页不预读该数据，避免公开阅读路径承担额外请求。
         const partDetailsPromise = loadComponentVersionParts(version.id)
           .then((partDetails) => ({ partDetails }))
           .catch(() => ({ partDetails: null }));
@@ -133,19 +109,14 @@ export function useComponentDetailData(input: {
           loading: false,
         }));
         // Preview 是可重建派生数据；失败只降级预览区域，主数据和 owner 动作保持可用。
-        const [previewResult, relations] = await Promise.all([
-          loadComponentVersionPreview(version.id)
-            .then((preview) => ({ preview, previewError: null as string | null }))
-            .catch((previewError: unknown) => ({
-              preview: null,
-              previewError: previewError instanceof Error
-                ? previewError.message
-                : input.unknownErrorMessage,
-            })),
-          component.ownedByActor && version.componentCandidateId
-            ? listRelations(version.componentCandidateId)
-            : Promise.resolve([]),
-        ]);
+        const previewResult = await loadComponentVersionPreview(version.id)
+          .then((preview) => ({ preview, previewError: null as string | null }))
+          .catch((previewError: unknown) => ({
+            preview: null,
+            previewError: previewError instanceof Error
+              ? previewError.message
+              : input.unknownErrorMessage,
+          }));
         if (!active) return;
         setState({
           component,
@@ -153,24 +124,16 @@ export function useComponentDetailData(input: {
           versions,
           preview: previewResult.preview,
           partDetails: null,
-          connectorAnalysis: null,
-          relations,
           validationReport: null,
           groupTree,
           groupIds,
           loading: false,
           previewLoading: false,
-          connectorLoading: true,
           partsLoading: true,
           validationLoading: true,
           error: null,
           previewError: previewResult.previewError,
-          connectorError: null,
         });
-
-        const { connectorAnalysis, connectorError } = await connectorAnalysisPromise;
-        if (!active) return;
-        setState((current) => ({ ...current, connectorAnalysis, connectorLoading: false, connectorError }));
 
         const { partDetails } = await partDetailsPromise;
         if (!active) return;
@@ -185,7 +148,6 @@ export function useComponentDetailData(input: {
           ...current,
           loading: false,
           previewLoading: false,
-          connectorLoading: false,
           partsLoading: false,
           validationLoading: false,
           error: error instanceof Error ? error.message : appConfig.texts.loadFailed,

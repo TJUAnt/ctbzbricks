@@ -4,15 +4,14 @@ import {
   AlertTriangle,
   Bell,
   Boxes,
-  Braces,
-  Crosshair,
+  Download,
   FileClock,
   FolderTree,
   GitCompareArrows,
   GitBranch,
   Layers3,
   LoaderCircle,
-  Plug,
+  MoreHorizontal,
   RefreshCw,
   Rocket,
   ShieldCheck,
@@ -24,11 +23,11 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import appConfig from '../app/appConfig';
 import { useAuth } from '../auth/AuthContext';
 import { resolvedLocale, useAppTranslation, useDynamicTranslation, type TranslationKey } from '../i18n';
-import { ComponentScene, type ComponentSceneConnector } from '../parts/PartViewerPage';
+import { ComponentScene } from '../parts/PartViewerPage';
 import {
+  downloadComponentVersionSource,
   loadComponentVersionDiff,
   loadComponentVersionPreview,
-  type ComponentConnectorResponse,
   type ComponentVersionDiffChangeKind,
   type ComponentVersionDiffResponse,
   type ComponentVersionPreviewModelResponse,
@@ -41,7 +40,6 @@ import { ComponentImportHistoryList } from './ComponentImportHistoryPage';
 import {
   DetailMetric,
   DiffMetric,
-  groupConnectorsByPart,
   PartSummaryCard,
 } from './ComponentDetailPresenters';
 import { routeFor, StatusPill } from './ComponentRepoPresenters';
@@ -57,13 +55,6 @@ type ComponentDiffViewState = {
   targetVersion: ComponentVersionResponse | null;
 };
 
-const connectorGroupLabelKeys: Record<ComponentConnectorResponse['state'], TranslationKey> = {
-  internal: 'componentRepo:connectorGroupInternal',
-  external: 'componentRepo:connectorGroupExternal',
-  blocked: 'componentRepo:connectorGroupBlocked',
-  unsupported: 'componentRepo:connectorGroupUnsupported',
-  unresolved: 'componentRepo:connectorGroupUnresolved',
-};
 const diffChangeLabelKeys: Record<ComponentVersionDiffChangeKind, TranslationKey> = {
   part_added: 'componentRepo:diffAdded',
   part_removed: 'componentRepo:diffRemoved',
@@ -82,9 +73,9 @@ export function ComponentDetailPage() {
   const params = useParams();
   const componentId = params.componentId ?? '';
   const resetViewRef = React.useRef<(() => void) | null>(null);
+  const ownerActionsRef = React.useRef<HTMLDetailsElement | null>(null);
   const [refreshToken, setRefreshToken] = React.useState(0);
-  const [activeConnectorPartId, setActiveConnectorPartId] = React.useState<string | null>(null);
-  const [selectedConnectorId, setSelectedConnectorId] = React.useState<string | null>(null);
+  const [downloadingDrawing, setDownloadingDrawing] = React.useState(false);
   const [historyTab, setHistoryTab] = React.useState<'versions' | 'imports'>('versions');
   const diffRequestRef = React.useRef(0);
   const diffResetRef = React.useRef<(() => void) | null>(null);
@@ -137,29 +128,6 @@ export function ComponentDetailPage() {
     const selected = new Set(state.groupIds);
     return state.groupTree.groups.filter((group) => selected.has(group.id));
   }, [state.groupIds, state.groupTree]);
-  const connectors = state.connectorAnalysis?.connectors ?? [];
-  const externalInterfaces = state.connectorAnalysis?.externalInterfaces ?? [];
-  const connectorPartGroups = React.useMemo(
-    () => groupConnectorsByPart(connectors),
-    [connectors],
-  );
-  const activeConnectorPart = connectorPartGroups.find(
-    (group) => group.partInstanceId === activeConnectorPartId,
-  ) ?? connectorPartGroups[0] ?? null;
-  const selectedConnector = React.useMemo(
-    () => connectors.find((connector) => connector.worldConnectorId === selectedConnectorId) ?? null,
-    [connectors, selectedConnectorId],
-  );
-  const selectedSceneConnector = React.useMemo<ComponentSceneConnector | null>(
-    () => selectedConnector
-      ? {
-          accessAxis: selectedConnector.accessAxis,
-          id: selectedConnector.worldConnectorId,
-          position: selectedConnector.position,
-        }
-      : null,
-    [selectedConnector],
-  );
   const registerPreviewReset = React.useCallback((reset: (() => void) | null) => {
     resetViewRef.current = reset;
   }, []);
@@ -261,6 +229,19 @@ export function ComponentDetailPage() {
     0,
     (diffView.diff?.instanceChanges.length ?? 0) - visibleDiffChanges.length,
   );
+  const downloadDrawing = async () => {
+    if (!state.version || downloadingDrawing) return;
+    setDownloadingDrawing(true);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      await downloadComponentVersionSource(state.version.id);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : tr('componentRepo:downloadFailed'));
+    } finally {
+      setDownloadingDrawing(false);
+    }
+  };
   return (
     <section className="component-repo-page component-detail-page">
       <header className="component-repo-header">
@@ -285,7 +266,7 @@ export function ComponentDetailPage() {
               {tr(state.component.starredByActor ? 'componentRepo:starred' : 'componentRepo:star')}
               <span>{state.component.starCount}</span>
             </ComponentStarButton>
-          ) : state.component ? (
+          ) : state.component && !componentOwnedByActor ? (
             <span className="component-detail-star-count" title={tr('componentRepo:starCount')}>
               <Star aria-hidden="true" />{state.component.starCount}
             </span>
@@ -306,19 +287,16 @@ export function ComponentDetailPage() {
               {tr(state.component.watch?.watching ? 'componentRepo:watching' : 'componentRepo:watch')}
             </button>
           ) : null}
-          {canDeleteComponent ? (
+          {state.version ? (
             <button
-              className="component-repo-danger-button"
-              disabled={deletingComponent}
-              onClick={() => {
-                setActionError(null);
-                setActionNotice(null);
-                setConfirmingDeleteComponent(true);
-              }}
+              disabled={downloadingDrawing}
+              onClick={() => void downloadDrawing()}
               type="button"
             >
-              <Trash2 aria-hidden="true" />
-              {tr('componentRepo:deleteComponent')}
+              {downloadingDrawing
+                ? <LoaderCircle aria-hidden="true" className="component-library-spin" />
+                : <Download aria-hidden="true" />}
+              {tr('componentRepo:downloadDrawingSource')}
             </button>
           ) : null}
           {canValidate ? (
@@ -345,6 +323,29 @@ export function ComponentDetailPage() {
                 : <Rocket aria-hidden="true" />}
               {tr('componentRepo:publish')}
             </button>
+          ) : null}
+          {canDeleteComponent ? (
+            <details className="component-version-actions component-detail-owner-actions" ref={ownerActionsRef}>
+              <summary aria-label={tr('componentRepo:componentActions')}>
+                <MoreHorizontal aria-hidden="true" />
+              </summary>
+              <div className="component-version-action-menu" role="menu">
+                <button
+                  className="component-version-delete-action"
+                  onClick={() => {
+                    if (ownerActionsRef.current) ownerActionsRef.current.open = false;
+                    setActionError(null);
+                    setActionNotice(null);
+                    setConfirmingDeleteComponent(true);
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  <Trash2 aria-hidden="true" />
+                  {tr('componentRepo:deleteComponent')}
+                </button>
+              </div>
+            </details>
           ) : null}
         </div>
       </header>
@@ -433,7 +434,6 @@ export function ComponentDetailPage() {
             <ComponentScene
               preview={{ model: state.preview.model }}
               registerReset={registerPreviewReset}
-              selectedConnector={selectedSceneConnector}
             />
           ) : null}
           {state.previewError ? (
@@ -451,21 +451,6 @@ export function ComponentDetailPage() {
               <RefreshCw aria-hidden="true" />
               {tr('componentRepo:resetPreview')}
             </button>
-          ) : null}
-          {selectedConnector ? (
-            <div className="component-detail-selected-connector">
-              <Crosshair aria-hidden="true" />
-              <span>
-                {tr('componentRepo:selectedConnectionPoint')}: {selectedConnector.connectorType
-                  ?? selectedConnector.connectorKind}
-              </span>
-              <button
-                onClick={() => setSelectedConnectorId(null)}
-                type="button"
-              >
-                {tr('componentRepo:clearConnectionPointSelection')}
-              </button>
-            </div>
           ) : null}
         </div>
         <div className="component-detail-preview-meta">
@@ -630,81 +615,9 @@ export function ComponentDetailPage() {
 
       <section className="component-detail-metrics" aria-label={tr('componentRepo:componentOverview')}>
         <DetailMetric icon={<Boxes />} label={tr('componentRepo:partCount')} value={state.partDetails?.partCount ?? 0} />
-        <DetailMetric icon={<GitBranch />} label={tr('componentRepo:relations')} value={state.relations.length} />
-        <DetailMetric icon={<Braces />} label={tr('componentRepo:connectionPointCount')} value={connectors.length} />
-        <DetailMetric icon={<Plug />} label={tr('componentRepo:externalInterfaceCount')} value={externalInterfaces.length} />
       </section>
 
       <section className="component-detail-grid">
-        <article className="component-repo-panel component-detail-wide-panel">
-          <div className="component-repo-panel-title">
-            <Braces aria-hidden="true" />
-            <span>{tr('componentRepo:connectionPoints')}</span>
-          </div>
-          {state.connectorError ? <div className="asset-error">{state.connectorError}</div> : null}
-          {state.connectorLoading ? (
-            <div className="asset-loading">{appConfig.texts.loading}</div>
-          ) : connectorPartGroups.length > 0 ? (
-            <div className="component-detail-connectors-by-part">
-              <div
-                aria-label={tr('componentRepo:partsList')}
-                className="component-detail-connector-part-tabs"
-                role="tablist"
-              >
-                {connectorPartGroups.map((group) => {
-                  const active = group.partInstanceId === activeConnectorPart?.partInstanceId;
-                  return (
-                    <button
-                      aria-selected={active}
-                      className={active ? 'is-active' : undefined}
-                      key={group.partInstanceId}
-                      onClick={() => {
-                        setActiveConnectorPartId(group.partInstanceId);
-                        setSelectedConnectorId(null);
-                      }}
-                      role="tab"
-                      type="button"
-                    >
-                      <strong>{group.partRef}</strong>
-                      <small>{group.partInstanceId}</small>
-                      <span>{group.connectors.length}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              {activeConnectorPart ? (
-                <div className="component-detail-connector-list" role="tabpanel">
-                  {activeConnectorPart.connectors.map((connector) => (
-                    <button
-                      aria-label={tr('componentRepo:selectConnectionPoint', {
-                        id: connector.worldConnectorId,
-                      })}
-                      aria-pressed={connector.worldConnectorId === selectedConnectorId}
-                      className={`component-detail-connector${
-                        connector.worldConnectorId === selectedConnectorId ? ' is-selected' : ''
-                      }`}
-                      key={connector.worldConnectorId}
-                      onClick={() => setSelectedConnectorId((current) => (
-                        current === connector.worldConnectorId
-                          ? null
-                          : connector.worldConnectorId
-                      ))}
-                      type="button"
-                    >
-                      <div>
-                        <strong>{connector.connectorType ?? connector.connectorKind}</strong>
-                        <Crosshair aria-hidden="true" />
-                      </div>
-                      <span>{trDynamic(connectorGroupLabelKeys[connector.state])}</span>
-                      <small>{connector.connectorId}</small>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : <div className="asset-empty">{tr('componentRepo:noConnectionPoints')}</div>}
-        </article>
-
         <article className="component-repo-panel component-detail-wide-panel">
           <div className="component-repo-panel-title">
             <Layers3 aria-hidden="true" />

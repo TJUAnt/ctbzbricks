@@ -1,13 +1,15 @@
 # Component Repo Component 详细设计
 
-组件广场已按独立菜单模块拆分设计，其公共/个人订阅页签见[组件广场详细设计](./component_plaza.md)，公共发布事件、成员资格和滚动加载见
-[公共 Feed 详细设计](./public_feed.md)。本文件中的公开目录仅描述 Component 资源目录契约。
+> 功能需求：[我的模型 / 个人 Component 仓库](../../../requirements/my-models/component-repo/README.md)
+>
+组件广场已按独立菜单模块拆分设计，其公共/个人订阅页签见[组件广场详细设计](../../model-plaza/model-plaza/README.md)，公共发布事件、成员资格和滚动加载见
+[公共 Feed 详细设计](../../../component_repo/public_feed.md)。本文件中的公开目录仅描述 Component 资源目录契约。
 
-> 代码核对日期：2026-09-15
+> 代码核对日期：2026-09-19
 >
 > 当前阶段：Component Repo 公开 API 和持久任务主链路已切换到 Go。
 >
-> 接口权威定义：[Component Repo API](../api.md)；迁移边界：[Go Component 迁移计划](../go_component_migration_plan.md)。
+> 接口权威定义：[Component Repo API](../../../api.md)；迁移边界：[Go Component 迁移计划](../../../go_component_migration_plan.md)。
 
 ## 1. 本文范围
 
@@ -23,27 +25,27 @@ BOM、Source 和 Diff 链路。Group、Star、Watch 是 Component DTO 的关联�
 |---|---|---|
 | 个人仓库 | `listComponentGroups` + `searchComponentGroupComponents` | root 表示自有 Component；custom Group 表示直接 membership |
 | 收藏视图 | `listComponentStars` | 详见 [Star 设计](star.md) |
-| Component 详情 | `getComponent` + `listComponentVersions` | 选择 current published 或最新可见 Version |
+| Component 详情 | `getComponent` + `listComponentVersions` | 选择 current published 或最新可见 Version；阅读页不预取连接分析 |
 | Version 详情 | `getComponentVersion` | 切换历史版本并显示状态、发布说明和来源 |
 | Preview | `loadComponentVersionPreview` | 只读取 Worker 已生成且验证通过的 GLB；失败只降级预览区域 |
-| BOM | `loadComponentVersionParts` | 读取 SceneSnapshot 解析期冻结的零件汇总和 reviewed Part 名称 |
+| BOM | `loadComponentVersionParts` | 读取 SceneSnapshot 解析期冻结的零件汇总、reviewed Part 名称和可选 ready Part Preview 定位符 |
 | Version Diff | `loadComponentVersionDiff` + 前后 Preview | owner 即时比较 SceneSnapshot；不创建任务或新 Artifact |
 | 元数据编辑 | `updateComponent`、`updateComponentVersion` | 只允许 owner user Component / Draft Version |
 | 发布 | `publishVersion` | 发布 Draft、切换 current Version、产生领域事件并原子创建 Feed 图片任务 |
-| 删除 | `deleteComponent`、`deleteComponentVersion` | Component 软删除并异步清理关系；Version 只允许删除 Draft |
-| Source 下载 | `downloadComponentVersionSource` | 后端校验可见性、Artifact ownership/key 后返回短期签名 URL |
+| 删除 | `deleteComponent`、`deleteComponentVersion` | Component 软删除并异步清理关系；owner 详情页把 Component 删除收进发布按钮右侧的更多菜单；Version 只允许删除 Draft |
+| Source 下载 | `downloadComponentVersionSource` | 详情页明确显示“图纸源文件”下载；后端校验可见性、Artifact ownership/key 后返回短期签名 URL |
 | 新建/修订上传 | `createComponentImportWithProgress` | 创建 upload session、直传 Storage、complete 后进入持久任务 |
-| Import 进度/历史 | `getComponentImport`、`listComponentImports`、`getTask` | 只观察持久状态；页面关闭不取消任务 |
+| Import 进度/历史 | `getComponentImport`、`listComponentImports`、`getTask` | 映射上传、解析/BOM、3D Preview 三个持久阶段；页面关闭不取消任务 |
 | Candidate 工作台 | relation/connector/interface/validate API | owner 审核解析结果并形成可发布 Draft Version |
 
 页面代码：
 
-- 个人目录与列表控制器：[ComponentRepoPage.tsx](../../frontend/src/componentRepo/ComponentRepoPage.tsx)；该页面只拥有个人 Group、收藏、上传和 Version 入口状态，不再承载广场。Group 树和成员编辑：[ComponentGroupControls.tsx](../../frontend/src/componentRepo/ComponentGroupControls.tsx)；上传弹窗：[ComponentUploadDialog.tsx](../../frontend/src/componentRepo/ComponentUploadDialog.tsx)；列表纯展示：[ComponentRepoPresenters.tsx](../../frontend/src/componentRepo/ComponentRepoPresenters.tsx)。广场由独立 [ComponentPlazaPage.tsx](../../frontend/src/componentRepo/ComponentPlazaPage.tsx) 承载，详见[组件广场设计](component_plaza.md)。
-- 详情控制器：[ComponentDetailPage.tsx](../../frontend/src/componentRepo/ComponentDetailPage.tsx)；读取编排：[useComponentDetailData.ts](../../frontend/src/componentRepo/useComponentDetailData.ts)；权限与写操作：[useComponentDetailMutations.ts](../../frontend/src/componentRepo/useComponentDetailMutations.ts)；纯展示：[ComponentDetailPresenters.tsx](../../frontend/src/componentRepo/ComponentDetailPresenters.tsx)
-- 上传入口：[ComponentImportPage.tsx](../../frontend/src/componentRepo/ComponentImportPage.tsx)
-- Import 历史/状态：[ComponentImportHistoryPage.tsx](../../frontend/src/componentRepo/ComponentImportHistoryPage.tsx)、[ComponentImportStatusPage.tsx](../../frontend/src/componentRepo/ComponentImportStatusPage.tsx)
-- Candidate 工作台：[ComponentCandidateWorkbenchPage.tsx](../../frontend/src/componentRepo/ComponentCandidateWorkbenchPage.tsx)
-- 稳定兼容入口：[componentRepoApi.ts](../../frontend/src/componentRepo/componentRepoApi.ts)；DTO：[componentRepoTypes.ts](../../frontend/src/componentRepo/componentRepoTypes.ts)；鉴权请求、路径与完整分页：[componentRepoTransport.ts](../../frontend/src/componentRepo/componentRepoTransport.ts)；领域调用位于 [api](../../frontend/src/componentRepo/api)
+- 个人目录与列表控制器：[ComponentRepoPage.tsx](../../../../frontend/src/componentRepo/ComponentRepoPage.tsx)；该页面只拥有个人 Group、收藏、上传和 Version 入口状态，不再承载广场。Group 树和成员编辑：[ComponentGroupControls.tsx](../../../../frontend/src/componentRepo/ComponentGroupControls.tsx)；上传弹窗：[ComponentUploadDialog.tsx](../../../../frontend/src/componentRepo/ComponentUploadDialog.tsx)；列表纯展示：[ComponentRepoPresenters.tsx](../../../../frontend/src/componentRepo/ComponentRepoPresenters.tsx)。广场由独立 [ComponentPlazaPage.tsx](../../../../frontend/src/componentRepo/ComponentPlazaPage.tsx) 承载，详见[组件广场设计](../../model-plaza/model-plaza/README.md)。
+- 详情控制器：[ComponentDetailPage.tsx](../../../../frontend/src/componentRepo/ComponentDetailPage.tsx)；读取编排：[useComponentDetailData.ts](../../../../frontend/src/componentRepo/useComponentDetailData.ts)；权限与写操作：[useComponentDetailMutations.ts](../../../../frontend/src/componentRepo/useComponentDetailMutations.ts)；纯展示：[ComponentDetailPresenters.tsx](../../../../frontend/src/componentRepo/ComponentDetailPresenters.tsx)
+- 上传入口：[ComponentImportPage.tsx](../../../../frontend/src/componentRepo/ComponentImportPage.tsx)
+- Import 历史/状态：[ComponentImportHistoryPage.tsx](../../../../frontend/src/componentRepo/ComponentImportHistoryPage.tsx)、[ComponentImportStatusPage.tsx](../../../../frontend/src/componentRepo/ComponentImportStatusPage.tsx)
+- Candidate 工作台：[ComponentCandidateWorkbenchPage.tsx](../../../../frontend/src/componentRepo/ComponentCandidateWorkbenchPage.tsx)
+- 稳定兼容入口：[componentRepoApi.ts](../../../../frontend/src/componentRepo/componentRepoApi.ts)；DTO：[componentRepoTypes.ts](../../../../frontend/src/componentRepo/componentRepoTypes.ts)；鉴权请求、路径与完整分页：[componentRepoTransport.ts](../../../../frontend/src/componentRepo/componentRepoTransport.ts)；领域调用位于 [api](../../../../frontend/src/componentRepo/api)
 
 `componentRepoApi.ts` 仅重导出稳定名称。目录/Group/Star/Watch/Feed、Component/Version、Workbench、Import/Storage、Task
 轮询分别由领域文件维护，页面现有 import 路径保持兼容。
@@ -70,14 +72,18 @@ locale/query/category/status，筛选改变时旧 cursor 返回 validation error
 `GetVisibleComponent` 在一条查询中执行可见性、展示翻译、逻辑尺寸、Star 状态/计数和 active Watch 投影。非 owner 对
 不可见对象得到稳定 not-found，不泄露对象是否存在。Preview stale/failed 不改变 Component 可见性。
 
+详情操作由服务端返回的 `ownedByActor` 投影决定显示：本人 Component 不显示 Star 和 Star 数量，显示验证/发布；Component
+删除放在发布按钮右侧的更多菜单内，确认和服务端 owner 校验保持不变。别人的 Component 才显示 Star；Watch 仍遵守既有资格。
+连接点、关系和 external interface 属于 Candidate 工作台审核面，详情页不请求也不展示这些数据。
+
 ### 3.3 创建与更新
 
 `POST /api/v1/components` 可以直接创建 owner user Component 元数据，但当前 Web 新建主流程使用上传/Import pipeline，
 没有直接调用该接口。`PATCH /api/v1/components/:componentId` 仅更新 owner、user、未删除 Component 的 name、
 description、tags、category 和 `contentLocale`；用户文本原样保存。
 
-后端核心代码：[component/handler.go](../../backend-go/internal/component/handler.go)、
-[component/service.go](../../backend-go/internal/component/service.go)、[components.sql](../../backend-go/db/queries/components.sql)。
+后端核心代码：[component/handler.go](../../../../backend-go/internal/component/handler.go)、
+[component/service.go](../../../../backend-go/internal/component/service.go)、[components.sql](../../../../backend-go/db/queries/components.sql)。
 
 ## 4. 创建与修订的异步主链路
 
@@ -93,8 +99,8 @@ description、tags、category 和 `contentLocale`；用户文本原样保存。
 Source 是不可变资产。Exchange 可以是 source，也可以是明确 `derived_from_artifact_id` 指向 source 的派生资产。
 Storage key、bucket、owner 和数据库 Artifact 必须一致。
 
-代码：[artifact/handler.go](../../backend-go/internal/artifact/handler.go)、
-[artifact/service.go](../../backend-go/internal/artifact/service.go)、[artifacts.sql](../../backend-go/db/queries/artifacts.sql)。
+代码：[artifact/handler.go](../../../../backend-go/internal/artifact/handler.go)、
+[artifact/service.go](../../../../backend-go/internal/artifact/service.go)、[artifacts.sql](../../../../backend-go/db/queries/artifacts.sql)。
 
 ### 4.2 Import 与 Worker
 
@@ -103,10 +109,13 @@ Go Worker 从 PostgreSQL 持久任务领取工作。主链包括 Artifact verify
 `component.relations.detect` 均已由 Go Worker 执行，Component Repo 不再保留 Python 任务消费者。
 
 Import API 的 GET 只读取已经提交的状态，不触发后台处理。任务错误保存稳定 `code + params`，locale/timezone 来自创建
-时冻结上下文。
+时冻结上下文。状态页同时读取 Import 的 `taskId` 和 `previewTaskId`，把权威状态映射为“已上传 → 解析/BOM → 3D 预览”；
+Task 读取失败只降级阶段细节，队列等待不伪装成算法精确百分比。解析器已去掉 `materializeImport` 中为调用
+`scene.ExpandJSON` 产生的一次完整 Document JSON 编码/解码，改为 typed document 直接调用 `scene.Expand`；持久 Snapshot
+仍保存完整来源结构，Worker/事务边界不变。
 
-代码：[ingestion](../../backend-go/internal/ingestion)、[worker](../../backend-go/internal/worker)、
-[task](../../backend-go/internal/task)、[go_task_protocol.md](../go_task_protocol.md)。
+代码：[ingestion](../../../../backend-go/internal/ingestion)、[worker](../../../../backend-go/internal/worker)、
+[task](../../../../backend-go/internal/task)、[go_task_protocol.md](../../../go_task_protocol.md)。
 
 ### 4.3 Candidate 到 Draft Version
 
@@ -137,10 +146,10 @@ Candidate 绑定 Import、SceneSnapshot 和 owner。创建 Version 时，`Servic
 | `POST /component-versions/:versionId/archive` | owner user Version 状态转换；保留不可变来源链 |
 
 发布不以 ValidationReport 或 Feed 图片作为强制门禁。发布事件、Version 状态、pending Feed entry 和持久图片任务同事务；重复或并发发布最多产生一个事件/entry。图片任务成功或重试终结后事件才进入公共 Feed，但图片结果不改变发布状态。实现见
-[component_versions.sql](../../backend-go/db/queries/component_versions.sql)、
-[component_domain_events.sql](../../backend-go/db/queries/component_domain_events.sql)、
-[component_feed_entries.sql](../../backend-go/db/queries/component_feed_entries.sql)和
-[component/service.go](../../backend-go/internal/component/service.go)。
+[component_versions.sql](../../../../backend-go/db/queries/component_versions.sql)、
+[component_domain_events.sql](../../../../backend-go/db/queries/component_domain_events.sql)、
+[component_feed_entries.sql](../../../../backend-go/db/queries/component_feed_entries.sql)和
+[component/service.go](../../../../backend-go/internal/component/service.go)。
 
 ## 6. Preview、BOM、Diff 与 Source
 
@@ -171,7 +180,10 @@ v5 及更早 ready Preview 不会被原地覆盖：读取时返回 stale，owner
 ### 6.2 BOM
 
 `GET /api/v1/component-versions/:versionId/parts?locale` 读取解析期持久化 BOM，不读取源文件重新解析。所有显式 root
-实例递归展开后计数，并使用 Version 冻结的 Part Library 读取 reviewed Part translation 与 geometry status。
+实例递归展开后计数，并使用 Version 冻结的 Part Library 读取 reviewed Part translation、geometry status，以及当前生成器下
+ready 且 Artifact 已 verified 的可选 `previewModel`。候选由 BOM refs 先固定，Part/geometry/preview/Artifact 均按冻结复合键或
+Artifact ID 点查；服务端一次批量签名，前端只在卡片进入视口附近后使用共享 renderer 生成 WebP。缺失和签名失败仅显示占位图，
+GET 不创建任务。
 
 ### 6.3 Diff
 
@@ -182,9 +194,10 @@ v5 及更早 ready Preview 不会被原地覆盖：读取时返回 stale，owner
 
 `GET /api/v1/component-versions/:versionId/source` 先执行 Version 可见性，再验证 Artifact owner/bucket/key，最后使用
 用户身份创建短期签名 URL。Source 与派生 GLB 使用不同来源语义，不互相替代。
+详情页将这个入口称为“图纸源文件”，避免把 Studio/LDraw 模型误称为逐步拼搭说明书。
 
-代码：[workbench](../../backend-go/internal/workbench)、[componentdiff](../../backend-go/internal/componentdiff)、
-[artifact](../../backend-go/internal/artifact)。
+代码：[workbench](../../../../backend-go/internal/workbench)、[componentdiff](../../../../backend-go/internal/componentdiff)、
+[artifact](../../../../backend-go/internal/artifact)。
 
 ## 7. Component 删除
 
@@ -225,16 +238,19 @@ HTTP 模块按职责分为 `component`（Component/Version/Group/Star）、`comp
 
 ## 10. 测试定位
 
-- Component/Version/Group/Star 主集成：[service_integration_test.go](../../backend-go/internal/component/service_integration_test.go)
-- Component 目录十万行计划：[component_catalog_performance_integration_test.go](../../backend-go/internal/component/component_catalog_performance_integration_test.go)
-- HTTP 与认证契约：[component_integration_test.go](../../backend-go/internal/httpapi/component_integration_test.go)
-- 上传与 Storage：[artifact](../../backend-go/internal/artifact)、[storage](../../backend-go/internal/storage)
-- Import/Worker：[ingestion](../../backend-go/internal/ingestion)、[worker](../../backend-go/internal/worker)
-- Schema/迁移：[schema_integration_test.go](../../backend-go/internal/database/schema_integration_test.go)、[migrations](../../backend-go/db/migrations)
-- 前端 API adapter：[componentRepoApi.test.ts](../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
-- Group 候选完整性与续页：[ComponentGroupControls.test.tsx](../../frontend/src/componentRepo/__tests__/ComponentGroupControls.test.tsx)
-- 材质 Profile、GLB 扩展和前端摄影棚运行时：[catalog_test.go](../../backend-go/internal/ldrawmaterial/catalog_test.go)、[task_handlers_test.go](../../backend-go/internal/workbench/task_handlers_test.go)、[studioPreviewRendering.test.ts](../../frontend/src/preview/__tests__/studioPreviewRendering.test.ts)
-- 页面与 i18n：[localizedPages.test.tsx](../../frontend/src/i18n/__tests__/localizedPages.test.tsx)
+- Component/Version/Group/Star 主集成：[service_integration_test.go](../../../../backend-go/internal/component/service_integration_test.go)
+- Component 目录十万行计划：[component_catalog_performance_integration_test.go](../../../../backend-go/internal/component/component_catalog_performance_integration_test.go)
+- HTTP 与认证契约：[component_integration_test.go](../../../../backend-go/internal/httpapi/component_integration_test.go)
+- 上传与 Storage：[artifact](../../../../backend-go/internal/artifact)、[storage](../../../../backend-go/internal/storage)
+- Import/Worker：[ingestion](../../../../backend-go/internal/ingestion)、[worker](../../../../backend-go/internal/worker)
+- Import 解析基准：[import_parser_test.go](../../../../backend-go/internal/ingestion/import_parser_test.go)
+- Version BOM 缩略图 SQL 计划：[version_parts_performance_integration_test.go](../../../../backend-go/internal/workbench/version_parts_performance_integration_test.go)
+- Schema/迁移：[schema_integration_test.go](../../../../backend-go/internal/database/schema_integration_test.go)、[migrations](../../../../backend-go/db/migrations)
+- 前端 API adapter：[componentRepoApi.test.ts](../../../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
+- Import 三阶段 UI：[ComponentImportStatusPage.test.tsx](../../../../frontend/src/componentRepo/__tests__/ComponentImportStatusPage.test.tsx)
+- Group 候选完整性与续页：[ComponentGroupControls.test.tsx](../../../../frontend/src/componentRepo/__tests__/ComponentGroupControls.test.tsx)
+- 材质 Profile、GLB 扩展和前端摄影棚运行时：[catalog_test.go](../../../../backend-go/internal/ldrawmaterial/catalog_test.go)、[task_handlers_test.go](../../../../backend-go/internal/workbench/task_handlers_test.go)、[studioPreviewRendering.test.ts](../../../../frontend/src/preview/__tests__/studioPreviewRendering.test.ts)
+- 页面与 i18n：[localizedPages.test.tsx](../../../../frontend/src/i18n/__tests__/localizedPages.test.tsx)
 
 2026-09-14 的 03/04/08 清理新增 v24 迁移、目录 cursor 单元/集成测试和十万行 `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)`
 门禁。数据为 100,000 个 Component：90,000 active、10,000 archived、10,000 official、5,000 条 reviewed zh-CN
@@ -254,9 +270,45 @@ PostgreSQL 14.17、`shared_buffers=128MB`、`work_mem=4MB`、`effective_cache_si
 | 完整 UUID | 0.111 ms | Component 主键等值路径 |
 | 第 80,001 条 cursor / 空 actor | 0.263 / 0.202 ms | 无 OFFSET；深边界进入排序索引，空 actor 不执行无关内层 |
 
+2026-09-19 的 BOM 缩略图门禁使用 PostgreSQL 14.17、24,000 个 Part/geometry/preview/Artifact、1,000 条 reviewed
+translation 和单 Version 1,000 个 distinct BOM refs；`shared_buffers=128MB`、`work_mem=4MB`、
+`effective_cache_size=4GB`，数据已 ANALYZE。warm-cache 结果只证明查询形状，不代表生产 SLO：
+
+| 场景 | 执行时间 | 计划结论 |
+|---|---:|---|
+| 无 Preview | 4.598 ms | BOM refs 驱动，Part/geometry/translation 均为键索引点查 |
+| 500 个 ready Preview | 5.141 ms | Preview/Artifact 只对命中项作 LATERAL 点查，无全表扫描 |
+| 1,000 个 ready Preview | 5.792 ms | 全 enrichment 仍无 Seq Scan、temp 或磁盘 spill |
+| 1,000 个缺失 Part ref | 1.353 ms | Part 主键探测后快速结束，后续 enrichment 不执行 |
+
+同日 Apple M2 上对仓库 `test.io`（210 个 Part）的 `BenchmarkMaterializeImportTrackedStudioFixture` 连跑 5 次：
+移除 Document JSON 往返前约 4.91～5.03 ms/op、3.87～3.89 MB/op、42,920 allocs/op；修改后约
+2.34～2.37 ms/op、2.79～2.82 MB/op、27,183～27,185 allocs/op。本地 fixture 显示约 52% 时间和 28% 内存下降，
+只作为解析热点证据，不外推生产吞吐或队列 SLO。
+
 前端 i18n、测试、构建和 Go 结果见迁移进度。
 
 ## 11. 已发现的偏移与清理准备
+
+### 11.0 详情页体验调整实施前记录（2026-09-19）
+
+- 详情页连接分析属于 owner Candidate 审核能力，不是已发布 Version 的核心阅读信息。本轮详情页停止请求和展示 relation、
+  connector 与 external interface；能力和接口继续保留在 Candidate 工作台，不删除领域数据或公共 API。
+- BOM 缩略图继续由不可变 Part Preview GLB 派生。`GET .../parts` 只投影当前 generator 已 ready、Artifact 已 verified 且未删除的
+ 模型定位符，Storage key 不出 API；服务端对当次 BOM 中的可用对象批量签名，前端进入视口附近后才使用共享单 WebGL renderer
+  生成静态 WebP。缺失/签名失败只显示既有占位图，GET 不调度 Part Preview 任务。
+- BOM 查询由 SceneSnapshot 中已经持久化的 `bom` 键集合驱动。数量随单个 Version 的 distinct Part 类型增长，通常远小于实例总数，
+  但不能把当前样例规模当成 API 硬上限。候选先由 `unnest(ldraw_part_nums)` 固定，再以冻结
+  `(part_library_version_id,ldraw_part_num)` 主键点查 Part、geometry、preview 和 Artifact；translation 仅按同一冻结库、Part 编号、
+  locale、reviewed 状态点查。没有搜索、排序分页或 exact count，`ORDER BY` 仅稳定 BOM 编号；缩略图 enrichment 不得驱动全库扫描。
+  性能验收至少覆盖无 Preview、部分 ready、全部 ready 和缺失 geometry，并检查 preview/Artifact/translation 内层均由键索引探测。
+- 上传完成后的聚合处理仍以 Import、Parse Task 和 Preview Task 为权威。UI 只把 durable 状态映射为“已上传 → 解析/BOM → 3D 预览”
+  三阶段，不保存最终进度句子，也不把队列等待时间伪装成算法精确进度。任务 code/percent 若存在则继续按结构化协议展示。
+- 解析性能优化先以真实 `.io/.ldr/.mpd` fixture 基准定位。首个低风险候选是移除 `materializeImport` 为调用 `scene.ExpandJSON`
+  产生的 Document JSON 编码/解码往返，直接构造 typed scene document；源文件读取、Studio ZIP 解包和 GLB 物化保持 Worker 边界。
+  若基准不能证明收益，则不据此宣称性能已经提升，并把流式解析/阶段并行化保留为后续独立清理项。
+- 当前 Source API 返回不可变 Studio/LDraw 原始文件。本轮详情页增加可见下载入口，但明确为“图纸源文件”；它不是分页、分步骤的
+  拼搭说明书。真正的说明书生成需要新的 Artifact 类型、持久任务、版本化导出上下文和独立验收，不能复用 Source 名称冒充。
 
 ### 11.1 03/04/08 实施前查询设计记录
 
@@ -292,5 +344,7 @@ PostgreSQL 14.17、`shared_buffers=128MB`、`work_mem=4MB`、`effective_cache_si
 | COMPONENT-CLEAN-08（已关闭） | v24 `component_catalog_candidates` 统一删除与 Version 资格，`component_catalog_projection` 统一页内展示尺寸，`component_reviewed_translations` 统一 official reviewed 边界；Component、Group、Star、Watch 及公共 Feed 已切换 | 共享资格规则有一个 Goose 权威定义，候选查询不会提前执行 Version 展示点查，各查询只保留 actor、locale、筛选和分页职责 | 关闭证据：v24 up/down/up、三项 schema view 契约、跨模块集成测试及十万行计划；Version 资格由触发器维护的持久布尔值驱动 |
 | COMPONENT-CLEAN-09 | 同一页面对 Group 使用多条件 AND，对公共 Feed/收藏把条件拼成一个 query | 外观相同的搜索控件具有不同语义 | 产品先统一搜索模型；之后同时修改 API、URL 状态、文案和测试 |
 | COMPONENT-CLEAN-10 | v6 已覆盖版本化颜色表、材质类别、折角法线和 glTF PBR 扩展，但 `collectLDrawTriangles` 仍只输出几何；Part 内部 16/24 颜色继承、直接色、多材质、BFC/TEXMAP 和印刷纹理尚未进入 Component GLB | 纯色普通砖显著接近 Studio，印刷、多色、贴图和特殊 BFC 模型仍可能偏差 | 扩展 triangle material identity 与 mesh primitive 分组；为 16/24、direct color、BFC、TEXMAP/printed fixture 分别建立 GLB validator 与 Studio 视觉基准后关闭 |
+| COMPONENT-CLEAN-11（已关闭） | 详情页已停止连接读取；BOM 返回可选 ready `previewModel` 并按视口生成缩略图；Import 展示三个 durable 阶段；本人不显示 Star，发布右侧更多菜单承载删除 | 阅读页不再承担 owner 审核请求，零件可识别、长任务有恢复友好的阶段反馈，删除降为次级操作 | 关闭证据：详情/状态页与 presenter、BOM Service/SQL 集成和 24,000 Part 计划门禁、双语/i18n、前端全量测试；解析 typed document 基准另证明热点收益 |
+| COMPONENT-CLEAN-12 | 当前 Source 是 Studio/LDraw 模型源文件，没有逐步拼搭说明书 Artifact | 若直接称为“说明书/图纸”会误导用户对文件内容的预期 | 本轮只提供明确的图纸源文件下载；另立产品设计确定步骤拆分、版式、PDF/图片产物、导出 locale 与 Worker 性能门禁后才能关闭 |
 
-01/02、05/06 与本轮 03/04/08 已关闭。07/09 仍需要先确认产品与真实调用；10 依赖多材质/BFC/TEXMAP 的独立实现和视觉基准。
+01～06、08、11 已关闭。07/09 仍需要先确认产品与真实调用；10 依赖多材质/BFC/TEXMAP 的独立实现和视觉基准；12 等待逐步拼搭说明书产品设计。

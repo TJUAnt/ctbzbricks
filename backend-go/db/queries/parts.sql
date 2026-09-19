@@ -8,74 +8,133 @@ ORDER BY created_at DESC, id DESC
 LIMIT 1;
 
 -- name: CountSearchableParts :one
--- 零件搜索只读取指定的不可变 Part Library；名称/编号关键词按“至少命中一个”组合，
--- 尺寸片段也按候选集合组合，但关键词集合与尺寸集合之间必须同时满足。
+-- 零件搜索只读取指定的不可变 Part Library；描述 token、编号和每个尺寸条件全部按 AND 组合。
+-- 宽/深是可旋转的平面轴，高度单位为 plate 且绝不参与换轴；任一尺寸条件都只接受 derived_exact。
+WITH requested_translations AS MATERIALIZED (
+    SELECT source.part_library_version_id, source.ldraw_part_num, source.name, source.locale
+    FROM component_repo.part_translations source
+    WHERE source.part_library_version_id = sqlc.arg(part_library_version_id)
+      AND source.locale = sqlc.arg(locale)
+      AND source.translation_status = 'reviewed'
+)
 SELECT count(*)::bigint
 FROM component_repo.parts part
 JOIN component_repo.part_geometries geometry
   ON geometry.part_library_version_id = part.part_library_version_id
  AND geometry.ldraw_part_num = part.ldraw_part_num
+LEFT JOIN requested_translations translation
+  ON translation.part_library_version_id = part.part_library_version_id
+ AND translation.ldraw_part_num = part.ldraw_part_num
 WHERE part.part_library_version_id = sqlc.arg(part_library_version_id)
   AND geometry.geometry_status = 'ready'
   AND position('sticker' IN lower(part.source_name)) = 0
   AND position('decal' IN lower(part.source_name)) = 0
+  AND lower(part.source_name || ' ' || COALESCE(translation.name, ''))
+      LIKE ALL(sqlc.arg(description_patterns)::text[])
   AND (
-      cardinality(sqlc.arg(keywords)::text[]) = 0
-      OR EXISTS (
-          SELECT 1
-          FROM unnest(sqlc.arg(keywords)::text[]) keyword(value)
-          WHERE position(keyword.value IN lower(part.source_name)) > 0
-             OR position(keyword.value IN lower(part.ldraw_part_num)) > 0
-      )
+      sqlc.arg(part_number)::text = ''
+      OR position(sqlc.arg(part_number)::text IN lower(part.ldraw_part_num)) > 0
   )
   AND (
-      jsonb_array_length(sqlc.arg(dimensions)::jsonb) = 0
-      OR EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements(sqlc.arg(dimensions)::jsonb) dimension(value)
-          WHERE geometry.logical_width_stud IS NOT NULL
-            AND geometry.logical_depth_stud IS NOT NULL
-            AND (
-                (
-                    jsonb_array_length(dimension.value) = 2
-                    AND least(geometry.logical_width_stud, geometry.logical_depth_stud) = (dimension.value ->> 0)::double precision
-                    AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud) = (dimension.value ->> 1)::double precision
-                )
-                OR (
-                    jsonb_array_length(dimension.value) = 3
-                    AND geometry.logical_height_plate IS NOT NULL
-                    AND least(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 0)::double precision
-                    AND geometry.logical_width_stud + geometry.logical_depth_stud + geometry.logical_height_plate
-                        - least(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate)
-                        - greatest(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 1)::double precision
-                    AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 2)::double precision
-                )
-            )
+      NOT (sqlc.arg(has_width)::boolean OR sqlc.arg(has_depth)::boolean OR sqlc.arg(has_height)::boolean)
+      OR geometry.logical_size_derivation_status = 'derived_exact'
+  )
+  AND (
+      (NOT sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean)
+      OR (
+          sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+          AND least(geometry.logical_width_stud, geometry.logical_depth_stud)
+              = least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision)
+          AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud)
+              = greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision)
       )
+      OR (sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean
+          AND sqlc.arg(width_stud)::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+      OR (NOT sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+          AND sqlc.arg(depth_stud)::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+  )
+  AND (
+      NOT sqlc.arg(has_height)::boolean
+      OR geometry.logical_height_plate = sqlc.arg(height_plate)::double precision
   );
 
 -- name: SearchParts :many
--- 排序先按命中的名称/编号关键词数量，再按源名称和 LDraw 编号稳定排序；分页不会依赖本地化文案。
--- 当前 generator 的 ready Artifact 作为可选只读投影返回，Search 不创建任务，也不读取对象正文。
-SELECT part.part_library_version_id, part.ldraw_part_num, part.source_name,
-       part.content_locale, geometry.logical_width_stud,
-       geometry.logical_depth_stud, geometry.logical_height_plate,
-       geometry.logical_size_derivation_status, preview.artifact_id AS preview_artifact_id,
+-- 先固定排序后的页面，再关联 preview/artifact；候选集不会因 Storage 投影产生逐行放大。
+-- reviewed translation 既参与请求 locale 的描述检索，也作为展示名；无 reviewed 行时回退源描述。
+WITH requested_translations AS MATERIALIZED (
+    SELECT source.part_library_version_id, source.ldraw_part_num, source.name, source.locale
+    FROM component_repo.part_translations source
+    WHERE source.part_library_version_id = sqlc.arg(part_library_version_id)
+      AND source.locale = sqlc.arg(locale)
+      AND source.translation_status = 'reviewed'
+), filtered AS (
+    SELECT part.part_library_version_id, part.ldraw_part_num,
+           COALESCE(translation.name, part.source_name) AS display_name,
+           COALESCE(translation.locale, part.content_locale) AS display_locale,
+           CASE WHEN translation.name IS NULL THEN 'source' ELSE 'reviewed' END AS translation_status,
+           geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate,
+           geometry.logical_size_derivation_status,
+           lower(part.source_name) AS source_sort,
+           CASE
+               WHEN sqlc.arg(description_phrase)::text <> ''
+                AND lower(COALESCE(translation.name, part.source_name)) = sqlc.arg(description_phrase)::text THEN 0
+               WHEN sqlc.arg(description_phrase)::text <> ''
+                AND position(sqlc.arg(description_phrase)::text IN lower(COALESCE(translation.name, part.source_name))) > 0 THEN 1
+               ELSE 2
+           END AS relevance_rank
+    FROM component_repo.parts part
+    JOIN component_repo.part_geometries geometry
+      ON geometry.part_library_version_id = part.part_library_version_id
+     AND geometry.ldraw_part_num = part.ldraw_part_num
+    LEFT JOIN requested_translations translation
+      ON translation.part_library_version_id = part.part_library_version_id
+     AND translation.ldraw_part_num = part.ldraw_part_num
+    WHERE part.part_library_version_id = sqlc.arg(part_library_version_id)
+      AND geometry.geometry_status = 'ready'
+      AND position('sticker' IN lower(part.source_name)) = 0
+      AND position('decal' IN lower(part.source_name)) = 0
+      AND lower(part.source_name || ' ' || COALESCE(translation.name, ''))
+          LIKE ALL(sqlc.arg(description_patterns)::text[])
+      AND (
+          sqlc.arg(part_number)::text = ''
+          OR position(sqlc.arg(part_number)::text IN lower(part.ldraw_part_num)) > 0
+      )
+      AND (
+          NOT (sqlc.arg(has_width)::boolean OR sqlc.arg(has_depth)::boolean OR sqlc.arg(has_height)::boolean)
+          OR geometry.logical_size_derivation_status = 'derived_exact'
+      )
+      AND (
+          (NOT sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean)
+          OR (
+              sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+              AND least(geometry.logical_width_stud, geometry.logical_depth_stud)
+                  = least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision)
+              AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud)
+                  = greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision)
+          )
+          OR (sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean
+              AND sqlc.arg(width_stud)::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+          OR (NOT sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+              AND sqlc.arg(depth_stud)::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+      )
+      AND (
+          NOT sqlc.arg(has_height)::boolean
+          OR geometry.logical_height_plate = sqlc.arg(height_plate)::double precision
+      )
+    ORDER BY relevance_rank, source_sort, part.ldraw_part_num
+    LIMIT sqlc.arg(page_size)
+    OFFSET sqlc.arg(page_offset)
+)
+SELECT filtered.part_library_version_id, filtered.ldraw_part_num, filtered.display_name,
+       filtered.display_locale, filtered.translation_status,
+       filtered.logical_width_stud, filtered.logical_depth_stud, filtered.logical_height_plate,
+       filtered.logical_size_derivation_status, preview.artifact_id AS preview_artifact_id,
        artifact.storage_key AS preview_storage_key, artifact.sha256 AS preview_sha256,
-       artifact.file_size AS preview_file_size,
-       (
-           SELECT count(*)::integer
-           FROM unnest(sqlc.arg(keywords)::text[]) keyword(value)
-           WHERE position(keyword.value IN lower(part.source_name)) > 0
-              OR position(keyword.value IN lower(part.ldraw_part_num)) > 0
-       ) AS matched_keyword_count
-FROM component_repo.parts part
-JOIN component_repo.part_geometries geometry
-  ON geometry.part_library_version_id = part.part_library_version_id
- AND geometry.ldraw_part_num = part.ldraw_part_num
+       artifact.file_size AS preview_file_size
+FROM filtered
 LEFT JOIN component_repo.part_previews preview
-  ON preview.part_library_version_id = part.part_library_version_id
- AND preview.ldraw_part_num = part.ldraw_part_num
+  ON preview.part_library_version_id = filtered.part_library_version_id
+ AND preview.ldraw_part_num = filtered.ldraw_part_num
  AND preview.status = 'ready'
  AND preview.generator_version = sqlc.arg(generator_version)
 LEFT JOIN component_repo.artifacts artifact
@@ -83,47 +142,10 @@ LEFT JOIN component_repo.artifacts artifact
  AND artifact.artifact_type = 'part_preview_glb'
  AND artifact.verification_status = 'verified'
  AND artifact.deleted_at IS NULL
-WHERE part.part_library_version_id = sqlc.arg(part_library_version_id)
-  AND geometry.geometry_status = 'ready'
-  AND position('sticker' IN lower(part.source_name)) = 0
-  AND position('decal' IN lower(part.source_name)) = 0
-  AND (
-      cardinality(sqlc.arg(keywords)::text[]) = 0
-      OR EXISTS (
-          SELECT 1
-          FROM unnest(sqlc.arg(keywords)::text[]) keyword(value)
-          WHERE position(keyword.value IN lower(part.source_name)) > 0
-             OR position(keyword.value IN lower(part.ldraw_part_num)) > 0
-      )
-  )
-  AND (
-      jsonb_array_length(sqlc.arg(dimensions)::jsonb) = 0
-      OR EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements(sqlc.arg(dimensions)::jsonb) dimension(value)
-          WHERE geometry.logical_width_stud IS NOT NULL
-            AND geometry.logical_depth_stud IS NOT NULL
-            AND (
-                (
-                    jsonb_array_length(dimension.value) = 2
-                    AND least(geometry.logical_width_stud, geometry.logical_depth_stud) = (dimension.value ->> 0)::double precision
-                    AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud) = (dimension.value ->> 1)::double precision
-                )
-                OR (
-                    jsonb_array_length(dimension.value) = 3
-                    AND geometry.logical_height_plate IS NOT NULL
-                    AND least(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 0)::double precision
-                    AND geometry.logical_width_stud + geometry.logical_depth_stud + geometry.logical_height_plate
-                        - least(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate)
-                        - greatest(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 1)::double precision
-                    AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud, geometry.logical_height_plate) = (dimension.value ->> 2)::double precision
-                )
-            )
-      )
-  )
-ORDER BY matched_keyword_count DESC, lower(part.source_name), part.ldraw_part_num
-LIMIT sqlc.arg(page_size)
-OFFSET sqlc.arg(page_offset);
+ORDER BY
+    filtered.relevance_rank,
+    filtered.source_sort,
+    filtered.ldraw_part_num;
 
 -- name: GetPartPreview :one
 SELECT library.id AS part_library_version_id, library.source_hash AS part_library_source_hash,

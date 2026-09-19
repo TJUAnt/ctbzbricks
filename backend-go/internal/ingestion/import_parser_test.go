@@ -104,3 +104,17 @@ func TestMaterializeImportTrackedStudioFixtureMatchesDeclaredBrickCount(t *testi
 		t.Fatalf("tracked Studio BOM quantity/summary = %d/%v", quantity, result.Summary["partInstanceCount"])
 	}
 }
+
+func BenchmarkMaterializeImportTrackedStudioFixture(b *testing.B) {
+	content, err := os.ReadFile("../../../test.io")
+	if err != nil {
+		b.Fatalf("read tracked Studio fixture: %v", err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := materializeImport(content, artifactTypeStudioIO, "test.io", "component-repo-ldraw-parser-v2"); err != nil {
+			b.Fatalf("materialize tracked Studio fixture: %v", err)
+		}
+	}
+}

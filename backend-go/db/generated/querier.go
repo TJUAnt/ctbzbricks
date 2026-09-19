@@ -41,8 +41,8 @@ type Querier interface {
 	CountOwnedImportProcessingStatuses(ctx context.Context, arg CountOwnedImportProcessingStatusesParams) ([]CountOwnedImportProcessingStatusesRow, error)
 	CountPartPreviewPrebuildCandidates(ctx context.Context, arg CountPartPreviewPrebuildCandidatesParams) (int64, error)
 	CountPreviewBoundsBackfillCandidates(ctx context.Context, generatorVersion *string) (int64, error)
-	// 零件搜索只读取指定的不可变 Part Library；名称/编号关键词按“至少命中一个”组合，
-	// 尺寸片段也按候选集合组合，但关键词集合与尺寸集合之间必须同时满足。
+	// 零件搜索只读取指定的不可变 Part Library；描述 token、编号和每个尺寸条件全部按 AND 组合。
+	// 宽/深是可旋转的平面轴，高度单位为 plate 且绝不参与换轴；任一尺寸条件都只接受 derived_exact。
 	CountSearchableParts(ctx context.Context, arg CountSearchablePartsParams) (int64, error)
 	// 没有 active period 时追加新周期；并发重复 PUT 命中部分唯一索引时不更新任何既有行，由 Service 重试读取。
 	CreateActiveComponentWatchPeriod(ctx context.Context, arg CreateActiveComponentWatchPeriodParams) (CreateActiveComponentWatchPeriodRow, error)
@@ -150,6 +150,8 @@ type Querier interface {
 	// 聚合只对已经固定的一页 Component 做索引探测，禁止优化器为少量卡片扫描全部 Star 关系。
 	ListCurrentComponentWatchFeed(ctx context.Context, arg ListCurrentComponentWatchFeedParams) ([]ListCurrentComponentWatchFeedRow, error)
 	ListExpiredUploadSessions(ctx context.Context, arg ListExpiredUploadSessionsParams) ([]ComponentRepoUploadSession, error)
+	// BOM 候选已由冻结 SceneSnapshot 的 distinct Part 编号固定；缩略图只点查当前生成器的 ready/verified Artifact，
+	// 不得从全 Part Library 或 Artifact 表反向驱动，也不得在读取接口中创建预览任务。
 	ListLocalizedParts(ctx context.Context, arg ListLocalizedPartsParams) ([]ListLocalizedPartsRow, error)
 	ListOwnedCandidateConnectors(ctx context.Context, arg ListOwnedCandidateConnectorsParams) ([]ListOwnedCandidateConnectorsRow, error)
 	ListOwnedCandidateInterfaces(ctx context.Context, arg ListOwnedCandidateInterfacesParams) ([]ListOwnedCandidateInterfacesRow, error)
@@ -211,8 +213,8 @@ type Querier interface {
 	RetryTask(ctx context.Context, arg RetryTaskParams) (ComponentRepoTask, error)
 	// 尺寸搜索忽略 Box 轴方向：先把三个业务尺寸归一化为升序 a/b/c；任一尺寸缺失时不参与尺寸匹配。
 	SearchComponentGroupComponents(ctx context.Context, arg SearchComponentGroupComponentsParams) ([]SearchComponentGroupComponentsRow, error)
-	// 排序先按命中的名称/编号关键词数量，再按源名称和 LDraw 编号稳定排序；分页不会依赖本地化文案。
-	// 当前 generator 的 ready Artifact 作为可选只读投影返回，Search 不创建任务，也不读取对象正文。
+	// 先固定排序后的页面，再关联 preview/artifact；候选集不会因 Storage 投影产生逐行放大。
+	// reviewed translation 既参与请求 locale 的描述检索，也作为展示名；无 reviewed 行时回退源描述。
 	SearchParts(ctx context.Context, arg SearchPartsParams) ([]SearchPartsRow, error)
 	SetCandidateRelationDetectionTask(ctx context.Context, arg SetCandidateRelationDetectionTaskParams) error
 	// 发布事务切换 current Version 时同步维护规范化尺寸，避免 Star 筛选读取 Version 后逐行计算。

@@ -52,11 +52,11 @@ go run ./cmd/migrate up
 go run ./cmd/migrate version
 # 百万级关系计划门禁只在显式开启时输出详细计划，避免日常集成测试产生大量日志。
 integration_test_flags=""
-if [ "${RUN_PIXEL_PLAN_TEST:-0}" = "1" ] || [ "${RUN_STAR_SIZE_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_LIST_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_FEED_PLAN_TEST:-0}" = "1" ] || [ "${RUN_PUBLIC_FEED_PLAN_TEST:-0}" = "1" ] || [ "${RUN_COMPONENT_LIST_PLAN_TEST:-0}" = "1" ]; then
+if [ "${RUN_PIXEL_PLAN_TEST:-0}" = "1" ] || [ "${RUN_STAR_SIZE_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_LIST_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_FEED_PLAN_TEST:-0}" = "1" ] || [ "${RUN_PUBLIC_FEED_PLAN_TEST:-0}" = "1" ] || [ "${RUN_COMPONENT_LIST_PLAN_TEST:-0}" = "1" ] || [ "${RUN_VERSION_PARTS_PLAN_TEST:-0}" = "1" ] || [ "${RUN_PART_SEARCH_PLAN_TEST:-0}" = "1" ]; then
 	integration_test_flags="-v"
 fi
 # 默认执行完整集成集；性能门禁可在低磁盘 CI runner 上显式缩小包集合，迁移和启动无 DDL 契约仍会执行。
-integration_packages=${BRICKBUILDER_TEST_PACKAGES:-"./internal/database ./internal/component ./internal/artifact ./internal/task ./internal/worker ./internal/ingestion ./internal/workbench ./internal/httpapi ./internal/partlibrary ./internal/pixel2d"}
+integration_packages=${BRICKBUILDER_TEST_PACKAGES:-"./db/generated ./internal/database ./internal/component ./internal/artifact ./internal/task ./internal/worker ./internal/ingestion ./internal/workbench ./internal/httpapi ./internal/partlibrary ./internal/pixel2d"}
 go test $integration_test_flags -p=1 -tags=integration $integration_packages
 
 before_schema="$test_root/schema-before.sql"

@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -49,6 +50,10 @@ func (e ldrawGeometryError) Error() string {
 }
 
 var identityLDrawTransform = ldrawTransform{m: [9]float64{1, 0, 0, 0, 1, 0, 0, 0, 1}}
+
+var standardPartLogicalSizePattern = regexp.MustCompile(`(?i)^(brick|plate|tile)\s+(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\b`)
+
+const LogicalSizeAlgorithmVersion = "ldraw-description-nominal-v1"
 
 func (t ldrawTransform) apply(v ldrawVector) ldrawVector {
 	return ldrawVector{
@@ -116,7 +121,32 @@ func ldrawDescription(line string) string {
 			return ""
 		}
 	}
-	return value
+	// LDraw 官方描述中常用多个空格对齐；持久化前规范化空白，避免展示和 token 搜索随排版漂移。
+	return strings.Join(strings.Fields(value), " ")
+}
+
+// deriveLogicalSize 只把可由官方描述直接解释的标准 Brick/Plate/Tile 标为精确标称尺寸；
+// 其他零件仍保留 bbox 近似值供展示，但不得进入精确尺寸筛选。
+func deriveLogicalSize(sourceName string, stats GeometryStats) (width, depth, height float64, status string) {
+	width = roundNonNegative((stats.BBoxMax[0] - stats.BBoxMin[0]) / 20)
+	depth = roundNonNegative((stats.BBoxMax[2] - stats.BBoxMin[2]) / 20)
+	height = roundNonNegative((stats.BBoxMax[1] - stats.BBoxMin[1]) / 8)
+	status = "derived_approximate"
+
+	match := standardPartLogicalSizePattern.FindStringSubmatch(sourceName)
+	if match == nil {
+		return width, depth, height, status
+	}
+	nominalWidth, widthErr := strconv.ParseFloat(match[2], 64)
+	nominalDepth, depthErr := strconv.ParseFloat(match[3], 64)
+	if widthErr != nil || depthErr != nil || nominalWidth <= 0 || nominalDepth <= 0 {
+		return width, depth, height, status
+	}
+	nominalHeight := 1.0
+	if strings.EqualFold(match[1], "brick") {
+		nominalHeight = 3
+	}
+	return nominalWidth, nominalDepth, nominalHeight, "derived_exact"
 }
 
 func (idx *ldrawIndex) computeStats(manifestRelativePath string) (GeometryStats, error) {

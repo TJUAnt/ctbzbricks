@@ -16,16 +16,16 @@
 | `ModelAsset.name/source_name` | 用户内容 | 原文保存并返回 `contentLocale` |
 | `Component`（`content_kind=official`） | 官方内容 | 源内容保存在主表，翻译保存在 `component_translations` |
 | `LDrawPart.name/description` | 官方内容 | 英文源内容保存在主表，翻译保存在 `part_translations` |
-| Go Part Search 的 `parts.source_name` / `ldraw_part_num` | 源内容检索投影 / 机器编号 | `query` 关键词匹配 importer 从 LDraw 文件头固化的源名称或稳定编号；结果返回源名称及其 `contentLocale`、`translationStatus=source`，不选择 reviewed translation。`imageUrl` 当前为 `null`，后续图片定位符仍属于机器数据、不翻译。 |
+| Go Part Search 的 `parts.source_name` / `part_translations.name` / `ldraw_part_num` | 官方源内容 / reviewed official translation / 机器编号 | `description` 的全部 token 匹配 importer 从 LDraw 文件头固化的源描述与请求 locale 的 reviewed translation；结果优先返回 reviewed 名称，否则返回源描述及其 `contentLocale`。`partNumber` 独立匹配稳定编号且不翻译；`imageUrl` 当前为 `null`，预览 Artifact 定位符仍属于机器数据。 |
 | 零件查找 `query` 及解析结果 | 用户查询 / 机器数据 | 空格或逗号分隔的名称关键词按用户原文用于检索，不保存、不翻译；从 `axb` / `axbxc` 提取的尺寸、关键词命中数和排序分数是机器数据 |
 | 组件列表搜索 `query`、尺寸、状态与分页 | 用户查询 / 机器数据 / 官方内容选择 | 查询词按用户原文使用，不保存、不翻译；尺寸、状态、页码、容差和匹配分数保持机器数据。用户组件匹配原始名称；官方组件只匹配请求 locale 下实际选中的 reviewed 名称，缺失时按既有规则回退源内容 |
 | 自动外部接口 ID、连接点类型、识别状态、识别规则版本 | 机器数据 | 由组件分析算法确定并随版本冻结，不提供用户创建或编辑，不翻译 |
-| 组件预览零件 `availability`、可计算数量和缺失几何/mesh 状态 | 机器数据 | API 返回稳定状态值；缺失零件不参与尺寸、连接识别或 GLB，界面状态标签通过语义键本地化 |
+| 组件预览零件 `availability`、可计算数量、缺失几何/mesh 状态及 BOM `previewModel` | 机器数据 | API 返回稳定状态值；缺失零件不参与尺寸、连接识别或整体 GLB。BOM `previewModel` 的 artifact ID、短期 URL、content type 与 generator version 只是 ready Part Preview 的机器定位符，不翻译、不持久化最终缩略图文案；界面状态与占位标签通过语义键本地化 |
 | `ComponentVersion.preview_artifact_id/preview_status/preview_generator_version` 与 GLB 完整性字段 | 机器数据 | 使用版本 ID 直接定位派生 GLB；状态、生成器版本、artifact ID 和 SHA-256 不翻译。零件清单名称仍由独立 locale-aware API 选择 reviewed 翻译，不写入 GLB 定位数据 |
 | Component Version Diff 的版本/实例/Part ID、`change kind`、矩阵、颜色码、数量与算法版本 | 机器数据 | API 返回稳定值并由双栏 3D 查看器定位节点；字段值不翻译。页面标题、操作、变化类型图例和空/错误状态使用 typed semantic key 本地化 |
 | `Component/ComponentVersion.deleted_at/deleted_by`、版本发布/删除权限原因 | 机器数据 | 用于发布、逻辑删除、审计和权限判断，保持稳定且不翻译；操作界面中的组件名仍按用户或官方内容规则展示 |
 | `Component.ownedByActor` | 机器数据 / 当前请求授权投影 | Go API 根据已鉴权 actor 与数据库 owner 计算，只控制当前页面管理操作，不保存、不翻译，也不能替代 mutation 的服务端 owner 校验 |
-| `ComponentImport`、上传会话及其解析元数据 | 内部来源与机器数据 | 上传确认后冻结 `contentLocale/timezone`，API 以 `202` 结束写交互，并由持久任务在请求外执行 verify、解析/BOM 和 GLB 物化。`processing/ready/failed`、ID、状态、哈希与元数据键保持稳定且不翻译；界面处理状态使用 typed semantic key，失败使用 `code + params`。临时上传清理不得删除已成为不可变版本来源的 Artifact。 |
+| `ComponentImport`、上传会话及其解析元数据 | 内部来源与机器数据 | 上传确认后冻结 `contentLocale/timezone`，API 以 `202` 结束写交互，并由持久任务在请求外执行 verify、解析/BOM 和 GLB 物化。`processing/ready/failed`、ID、`taskId/previewTaskId`、Task 状态、百分比、哈希与元数据键保持稳定且不翻译；界面用 typed semantic key 将权威状态映射为“已上传、解析/BOM、3D 预览”三个 durable 阶段，队列等待不冒充精确算法进度，失败使用 `code + params`。临时上传清理不得删除已成为不可变版本来源的 Artifact。 |
 | 导入文件名、项目标签 | 用户或技术原文 | 不自动翻译；必要时单独记录内容语言 |
 | API 错误、任务进度、验证 issue | 系统内容 | 只保存 `code + params`，由资源目录翻译 |
 | 导出 JSON 的属性名、枚举、ID、BOM 数值 | 机器数据 | 保持稳定契约，不翻译 |
