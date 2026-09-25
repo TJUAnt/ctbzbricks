@@ -45,7 +45,11 @@
 
 ## 4. API、权限和 i18n
 
-请求为 `GET /api/v1/component-public-feed?limit&cursor&query`。`limit` 为 1～100，`query` 最长 200；响应为 `{items,nextCursor}`。每项在既有事件和 Component 投影外增加：
+请求为 `GET /api/v1/component-public-feed?limit&cursor&name&componentId&widthStud&depthStud&heightPlate`。
+`limit` 为 1～100，名称最长 200、ID 最长 128；响应为 `{items,nextCursor}`。名称按空白或中英文逗号分词且全部
+token 命中，ID 独立 contains；宽深允许旋转并使用闭区间 ±0.25 stud，高固定轴使用闭区间 ±0.625 plate。所有非空
+字段按 AND 组合，与个人 Group/收藏复用同一前端表单和 Service 规范化规则；cursor 绑定完整规范化筛选签名。
+每项在既有事件和 Component 投影外增加：
 
 ```json
 {
@@ -67,24 +71,26 @@
 
 fallback 时 `status=fallback,image=null`。pending 永不出现在响应中。内部 Storage provider、bucket 和 key 不返回。
 
-请求经过 JWT middleware；owner 校验只发生在发布和 Worker 输入边界。公共 Feed 的 actor 不过滤候选。无效 cursor/limit/query 使用既有稳定 `code + params`。
+请求经过 JWT middleware；owner 校验只发生在发布和 Worker 输入边界。公共 Feed 的 actor 不过滤候选。无效
+cursor/limit/结构化筛选使用既有稳定 `code + params`。SQL 继续从终态 Feed entry 索引驱动；只有尺寸筛选启用时才读取
+当前展示 Version，固定事件页后才做 Star/Watch/图片 enrichment。
 
-Feed 图片没有新增用户可见文本，复用图片 alt 和 `previewUnavailable` typed semantic key；当前 catalog 为
-`frontend-2026.09.16.1`，Star 按钮继续复用既有 Star/Unstar key。`render.status/profile/version`、Artifact 字段、
+结构化筛选新增双语字段标签和尺寸提示；当前 catalog 为 `frontend-2026.09.25.1`。Feed 图片继续复用图片 alt、
+`previewUnavailable` 和既有 Star/Unstar typed semantic key。`render.status/profile/version`、Artifact 字段、
 尺寸、hash、cursor 和时间都是机器值，不翻译；用户内容规则不变。
 
 ## 5. 代码索引
 
 | 层 | 代码 |
 |---|---|
-| 页面与卡片 | `frontend/src/componentRepo/ComponentPlazaPage.tsx`、`ComponentPublicFeedCard.tsx`、`ComponentStarButton.tsx`、`componentPublicFeed.ts`、`frontend/src/styles.css` |
+| 页面与卡片 | `frontend/src/componentRepo/ComponentPlazaPage.tsx`、`ComponentSearchForm.tsx`、`ComponentPublicFeedCard.tsx`、`ComponentStarButton.tsx`、`componentPublicFeed.ts`、`frontend/src/styles.css` |
 | API adapter | `frontend/src/componentRepo/componentRepoApi.ts`、`frontend/src/app/appConfig.json` |
 | HTTP / Service | `backend-go/internal/component/handler.go`、`service.go`、`mapping.go`、`types.go` |
 | Worker / Renderer | `backend-go/internal/feedrender/`、`backend-go/internal/ldrawmaterial/`、`backend-go/cmd/worker/main.go`、`scripts/start-feed-render-worker.sh`、`scripts/start-feed-render-worker.ps1` |
 | GLB 与浏览器材质 | `backend-go/internal/workbench/task_handlers.go`、`frontend/src/preview/studioPreviewRendering.ts`、`glbThumbnailRenderer.ts`、`frontend/src/parts/PartViewerPage.tsx` |
 | 生产部署 | `Dockerfile.api`、`Dockerfile.worker`、`Dockerfile.feed-render`、`compose.production.yml`、`deploy/docker/*.env.example`、`docs/deployment/docker_production.md` |
 | SQL / Migration | `backend-go/db/queries/component_public_feed.sql`、`component_feed_entries.sql`、`backend-go/db/migrations/00022_component_public_feed.sql`、`00023_component_feed_rendering.sql`、`00024_component_catalog_projection.sql` |
-| Tests | `public_feed_test.go`、`service_integration_test.go`、`public_feed_performance_integration_test.go`、`renderer_test.go`、`image_renderer_test.go`、`image_renderer_integration_test.go`、`componentPublicFeed.test.ts`、`ComponentPublicFeedCard.test.tsx`、`ComponentStarButton.test.tsx` |
+| Tests | `backend-go/internal/component/public_feed_test.go`、`backend-go/tests/integration/component/service_test.go`、`backend-go/tests/performance/component/public_feed_test.go`、`backend-go/internal/feedrender/renderer_test.go`、`backend-go/internal/feedrender/image_renderer_test.go`、`backend-go/tests/integration/feedrender/image_renderer_test.go`、`frontend/src/componentRepo/__tests__/componentPublicFeed.test.ts`、`ComponentPublicFeedCard.test.tsx`、`ComponentStarButton.test.tsx` |
 
 ## 6. 验证证据
 

@@ -1,6 +1,6 @@
 //go:build integration
 
-package ingestion
+package ingestion_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/ingestion"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

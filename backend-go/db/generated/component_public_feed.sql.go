@@ -68,23 +68,56 @@ WITH feed_page AS MATERIALIZED (
 		 AND version.id=source_event.component_version_id
 		 AND version.component_id=component.id
 		 AND version.deleted_at IS NULL
+		LEFT JOIN LATERAL (
+			-- 只有尺寸筛选启用时才读取当前展示 Version；无尺寸条件时执行计划必须让该内层零循环。
+			SELECT projection.logical_width_stud,
+			       projection.logical_depth_stud,
+			       projection.logical_height_plate
+			FROM component_repo.component_catalog_projection projection
+			WHERE ($2::boolean OR $3::boolean OR $4::boolean)
+			  AND projection.id = component.id
+		) filter_size ON true
 		WHERE source_event.id=entry.event_id
 		  AND source_event.event_type='component.version.published.v1'
+		  AND lower(component.name) LIKE ALL($5::text[])
 		  AND (
-		      $2::text=''
-		      OR component.name ILIKE '%' || $2 || '%'
-		      OR component.id::text=$2
+		      $6::text = ''
+		      OR position($6::text IN lower(component.id::text)) > 0
+		  )
+		  AND (
+		      (NOT $2::boolean AND NOT $3::boolean)
+		      OR (
+		          $2::boolean AND $3::boolean
+		          AND least(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+		              BETWEEN least($7::double precision, $8::double precision) - 0.25
+		                  AND least($7::double precision, $8::double precision) + 0.25
+		          AND greatest(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+		              BETWEEN greatest($7::double precision, $8::double precision) - 0.25
+		                  AND greatest($7::double precision, $8::double precision) + 0.25
+		      )
+		      OR ($2::boolean AND NOT $3::boolean
+		          AND (filter_size.logical_width_stud BETWEEN $7::double precision - 0.25 AND $7::double precision + 0.25
+		               OR filter_size.logical_depth_stud BETWEEN $7::double precision - 0.25 AND $7::double precision + 0.25))
+		      OR (NOT $2::boolean AND $3::boolean
+		          AND (filter_size.logical_width_stud BETWEEN $8::double precision - 0.25 AND $8::double precision + 0.25
+		               OR filter_size.logical_depth_stud BETWEEN $8::double precision - 0.25 AND $8::double precision + 0.25))
+		  )
+		  AND (
+		      NOT $4::boolean
+		      OR filter_size.logical_height_plate
+		          BETWEEN $9::double precision - 0.625
+		              AND $9::double precision + 0.625
 		  )
 		OFFSET 0
 	) source ON true
 	WHERE entry.render_status IN ('ready', 'fallback')
 	  AND entry.available_at IS NOT NULL
 	  AND (entry.available_at, entry.event_id) < (
-	      COALESCE($3::timestamptz, 'infinity'::timestamptz),
-	      COALESCE($4::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+	      COALESCE($10::timestamptz, 'infinity'::timestamptz),
+	      COALESCE($11::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
 	  )
 	ORDER BY entry.available_at DESC, entry.event_id DESC
-    LIMIT $5
+    LIMIT $12
 ), page_star_counts AS (
     SELECT aggregate_star.component_id, count(*)::bigint AS star_count
     FROM component_repo.component_stars aggregate_star
@@ -160,7 +193,14 @@ ORDER BY page.available_at DESC, page.event_id DESC
 
 type ListComponentPublicFeedParams struct {
 	ActorID           pgtype.UUID
-	SearchQuery       string
+	HasWidth          bool
+	HasDepth          bool
+	HasHeight         bool
+	NamePatterns      []string
+	ComponentIDFilter string
+	WidthStud         float64
+	DepthStud         float64
+	HeightPlate       float64
 	CursorAvailableAt pgtype.Timestamptz
 	CursorEventID     pgtype.UUID
 	PageSize          int32
@@ -215,7 +255,14 @@ type ListComponentPublicFeedRow struct {
 func (q *Queries) ListComponentPublicFeed(ctx context.Context, arg ListComponentPublicFeedParams) ([]ListComponentPublicFeedRow, error) {
 	rows, err := q.db.Query(ctx, listComponentPublicFeed,
 		arg.ActorID,
-		arg.SearchQuery,
+		arg.HasWidth,
+		arg.HasDepth,
+		arg.HasHeight,
+		arg.NamePatterns,
+		arg.ComponentIDFilter,
+		arg.WidthStud,
+		arg.DepthStud,
+		arg.HeightPlate,
 		arg.CursorAvailableAt,
 		arg.CursorEventID,
 		arg.PageSize,

@@ -1,9 +1,8 @@
 //go:build integration
 
-package httpapi
+package httpapi_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -20,12 +19,25 @@ import (
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/config"
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/httpapi"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const integrationJWTSecret = "0123456789abcdef0123456789abcdef"
+
+func testConfig() config.Config {
+	return config.Config{
+		Environment: config.TestEnvironment,
+		HTTP: config.HTTPConfig{
+			RequestTimeout:  time.Second,
+			MaxBodyBytes:    1024,
+			ShutdownTimeout: time.Second,
+		},
+		Database: config.DatabaseConfig{ConnectTimeout: time.Second},
+	}
+}
 
 func TestPartSearchHTTPContract(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
@@ -46,13 +58,18 @@ func TestPartSearchHTTPContract(t *testing.T) {
 			'31000000-0000-0000-0000-000000000002');
 		INSERT INTO component_repo.parts
 			(part_library_version_id,ldraw_part_num,source_name,content_locale)
-		VALUES ('31000000-0000-0000-0000-000000000001','3001.dat','Brick 2 x 4','en-US');
+		VALUES
+			('31000000-0000-0000-0000-000000000001','3001.dat','Brick 2 x 4','en-US'),
+			('31000000-0000-0000-0000-000000000001','sticker.dat','Sticker irregular outline','en-US');
 		INSERT INTO component_repo.part_geometries
 			(part_library_version_id,ldraw_part_num,source_relative_path,source_file_hash,
 			 bbox_min,bbox_max,logical_width_stud,logical_depth_stud,logical_height_plate,
 			 vertex_count,face_count,logical_size_derivation_status)
-		VALUES ('31000000-0000-0000-0000-000000000001','3001.dat','parts/3001.dat',repeat('b',64),
-			ARRAY[0,0,0]::float8[],ARRAY[40,24,80]::float8[],2,4,3,3,1,'derived_exact')`); err != nil {
+		VALUES
+			('31000000-0000-0000-0000-000000000001','3001.dat','parts/3001.dat',repeat('b',64),
+			 ARRAY[0,0,0]::float8[],ARRAY[40,24,80]::float8[],2,4,3,3,1,'derived_exact'),
+			('31000000-0000-0000-0000-000000000001','sticker.dat','parts/sticker.dat',repeat('c',64),
+			 ARRAY[0,0,0]::float8[],ARRAY[44,28,64]::float8[],2.2,3.2,3.5,3,1,'derived_approximate')`); err != nil {
 		t.Fatalf("seed Part search fixture: %v", err)
 	}
 
@@ -72,6 +89,16 @@ func TestPartSearchHTTPContract(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"partLibraryVersionId":"31000000-0000-0000-0000-000000000001"`) ||
 		!strings.Contains(response.Body.String(), `"ldrawPartNum":"3001.dat"`) {
 		t.Fatalf("Part search status/body = %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"description":"sticker outline","widthStud":3.45,"depthStud":2.45,"heightPlate":4.125,"locale":"en-US","page":1,"pageSize":20}`))
+	request.Header.Set("Authorization", "Bearer "+integrationToken(t, "31000000-0000-0000-0000-000000000003"))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ldrawPartNum":"sticker.dat"`) ||
+		!strings.Contains(response.Body.String(), `"logicalSizeDerivationStatus":"derived_approximate"`) {
+		t.Fatalf("Part bbox search status/body = %d %s", response.Code, response.Body.String())
 	}
 
 	unknownRequest := httptest.NewRequest(http.MethodPost, "/api/v1/parts/search", strings.NewReader(`{"partNumber":"3001","candidateTypes":["part"]}`))
@@ -152,6 +179,11 @@ func TestG3HTTPAuthenticationAndErrorContract(t *testing.T) {
 		!strings.Contains(publicFeed.Body.String(), `"nextCursor":null`) {
 		t.Fatalf("public Feed status/body = %d %s", publicFeed.Code, publicFeed.Body.String())
 	}
+	invalidStructuredFilter := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/component-public-feed?widthStud=bad", nil)
+	request.Header.Set("Authorization", "Bearer "+actorAToken)
+	router.ServeHTTP(invalidStructuredFilter, request)
+	assertPublicError(t, invalidStructuredFilter, http.StatusUnprocessableEntity, "request.validation_failed")
 
 	clientSuppliedKey := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/component-imports/upload-sessions", strings.NewReader(`{
@@ -173,47 +205,29 @@ func TestG3HTTPAuthenticationAndErrorContract(t *testing.T) {
 	router.ServeHTTP(disabledStorage, request)
 	assertPublicError(t, disabledStorage, http.StatusBadGateway, "component_repo.storage_unavailable")
 
-	create := httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/components", bytes.NewBufferString(`{
+	// Component 与初始 Draft Version 只能由 Import Parse Worker 原子创建，公开 HTTP 不再暴露拆分写入口。
+	removedCreate := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/components", strings.NewReader(`{
 		"name":"API component","contentLocale":"en-US","tags":[]
 	}`))
 	request.Header.Set("Authorization", "Bearer "+actorAToken)
 	request.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(create, request)
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status/body = %d %s", create.Code, create.Body.String())
-	}
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil || created.ID == "" {
-		t.Fatalf("decode created component: %+v, %v", created, err)
-	}
-	clientSelectedVersionSource := httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/components/"+created.ID+"/versions", strings.NewReader(`{
+	router.ServeHTTP(removedCreate, request)
+	assertPublicError(t, removedCreate, http.StatusMethodNotAllowed, "request.method_not_allowed")
+	removedVersionCreate := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/components/30000000-0000-0000-0000-000000000010/versions", strings.NewReader(`{
 		"componentCandidateId":"30000000-0000-0000-0000-000000000010",
 		"version":"1.0.0","revision":1,
 		"sourceArtifactId":"30000000-0000-0000-0000-000000000011"
 	}`))
 	request.Header.Set("Authorization", "Bearer "+actorAToken)
 	request.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(clientSelectedVersionSource, request)
-	assertPublicError(t, clientSelectedVersionSource, http.StatusUnprocessableEntity, "request.validation_failed")
-
-	unknownField := httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/components", strings.NewReader(`{
-		"name":"bad","contentLocale":"en-US","unexpected":"internal detail"
-	}`))
-	request.Header.Set("Authorization", "Bearer "+actorAToken)
-	router.ServeHTTP(unknownField, request)
-	assertPublicError(t, unknownField, http.StatusUnprocessableEntity, "request.validation_failed")
-	if strings.Contains(unknownField.Body.String(), "unexpected") || strings.Contains(unknownField.Body.String(), "internal detail") {
-		t.Fatalf("validation response leaked decoder details: %s", unknownField.Body.String())
-	}
+	router.ServeHTTP(removedVersionCreate, request)
+	assertPublicError(t, removedVersionCreate, http.StatusMethodNotAllowed, "request.method_not_allowed")
 
 	actorBToken := integrationToken(t, "30000000-0000-0000-0000-000000000002")
 	crossUser := httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPatch, "/api/v1/components/"+created.ID, strings.NewReader(`{"name":"forbidden"}`))
+	request = httptest.NewRequest(http.MethodPatch, "/api/v1/components/30000000-0000-0000-0000-000000000010", strings.NewReader(`{"name":"forbidden"}`))
 	request.Header.Set("Authorization", "Bearer "+actorBToken)
 	router.ServeHTTP(crossUser, request)
 	assertPublicError(t, crossUser, http.StatusNotFound, "component_repo.component_not_found")

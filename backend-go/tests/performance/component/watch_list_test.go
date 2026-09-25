@@ -1,6 +1,6 @@
 //go:build integration
 
-package component
+package component_test
 
 import (
 	"context"
@@ -189,7 +189,7 @@ func explainWatchFeed(
 	t.Helper()
 	// 直接读取 sqlc 的手写查询，确保门禁包含真实页内 Version、删除过滤和 reviewed translation 投影。
 	// 不维护简化 SQL 副本，否则业务查询变更后性能测试可能仍错误地通过。
-	data, err := os.ReadFile("../../db/queries/component_watches.sql")
+	data, err := os.ReadFile("../../../db/queries/component_watches.sql")
 	if err != nil {
 		t.Fatalf("read authoritative Watch SQL: %v", err)
 	}

@@ -35,6 +35,15 @@ func NewService(pool *pgxpool.Pool) *Service {
 	return &Service{pool: pool, q: db.New(pool), now: time.Now}
 }
 
+// WithClock 注入任务状态机使用的时钟，供隔离测试稳定验证租约、重试和 outbox 时间边界。
+// 该依赖只改变进程内时间来源，不修改 PostgreSQL 的权威任务状态或事务边界。
+func (s *Service) WithClock(now func() time.Time) *Service {
+	if now != nil {
+		s.now = now
+	}
+	return s
+}
+
 func (s *Service) Enqueue(ctx context.Context, input EnqueueInput) (Task, bool, error) {
 	row, created, err := withTx(ctx, s.pool, func(q *db.Queries) (db.ComponentRepoTask, bool, error) {
 		return EnqueueWithQueries(ctx, q, input)

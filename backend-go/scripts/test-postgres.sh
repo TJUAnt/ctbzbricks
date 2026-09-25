@@ -55,8 +55,9 @@ integration_test_flags=""
 if [ "${RUN_PIXEL_PLAN_TEST:-0}" = "1" ] || [ "${RUN_STAR_SIZE_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_LIST_PLAN_TEST:-0}" = "1" ] || [ "${RUN_WATCH_FEED_PLAN_TEST:-0}" = "1" ] || [ "${RUN_PUBLIC_FEED_PLAN_TEST:-0}" = "1" ] || [ "${RUN_COMPONENT_LIST_PLAN_TEST:-0}" = "1" ] || [ "${RUN_VERSION_PARTS_PLAN_TEST:-0}" = "1" ] || [ "${RUN_PART_SEARCH_PLAN_TEST:-0}" = "1" ]; then
 	integration_test_flags="-v"
 fi
-# 默认执行完整集成集；性能门禁可在低磁盘 CI runner 上显式缩小包集合，迁移和启动无 DDL 契约仍会执行。
-integration_packages=${BRICKBUILDER_TEST_PACKAGES:-"./db/generated ./internal/database ./internal/component ./internal/artifact ./internal/task ./internal/worker ./internal/ingestion ./internal/workbench ./internal/httpapi ./internal/partlibrary ./internal/pixel2d"}
+# 默认从独立测试目录执行全部黑盒集成测试并编译性能门禁；未显式开启的性能用例会自行跳过。
+# 低磁盘 CI runner 可覆盖包集合，迁移往返和启动无 DDL 契约仍会执行。
+integration_packages=${BRICKBUILDER_TEST_PACKAGES:-"./tests/integration/... ./tests/performance/..."}
 go test $integration_test_flags -p=1 -tags=integration $integration_packages
 
 before_schema="$test_root/schema-before.sql"

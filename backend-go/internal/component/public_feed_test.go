@@ -25,7 +25,7 @@ func TestPublicFeedCursorRoundTrip(t *testing.T) {
 		t.Fatalf("decode public Feed cursor: %v", err)
 	}
 	if !decoded.AvailableAt.Valid || !decoded.AvailableAt.Time.Equal(availableAt) ||
-		!uuidutil.Equal(decoded.EventID, eventID) || decoded.Query != "castle" {
+		!uuidutil.Equal(decoded.EventID, eventID) || decoded.FilterSignature != "castle" {
 		t.Fatalf("public Feed cursor round trip = %+v", decoded)
 	}
 }

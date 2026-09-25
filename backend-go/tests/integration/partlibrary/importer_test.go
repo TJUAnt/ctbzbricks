@@ -1,6 +1,6 @@
 //go:build integration
 
-package partlibrary
+package partlibrary_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/partlibrary"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -87,5 +88,19 @@ func TestImportStudioLibraryWritesComponentRepoSnapshot(t *testing.T) {
 	}
 	if sourceName != "Brick" {
 		t.Fatalf("source name = %q, want Brick", sourceName)
+	}
+}
+
+func mustMkdir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

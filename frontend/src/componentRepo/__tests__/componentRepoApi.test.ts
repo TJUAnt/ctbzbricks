@@ -95,12 +95,19 @@ describe('Component Repo Go API adapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await searchComponentGroupComponents('group-1', {
-      queries: ['sample', '2x4'], statuses: ['draft', 'active'], page: 2, pageSize: 20,
+      filters: {
+        name: 'sample castle', componentId: 'abcd', widthStud: 2, depthStud: 4, heightPlate: 3,
+      },
+      statuses: ['draft', 'active'], page: 2, pageSize: 20,
     });
     const searchURL = new URL(String(fetchMock.mock.calls[0]?.[0]));
     expect(searchURL.pathname).toBe('/api/v1/component-groups/group-1/components/search');
     expect(searchURL.searchParams.getAll('status')).toEqual(['draft', 'active']);
-    expect(searchURL.searchParams.getAll('query')).toEqual(['sample', '2x4']);
+    expect(searchURL.searchParams.get('name')).toBe('sample castle');
+    expect(searchURL.searchParams.get('componentId')).toBe('abcd');
+    expect(searchURL.searchParams.get('widthStud')).toBe('2');
+    expect(searchURL.searchParams.get('depthStud')).toBe('4');
+    expect(searchURL.searchParams.get('heightPlate')).toBe('3');
 
     await addComponentToGroup('group-1', 'component-1');
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -148,9 +155,9 @@ describe('Component Repo Go API adapter', () => {
     expect(result.items.map((item) => item.id)).toEqual(['owned-1', 'shared-1', 'member-1']);
     expect(result.hasMore).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get('query')).toBe('car');
-    expect(new URL(String(fetchMock.mock.calls[1]?.[0])).searchParams.get('query')).toBe('car');
-    expect(new URL(String(fetchMock.mock.calls[2]?.[0])).searchParams.get('query')).toBe('car');
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get('name')).toBe('car');
+    expect(new URL(String(fetchMock.mock.calls[1]?.[0])).searchParams.get('name')).toBe('car');
+    expect(new URL(String(fetchMock.mock.calls[2]?.[0])).searchParams.get('name')).toBe('car');
   });
 
   it('reads the 101st version before applying the optional status filter', async () => {
@@ -190,12 +197,18 @@ describe('Component Repo Go API adapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(listComponentStars({
-      page: 2, pageSize: 20, query: 'castle', category: 'vehicle', sort: 'starred_at_desc',
+      page: 2,
+      pageSize: 20,
+      filters: { name: 'castle', componentId: 'abcd', widthStud: 2 },
+      category: 'vehicle',
+      sort: 'starred_at_desc',
     })).resolves.toEqual(page);
     const listURL = new URL(String(fetchMock.mock.calls[0]?.[0]));
     expect(listURL.pathname).toBe('/api/v1/component-stars');
     expect(listURL.searchParams.get('page')).toBe('2');
-    expect(listURL.searchParams.get('query')).toBe('castle');
+    expect(listURL.searchParams.get('name')).toBe('castle');
+    expect(listURL.searchParams.get('componentId')).toBe('abcd');
+    expect(listURL.searchParams.get('widthStud')).toBe('2');
     expect(listURL.searchParams.get('category')).toBe('vehicle');
     expect(listURL.searchParams.get('sort')).toBe('starred_at_desc');
 
@@ -292,12 +305,18 @@ describe('Component Repo Go API adapter', () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(page));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(listComponentPublicFeed({ limit: 20, cursor: 'cursor-1', query: 'train' })).resolves.toEqual(page);
+    await expect(listComponentPublicFeed({
+      limit: 20,
+      cursor: 'cursor-1',
+      filters: { name: 'train', depthStud: 6, heightPlate: 3 },
+    })).resolves.toEqual(page);
     const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
     expect(url.pathname).toBe('/api/v1/component-public-feed');
     expect(url.searchParams.get('limit')).toBe('20');
     expect(url.searchParams.get('cursor')).toBe('cursor-1');
-    expect(url.searchParams.get('query')).toBe('train');
+    expect(url.searchParams.get('name')).toBe('train');
+    expect(url.searchParams.get('depthStud')).toBe('6');
+    expect(url.searchParams.get('heightPlate')).toBe('3');
   });
 
   it('reads owner-scoped import history with component and aggregate status filters', async () => {

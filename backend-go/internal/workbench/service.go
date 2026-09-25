@@ -513,7 +513,7 @@ func (s *Service) GetActivePartLibraryVersion(ctx context.Context) (PartLibraryV
 }
 
 // SearchParts 在当前 active Studio Part Library 上执行同步、有界且稳定分页的结构化搜索。
-// exact total 与页面来自同一只读快照；API 不读取本地 LDraw 文件，也不把 bbox 近似尺寸当作精确筛选值。
+// exact total 与页面来自同一只读快照；API 不读取本地 LDraw 文件，尺寸按标称值或 bbox 每轴 ±2mm 筛选。
 func (s *Service) SearchParts(ctx context.Context, input PartSearchRequest) (PartSearchPage, error) {
 	if len([]rune(input.Description)) > 200 {
 		return PartSearchPage{}, apierror.New("request.validation_failed", http.StatusUnprocessableEntity, map[string]any{"field": "description"})

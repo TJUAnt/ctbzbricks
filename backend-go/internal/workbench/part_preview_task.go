@@ -149,10 +149,24 @@ func (h *PartPreviewTaskHandler) materializePrepared(
 		h.keyPrefix, "part-library-assets", "glb", payload.GeneratorVersion,
 		digest[:2], digest + ".glb",
 	}), "/")
-	// Supabase 的 object info 对“尚不存在”的返回在不同网关版本并不稳定；内容寻址键配合 upsert
-	// 本身就是幂等写，直接 PUT 还能为首次生成省去一次网络往返。
-	if err := h.store.Put(ctx, key, "model/gltf-binary", bytes.NewReader(glb), int64(len(glb))); err != nil {
-		return task.Result{}, partPreviewFailure(payload, true, "storage_put")
+	reusable := false
+	if !markRunning {
+		// 全库 snapshot 换代会重新生成同一内容哈希；verified Artifact 的完整定位均一致时直接复用对象。
+		// 单项 materialize 可能由对象丢失触发，必须继续 PUT 才能承担 Storage 修复职责。
+		reusable, err = h.q.IsVerifiedPartPreviewArtifactReusable(ctx, db.IsVerifiedPartPreviewArtifactReusableParams{
+			ArtifactID: artifactID, StorageProvider: h.store.Provider(), StorageBucket: h.store.Bucket(),
+			StorageKey: key, Sha256: digest, FileSize: int64(len(glb)),
+		})
+		if err != nil {
+			return task.Result{}, err
+		}
+	}
+	if !reusable {
+		// Supabase 的 object info 对“尚不存在”的返回在不同网关版本并不稳定；内容寻址键配合 upsert
+		// 本身就是幂等写，直接 PUT 还能为首次生成省去一次网络往返。
+		if err := h.store.Put(ctx, key, "model/gltf-binary", bytes.NewReader(glb), int64(len(glb))); err != nil {
+			return task.Result{}, partPreviewFailure(payload, true, "storage_put")
+		}
 	}
 	_, err = h.q.FinalizePartPreviewArtifact(ctx, db.FinalizePartPreviewArtifactParams{
 		GeneratorVersion: stringPointer(payload.GeneratorVersion), PartLibraryVersionID: libraryID,

@@ -1,6 +1,6 @@
 //go:build integration
 
-package worker
+package worker_test
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/worker"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

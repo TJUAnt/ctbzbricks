@@ -126,18 +126,20 @@ session；网络或 provider 暂不可用只隐藏未经确认的用户信息并
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
 | `GET /api/v1/components` | Query：`limit/locale/query/category/status/cursor`；`limit` 为 1～100；`200 {items,nextCursor}` | 查询 actor 可见的公开/自有 Component 目录。 | Goose v24 的 `component_catalog_candidates` 统一过滤删除项与 Version 资格，`component_catalog_projection` 只为固定页补展示尺寸，`component_reviewed_translations` 统一官方已审核翻译；Version insert/delete/status/component_id 触发器维护 Component 上的任意/公开 Version 资格。owner 候选要求至少一个未删除 Version；其他用户只见 `active` 且存在非 draft Version 的 Component。无文本搜索时两个互斥来源分别按 `(updated_at DESC,id DESC)` 索引截取一页；文本搜索先以 source/reviewed translation trigram 生成候选，各来源截页后在有界集合去重；cursor 同时冻结排序边界和规范化后的 locale/query/category/status，筛选改变时返回 `request.validation_failed`。不执行 exact Count，也不返回 page/total/totalPages。完整 UUID 走等值匹配；页面固定后才投影 `ownedByActor/starredByActor/starCount/watch`、翻译和展示尺寸。公开 `status` 只允许 `draft/active`。 |
-| `GET /api/v1/component-public-feed` | Query：`limit/cursor/query`；`query` 最长 200；`200 {items,nextCursor}`；每项含 `publisher:{id}` 和 `render:{status,availableAt,image}` | 读取组件库广场已达到图片终态的用户 Component 发布事件。 | 发布事务原子创建 pending Feed entry 和 `component.feed_render.materialize` 持久任务；API 不等待图片，pending 本次不返回。Go Worker 优先在隔离目录调用 Blender 4.1 Cycles 生成 renderer v4 图片，失败时使用 Go raster v2；两者写相同 `component_feed_image` 契约并在内部 metadata 记录实际 engine 和 `ldraw-studio-pbr-v1` 材质 Profile。任务成功且图片 Artifact 可签名时 `render.status=ready`、`image={artifactId,url,format:"png",sha256,byteLength,width:1200,height:800}`；任务失败/取消/重试耗尽或签名失败时发布仍有效，终态事件以 `fallback,image:null` 返回。按 `available_at DESC,event_id DESC` keyset 分页，卡片另行展示 `occurredAt`；不执行 exact count。Watch 不参与成员筛选，actor 只用于 `ownedByActor/starredByActor/starCount/watch`。SQL 先从终态部分索引固定页面，再做 Star 聚合、个人关系和图片连接。`query` 匹配用户原始名称或精确 ID并绑定 cursor。内部 Storage key、渲染器路径和进程错误不返回。v23 将已有用户发布事件登记为 fallback；v16 前没有事件的版本不推断。 |
-| `POST /api/v1/components` | Body：`name,description?,tags,category?,contentLocale`；`201 Component` | 创建用户 Component 元数据。 | 校验名称、tag 数量和 locale；生成 UUID，在事务中写入 owner/creator；初始 Component 尚无结构版本，因此创建后可按 ID 读取，但在产生首个 Version 前不会进入 Component 列表投影。 |
+| `GET /api/v1/component-public-feed` | Query：`limit/cursor/name/componentId/widthStud/depthStud/heightPlate`；`name` 最长 200、`componentId` 最长 128；`200 {items,nextCursor}`；每项含 `publisher:{id}` 和 `render:{status,availableAt,image}` | 读取组件库广场已达到图片终态的用户 Component 发布事件。 | 发布事务原子创建 pending Feed entry 和 `component.feed_render.materialize` 持久任务；API 不等待图片，pending 本次不返回。Go Worker 优先在隔离目录调用 Blender 4.1 Cycles 生成 renderer v4 图片，失败时使用 Go raster v2；两者写相同 `component_feed_image` 契约。按 `available_at DESC,event_id DESC` keyset 分页且不执行 exact count。结构化筛选与 Group/Star 共用同一语义：名称按空白/中英文逗号分词且全部 token 命中，ID 独立 contains，宽深可旋转并使用闭区间 ±0.25 stud，高固定为闭区间 ±0.625 plate；所有非空字段按 AND 组合。cursor 绑定规范化后的完整筛选签名。SQL 仍先从终态部分索引取候选，尺寸条件启用时才读取展示 Version，页面固定后再做 Star 聚合、个人关系和图片连接。Watch 不参与成员筛选。内部 Storage key、渲染器路径和进程错误不返回。 |
 | `GET /api/v1/components/:componentId` | Query：`locale`；`200 Component` | 读取单个可见 Component。 | 校验 UUID，通过 actor/active 可见性查询；返回 `ownedByActor/starredByActor/starCount/watch`，其中所有权是稳定管理权限投影，前端不得依赖浏览器缓存用户对象自行推断；`watch={watching,level,watchedAt}` 只描述当前 actor 的 active 订阅。官方内容只选 reviewed translation，否则返回源内容及缺失标记。Preview stale/failed 不改变 Component 可见性、所有权或删除权限。 |
 | `PATCH /api/v1/components/:componentId` | Partial Body：`name,description,tags,category,contentLocale`；`200 Component` | 修改 owner 的 Component 展示元数据。 | 至少提交一个字段；`description/category` 可显式传 `null` 清空；只更新 owner、未删除的用户 Component，并返回更新后的可见投影。 |
 | `DELETE /api/v1/components/:componentId` | 无 Body；`204` | 删除用户 Component 的当前产品入口。 | serializable transaction 先取得 Component activity 独占锁，再写 `status=archived`、`deleted_at/deleted_by`，冻结统一 Watch 结束序号/时间，并原子创建 `component.relationships.cleanup` 持久任务。提交后 Star/Watch 列表立即因 Component 不可见而移除条目；Go Worker 以 5,000 条短事务和 actor keyset 分批关闭 active Watch、物理删除 Star。Version、Import、Artifact、普通历史 Task 和 Storage object 不删除。仅 owner 的 `content_kind=user` 可执行。 |
+
+Component 与初始 Draft Version 没有独立公开创建接口。新建 Import 的 `component.import.parse` Go Worker 在同一事务内写
+`Component -> Candidate -> Draft Version -> initial Preview Task`；更新 Import 只为既有 owner Component 写 Candidate 与 Draft。
+Service 内部写方法保留给 Worker/事务编排和隔离集成 fixture，不构成 HTTP 契约。
 
 ## 4. Component Version
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
 | `GET /api/v1/components/:componentId/versions` | Query：`page/pageSize`；`200 VersionPage` | 列出 Component 的可见版本。 | 先校验 Component 可见性；owner 可读取自己的 draft，非 owner 只读取 active Component 的非 draft Version；稳定分页。 |
-| `POST /api/v1/components/:componentId/versions` | Body：`componentCandidateId,version,revision,releaseNote?,releaseNoteLocale?,metadata?`；`201 ComponentVersion` | 从已审核 Candidate 显式创建 Draft Version。 | 锁定 owner Component；沿 `Candidate -> SceneSnapshot -> Import -> Artifact` 读取服务端可信的 source/exchange artifact、parser、Part Library 和三类 hash，客户端不能直接指定这些字段；冲突由唯一约束返回稳定错误。 |
 | `GET /api/v1/component-versions/:versionId` | `200 ComponentVersion` | 读取单个可见版本及 validation/preview 状态。 | 使用 actor 可见性查询；不生成 Preview，也不读取对象正文。 |
 | `GET /api/v1/component-versions/:versionId/diff` | `200 VersionDiff` | 计算 owner 当前版本相对本次导入基准版本的 BOM 与实例级结构差异。 | 只认 `Version -> Candidate -> Import.base_version_id` 的声明 lineage，不按创建时间猜父版本；首个版本与空树比较。读取两侧不可变 SceneSnapshot，在 Go `componentdiff` 内同步但严格有界地展开全部 root，返回 BOM 变化、确定匹配的实例变化和歧义组；不读取 GLB/Storage、不写数据库、不创建 Task。任一侧最多 50,000 个展开实例，明细最多 10,000 条，超限使用既有 `request.validation_failed`。即使 Version 已公开，本接口当前仍只允许 Component owner。 |
 | `PATCH /api/v1/component-versions/:versionId` | Partial Body：`version,revision,releaseNote,releaseNoteLocale`；`200 ComponentVersion` | 修改 owner Draft Version 的展示元数据。 | 只允许未删除 draft；release note 与 locale 必须同时设置或同时清空；结构、hash、Artifact 和 Part Library 不可通过本接口修改。 |
@@ -215,7 +217,7 @@ go run ./cmd/component-diff --before base-document.json --after head-document.js
 | `DELETE /api/v1/component-groups/:groupId` | `204` | 删除 custom Group。 | 仅 owner custom Group；root 不能删除；关联行为继续由 Goose 外键/约束控制。 |
 | `POST /api/v1/component-groups/:groupId/move` | Body：`parentGroupId,sortOrder`；`200 Group` | 移动 custom Group。 | 锁定 owner group，拒绝移动到自身子树形成循环；计算 parent depth 与 subtree depth，保证整体最大深度 5，并重新检查同级名称唯一。 |
 | `GET /api/v1/component-groups/:groupId/components` | Query：`page/pageSize/locale`；`200 GroupMemberPage` | 列出该 Group 的直接成员。 | 校验 owner Group；custom Group 按 membership 驱动，root 只按 actor 自有 Component 驱动；使用 Component 可见性、reviewed translation 与 Version `logicalSize` 投影规则。取消 Star 不自动删除 custom membership，当前仍可见的外部成员可继续移出分组。结果先分页，再一次聚合页内 `starCount`。 |
-| `GET /api/v1/component-groups/:groupId/components/search` | Query：`page/pageSize/locale/query/status`；`query` 最多重复 8 次，`status` 可重复且只允许 `draft/active`；`200 {items,total,totalPages,statusCounts,...}` | 为仓库页面提供名称、ID 或 Box 尺寸的复合搜索、分页和状态统计。 | root Group 只表示 actor 自己拥有的 Component，custom Group 按直接 membership。每个非空 `query` 都是必须满足的独立条件，条件之间按 AND 组合并忽略大小写重复项。普通条件对名称或 Component ID 做模糊搜索；完整的 `a x b` 或 `a x b x c`（兼容 `x/X/×` 和小数）进入尺寸模式。输入与 Version `logicalSize` 都按升序归一化；三值逐维满足严格开区间 `(target-1,target+1)`，两值枚举 `ab/ac/bc` 三组配对且每维使用同一开区间，边界恰好相差 1 不命中。缺少任一 Box 尺寸的组件不能满足尺寸条件。状态统计与结果使用完全相同的候选集、复合条件、可见性及尺寸规则；结果页内 Star 数一次聚合。`logicalSize` 仍按当前发布 Version / 最新 Draft 投影。Import/Task 的处理中或失败状态不得作为 Component 状态传入。 |
+| `GET /api/v1/component-groups/:groupId/components/search` | Query：`page/pageSize/locale/name/componentId/widthStud/depthStud/heightPlate/status`；`status` 可重复且只允许 `draft/active`；`200 {items,total,totalPages,statusCounts,...}` | 为仓库页面提供结构化名称、ID、尺寸搜索、分页和状态统计。 | root Group 从 actor owner 关系驱动，custom Group 从直接 membership 驱动。名称按空白/中英文逗号分词并要求全部 token 命中展示名称；Component ID 独立 contains；宽、深、高可单独或组合填写，所有非空字段按 AND 组合。宽深允许旋转，分别使用闭区间 ±0.25 stud；高固定为闭区间 ±0.625 plate，与 Part Search 的每轴 ±2 mm 规则一致。只有尺寸条件启用时才读取当前展示 Version。列表、exact total 与状态统计在同一 `REPEATABLE READ READ ONLY` 快照中使用相同候选、可见性和筛选谓词；结果页固定后再聚合页内 Star 数。Import/Task 状态不得作为 Component 状态传入。 |
 | `POST /api/v1/component-groups/:groupId/components` | Body：`{componentId}`；`204` | 将可见 Component 加入 custom Group。 | 校验 owner custom Group 与 Component 可见性；以 `(owner,group,component)` 幂等写 membership。 |
 | `DELETE /api/v1/component-groups/:groupId/components/:componentId` | `204` | 从 Group 移除成员。 | owner-scoped 删除 membership；记录不存在也按成功处理。 |
 | `GET /api/v1/components/:componentId/groups` | `200 {componentId,groupIds}` | 查询 Component 当前所在的 custom Group IDs。 | 先校验 Component 对 actor 可见，再只返回 actor 自己的 custom Group membership，不返回其他用户分组。 |
@@ -224,7 +226,7 @@ go run ./cmd/component-diff --before base-document.json --after head-document.js
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
-| `GET /api/v1/component-stars` | Query：`page/pageSize/locale/query/category/sort`；`sort` 只允许 `starred_at_desc`；`200 {items,total,page,pageSize,totalPages}` | 读取当前 actor 的个人收藏。 | 先按 `actor_id` 物化当前用户的权威 Star 候选，再按候选索引探测 Component 与非 Draft Version；按 `starredAt DESC,componentId` 稳定排序。`query` 匹配展示名称/Component ID，完整 `axb/axbxc` 复用 Group 的轴无关 logical-size 开区间规则，`category` 精确匹配。尺寸候选直接读取 `components.current_logical_size_a/b/c`：该投影由发布事务和当前 Version Preview 完成事务维护，查询不再逐关系读取 Version 并执行 `LEAST/GREATEST`。只投影当前 `active` 且存在非 draft Version 的 Component；Component 删除提交后结果立即隐藏，持久 Worker 随后物理删除 Star，内部残留关系数不进入公共响应。唯一一份筛选 SQL 在分页前用窗口函数返回 exact `total`；Service 使用 `REPEATABLE READ READ ONLY` 快照，越界空页在同一快照内复用同一查询探测第一页总数。页面固定后按 `component_id` 索引聚合页内 `starCount`，不公开收藏者列表。 |
+| `GET /api/v1/component-stars` | Query：`page/pageSize/locale/name/componentId/widthStud/depthStud/heightPlate/category/sort`；`sort` 只允许 `starred_at_desc`；`200 {items,total,page,pageSize,totalPages}` | 读取当前 actor 的个人收藏。 | 先按 `actor_id` 物化当前用户的权威 Star 候选，再按候选索引探测可见 Component；按 `starredAt DESC,componentId` 稳定排序。名称 token、独立 ID、可旋转宽深、固定高度与误差窗完全复用 Group/公共 Feed 的结构化 AND 语义，`category` 另做精确匹配。只有尺寸条件启用时才读取当前展示 Version。只投影当前 `active` 且存在非 draft Version 的 Component；Component 删除提交后结果立即隐藏，持久 Worker随后物理删除 Star。唯一一份筛选 SQL 在分页前用窗口函数返回 exact `total`；Service 使用 `REPEATABLE READ READ ONLY` 快照，越界空页在同一快照内复用同一查询探测第一页总数。页面固定后按 `component_id` 索引聚合页内 `starCount`。 |
 | `PUT /api/v1/components/:componentId/star` | `200 {componentId,starredAt}` | 收藏可见的非本人 Component。 | 使用轻量目标查询读取 Component 删除/可见性、owner、状态、非 draft Version 存在性和已有关系；不读取完整详情或收藏总数。首次创建要求目标未删除、非本人、`active` 且存在非 draft Version；已有关系直接返回原 `starredAt` 并跳过写入，并发首次收藏仍由 `(actor_id,component_id)` 唯一键收敛。创建事务取得 Component activity 共享锁，删除边界提交后不能再新增或恢复该关系；不产生 Watch 通知。 |
 | `DELETE /api/v1/components/:componentId/star` | `204` | 取消收藏。 | actor-scoped 删除 Star；Component 后续不可见或关系不存在时也按成功处理。 |
 
@@ -487,15 +489,28 @@ POST upload complete -> 202
 
 | 方法与路径 | 输入与响应 | 负责功能 | 执行逻辑 |
 |---|---|---|---|
-| `POST /api/v1/parts/search` | Body：`{description,partNumber,widthStud,depthStud,heightPlate,locale,page,pageSize}`；筛选字段均可省略，默认 `page=1/pageSize=50`，`pageSize` 最大 `200`；`200 PartSearchPage` | 在当前 active Studio Part Library 中按描述、编号和标称尺寸组合搜索可预览 Part，并返回本次查询绑定的 `partLibraryVersionId`。前端通过共享 authenticated API client 携带当前 Supabase Bearer token。 | 所有非空筛选按 AND 组合；`description` 按空格/中英文逗号拆为去重 token 且全部命中源描述或请求 locale 的 reviewed translation，`partNumber` 独立匹配稳定 LDraw 编号。宽/深单位为 stud，两者同时给出时允许平面旋转；高单位为 plate，绝不参与换轴。任一尺寸筛选只接受 `logical_size_derivation_status=derived_exact`，不把 bbox `derived_approximate` 当成标称尺寸。只返回 `geometry_status=ready`，排除源名称中的 sticker/decal；按描述完整匹配优先、源描述、编号稳定排序。active version、exact total 与页面读取使用同一个 `REPEATABLE READ READ ONLY` 快照。查询只读取 PostgreSQL，不读取 `LDRAW_ROOT`、不解析文件、不访问 legacy `public`、不创建 Task。结果优先返回 reviewed official name，否则回退源描述和源 locale。若该 Part 已绑定当前 `part-preview-ldraw-meshopt-glb-v2` 的 ready/verified Artifact，item 额外返回 `previewModel={artifactId,format,compression,url,sha256,byteLength}`；Storage key 不出 API。Go 对当前页全部对象执行一次服务端批量签名，单个对象失败只令该 item 的 `previewModel=null`，整批 Storage 故障也降级为无预览的正常搜索结果。`imageUrl` 暂时保留为 `null`。 |
+| `POST /api/v1/parts/search` | Body：`{description,partNumber,widthStud,depthStud,heightPlate,locale,page,pageSize}`；筛选字段均可省略，默认 `page=1/pageSize=50`，`pageSize` 最大 `200`；`200 PartSearchPage` | 在当前 active Studio Part Library 中按描述、编号和物理尺寸组合搜索 ready Part，并返回本次查询绑定的 `partLibraryVersionId`。前端通过共享 authenticated API client 携带当前 Supabase Bearer token。 | 所有非空筛选按 AND 组合；`description` 按空格/中英文逗号拆为去重 token 且全部命中源描述或请求 locale 的 reviewed translation，`partNumber` 独立匹配稳定 LDraw 编号。宽/深单位为 stud，两者同时提供时允许平面旋转；高单位为 plate，绝不参与换轴。标准 Brick/Plate/Tile 使用 `derived_exact` 标称尺寸，其他 ready Part（包括 sticker/decal）使用 `derived_approximate` bbox；两类都可参与尺寸筛选，每个物理轴使用包含边界的 ±2mm，即平面 ±0.25 stud、高度 ±0.625 plate。只返回 `geometry_status=ready`；按描述完整匹配优先、源描述、编号稳定排序。active version、exact total 与页面读取使用同一个 `REPEATABLE READ READ ONLY` 快照。查询只读取 PostgreSQL，不读取 `LDRAW_ROOT`、不解析文件、不访问 legacy `public`、不创建 Task。结果优先返回 reviewed official name，否则回退源描述和源 locale。若该 Part 已绑定当前 `part-preview-ldraw-meshopt-glb-v2` 的 ready/verified Artifact，item 额外返回 `previewModel={artifactId,format,compression,url,sha256,byteLength}`；Storage key 不出 API。Go 对当前页全部对象执行一次服务端批量签名，单个对象失败只令该 item 的 `previewModel=null`，整批 Storage 故障也降级为无预览的正常搜索结果。`imageUrl` 暂时保留为 `null`。 |
 | `GET /api/v1/part-library-versions/active` | `200 PartLibraryVersion` | 发现当前 runtime 默认 Part Library Version 及其能力。 | 读取唯一 active library 的 ID、source name/hash、status、`previewReady/relationReady`、connector/collider source count 和 created time；不存在返回 `part_library_not_found`。`colliderCount` 是已验证输入定义数，不保证逐行存入 PostgreSQL；存储模式由 library metadata 审计。该接口不改变 active 状态；能力字段来自数据库显式门禁，不由 `status` 推断。 |
 | `GET /api/v1/part-library-versions/:partLibraryVersionId/parts/:ldrawPartNum/preview` | Query：`locale`；`200 PartPreview` | 查询不可变 Part 的 geometry、名称翻译和 GLB 状态。 | 规范化 part number，拒绝路径字符；读取 Part、geometry 和 preview state；只选 reviewed translation，否则 source fallback。仅当前 `part-preview-ldraw-meshopt-glb-v2` ready Artifact 使用服务端 Storage 签名 URL；旧 generator 只投影为 pending，不把旧 GLB 暴露给前端。GET 不创建任务。 |
 | `POST /api/v1/part-library-versions/:partLibraryVersionId/parts/:ldrawPartNum/preview/materialize` | Body：`{locale,timezone}`；`202 AcceptedTask` | 显式生成单个 Part GLB。 | 要求 Part geometry ready 且 source hash 存在；当前版本 ready cache 存在时复用 succeeded task，pending/running 复用活动任务，failed、旧 generator 或缓存丢失时递增 generation。input hash 覆盖 Part Library source hash、Part source file hash 和 generator version。Go Worker 从只读 `LDRAW_ROOT` 递归展开 LDraw type 1/3/4，将坐标烘焙为项目 Y-up/stud 单位，生成折角法线与索引，再由原生 gltfpack 输出 `EXT_meshopt_compression`。最终 GLB 按 SHA-256 存入同一 Storage bucket 的 `component-repo/part-library-assets/glb/{generator}/{sha前缀}/{sha}.glb`；Artifact 为全局无 owner、不可变、内容寻址资源，`part_previews` 负责 Part 到 Artifact 的版本绑定。 |
 
 全库预生成没有公共 HTTP 路由。`backend-go/scripts/prebuild-part-previews.sh` 先显示数据库、bucket、prefix
 和待处理数量；只有设置精确 `CONFIRM_DATABASE_TARGET` 与 `PART_PREVIEW_PREBUILD_EXECUTE=1` 才调度
-`component.part_preview.prebuild` durable task。单个坏 Part 记录结构化失败并继续，其余 Part 独立提交；重复执行只选择
-缺失或 generator 过期条目。
+`component.part_preview.prebuild` durable task。显式传入 `PART_LIBRARY_VERSION_ID` 时允许对 `building`
+快照预生成；省略时仍只选择当前 `active`。Go Worker 冻结并校验源 hash，以 500 行批次准备和领取候选、逐 Part
+独立提交，避免远程 pooler 长时间流式持有全库结果并阻塞心跳。输出内容哈希对应的 verified Artifact 在完整
+provider/bucket/key/SHA/大小定位一致时直接重绑，不重复 PUT；该复用仅用于全库 snapshot 换代，单 Part 对象丢失
+修复仍执行 PUT。单个坏 Part 记录结构化失败并继续，重复执行只选择缺失或 generator 过期条目。离线 importer
+先以 `building` 写入新版本，预生成达到门槛后才在短事务中退休旧 active 并激活新版本；公共 HTTP
+搜索在此之前不读取 building，现有 ComponentVersion 的冻结版本引用不变。
+
+2026-09-24 开发库数据状态：已确认的 Supabase `wkwffflomyrgqpilsozx / postgres` 中，Goose v26 与 importer v5
+`a33262fd-c702-4bd5-84c6-8966761ca88d` 已成为唯一 active；此前 v4 快照及其级联 Part 数据按用户授权的一次性维护事务清理。
+因此上述“现有 ComponentVersion 引用不变”描述的是常规版本切换契约，不适用于本次获批的历史数据硬清理；公共
+API 路径、认证边界和请求字段未改变，尺寸筛选语义与返回范围按本节升级。当前库保留 24,954 Part、24,899 个 ready
+geometry，其中 3,067 个标称尺寸、21,832 个 bbox，55 个 geometry failed；24,899 个 ready geometry 均已绑定
+当前 `part-preview-ldraw-meshopt-glb-v2` 的 ready/verified Preview。预览重建状态见
+[`go_migration_progress.md`](go_migration_progress.md) 与 Part Library 详细设计。
 
 ### 12.1 旧 fitting candidate recall 功能盘点与迁移范围
 
@@ -507,17 +522,17 @@ POST upload complete -> 202
 | Candidate 类型 | 支持 `part/submodel/component`，读取 `fitting_candidate_profiles`。 | 当前页面只请求 `part`；Go 新接口是专用 Part resource，不接受 candidate type。Component/Submodel 召回仍属于其他 fitting 算法调用者，不进入 Component Repo Go API。 |
 | Profile 状态与 irregular | 默认 `ready`，可选择 failed `non_grid_dimension` 异常 Part，并施加 penalty。 | 页面原本固定 `includeIrregular=false`；Go 只返回 active library 中 geometry ready 的 Part，不暴露 irregular 开关。 |
 | 搜索框解析 | 空格/中英文逗号拆分；`axb/axbxc` 为精确尺寸，其余为名称关键词。 | 页面已改为独立的描述、LDraw 编号、宽/深 stud 与高 plate 字段；已填写条件全部 AND，描述 token 也全部命中。 |
-| 显式 bbox / logicalSize | 可指定 LDU bbox、stud/plate logical size、tolerance 和 planar rotation。 | Go 页面契约提供独立标称 logical size 字段；宽/深允许旋转，高度保持 plate 轴。bbox/tolerance 仍属于 fitting 算法域，不扩张本接口。 |
+| 显式 bbox / logicalSize | 可指定 LDU bbox、stud/plate logical size、tolerance 和 planar rotation。 | Go 页面契约提供统一物理尺寸字段；标准件使用标称尺寸，其他 ready Part 使用 bbox。宽/深允许旋转、高度保持 plate 轴，容差固定为每轴 ±2mm，不接受调用方自定义。 |
 | Connector / category / color | 对画像 JSON 的 connector count、分类和颜色摘要做过滤并加分。 | 当前页面不传；未迁移到 Part Search。Part Library 已有 connector definitions，但不能把 relation 数据直接等同于旧画像评分。 |
 | `key` 模糊名称与评分 | `SequenceMatcher` 阈值、bbox/尺寸距离、过滤 bonus/irregular penalty 组成 score；再按 score/type/id 排序。 | Go 使用可解释的全部描述 token 包含匹配、完整描述优先及稳定源描述/编号排序，不复刻未被页面使用的算法 score。 |
 | 图片补全 | 从 legacy `rb_part_images/xref_part_numbers` 选择图片 URL。 | 不迁移 legacy 图片表。Go 基于当前版本化 Part GLB Artifact 返回可选 `previewModel`；前端进入视口附近后下载 GLB，通过单一共享 WebGL renderer 生成静态 256px WebP，并按 Artifact ID/SHA 缓存在内存与 IndexedDB。列表不创建 20 个常驻 3D Viewer/RAF，也不向 Storage 写 24k 份缩略图对象；生成或加载失败时仅显示既有占位图。 |
 | 分页 | 全量过滤和评分后进行页码分页，最大 200。 | 已迁移为 PostgreSQL count + stable page query，最大 200；响应绑定实际 `partLibraryVersionId`。 |
 
-Studio importer v4 在离线导入期从顶层 LDraw 文件头读取并规范化源语言描述，标准
-`Brick/Plate/Tile W x D` 写入 `derived_exact` 标称尺寸，其他 ready 几何继续写 `derived_approximate`；API
-不会在请求时读取本机 Studio。已有 v2/v3 active snapshot 需要通过受控
-`backend-go/scripts/update-studio-part-library.sh` 重新导入后，`tile/plate` 等名称搜索才具备完整数据。
-脚本会比较 importer version，不会因 manifest hash 相同而错误 no-op；API/Worker startup 不执行该更新。
+Studio importer v5 在离线导入期从顶层 LDraw 文件头读取并规范化源语言描述。描述符合
+`Brick/Plate/Tile W x D`、不含第三维，且 bbox 三个物理轴均未偏离标称值 2mm 时写入 `derived_exact`；其他
+ready 几何统一写入 bbox `derived_approximate`。规则版本为 `ldraw-description-nominal-or-bbox-v2`，同时参与
+确定性 library ID，保证同一 manifest 的算法升级不会错误 no-op。API 不在请求时读取本机 Studio，API/Worker
+startup 也不执行重导入。
 
 ## 13. 端到端主链路
 

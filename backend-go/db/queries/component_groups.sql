@@ -274,15 +274,6 @@ SELECT c.id, c.owner_id, c.content_kind,
        count(*) OVER()::bigint AS total_count
 FROM candidate_component_ids
 JOIN component_repo.component_catalog_candidates c ON c.id = candidate_component_ids.component_id
--- 尺寸搜索忽略 Box 轴方向：先把三个业务尺寸归一化为升序 a/b/c；任一尺寸缺失时不参与尺寸匹配。
-LEFT JOIN LATERAL (
-    SELECT c.current_logical_size_a::double precision AS size_a,
-           c.current_logical_size_b::double precision AS size_b,
-           c.current_logical_size_c::double precision AS size_c
-    WHERE c.current_logical_size_a IS NOT NULL
-      AND c.current_logical_size_b IS NOT NULL
-      AND c.current_logical_size_c IS NOT NULL
-) normalized_size ON true
 LEFT JOIN LATERAL (
     SELECT translation_record.id, translation_record.locale, translation_record.name,
            translation_record.description, translation_record.tags
@@ -292,57 +283,50 @@ LEFT JOIN LATERAL (
       AND translation_record.locale = sqlc.arg(locale)
     LIMIT 1
 ) translation ON true
+LEFT JOIN LATERAL (
+    -- 只有尺寸筛选启用时才读取当前展示 Version；无尺寸条件时执行计划必须让该内层零循环。
+    SELECT projection.logical_width_stud,
+           projection.logical_depth_stud,
+           projection.logical_height_plate
+    FROM component_repo.component_catalog_projection projection
+    WHERE (sqlc.arg(has_width)::boolean OR sqlc.arg(has_depth)::boolean OR sqlc.arg(has_height)::boolean)
+      AND projection.id = c.id
+) filter_size ON true
 WHERE (
     (c.owner_id = sqlc.arg(owner_id) AND c.version_available)
     OR (c.status = 'active' AND c.public_version_available)
 )
   AND (cardinality(sqlc.arg(status_filters)::text[]) = 0 OR c.status = ANY(sqlc.arg(status_filters)::text[]))
-  -- 每个重复 query 都是独立条件；NOT EXISTS 反例使全部文字条件按 AND 组合。
-  AND NOT EXISTS (
-      SELECT 1
-      FROM unnest(sqlc.arg(text_filters)::text[]) AS requested_text(value)
-      WHERE NOT (
-          CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
-              ILIKE '%' || requested_text.value || '%'
-          OR c.id::text ILIKE '%' || requested_text.value || '%'
-      )
+  AND lower(CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END)
+      LIKE ALL(sqlc.arg(name_patterns)::text[])
+  AND (
+      sqlc.arg(component_id_filter)::text = ''
+      OR position(sqlc.arg(component_id_filter)::text IN lower(c.id::text)) > 0
   )
-  -- 二维/三维条件也逐个满足；COALESCE(false) 确保缺少 Box 时不会被 SQL NULL 误判为通过。
-  AND NOT EXISTS (
-      SELECT 1
-      FROM jsonb_to_recordset(sqlc.arg(size_filters)::jsonb)
-          AS requested_size(dimension_count integer, size_a double precision,
-                            size_b double precision, size_c double precision)
-      WHERE NOT COALESCE((
-          (
-              requested_size.dimension_count = 3
-              AND normalized_size.size_a > requested_size.size_a - 1
-              AND normalized_size.size_a < requested_size.size_a + 1
-              AND normalized_size.size_b > requested_size.size_b - 1
-              AND normalized_size.size_b < requested_size.size_b + 1
-              AND normalized_size.size_c > requested_size.size_c - 1
-              AND normalized_size.size_c < requested_size.size_c + 1
-          )
-          OR (
-              requested_size.dimension_count = 2
-              AND (
-                  (normalized_size.size_a > requested_size.size_a - 1
-                   AND normalized_size.size_a < requested_size.size_a + 1
-                   AND normalized_size.size_b > requested_size.size_b - 1
-                   AND normalized_size.size_b < requested_size.size_b + 1)
-                  OR
-                  (normalized_size.size_a > requested_size.size_a - 1
-                   AND normalized_size.size_a < requested_size.size_a + 1
-                   AND normalized_size.size_c > requested_size.size_b - 1
-                   AND normalized_size.size_c < requested_size.size_b + 1)
-                  OR
-                  (normalized_size.size_b > requested_size.size_a - 1
-                   AND normalized_size.size_b < requested_size.size_a + 1
-                   AND normalized_size.size_c > requested_size.size_b - 1
-                   AND normalized_size.size_c < requested_size.size_b + 1)
-              )
-          )
-      ), false)
+  -- 宽深允许平面旋转；单轴宽/深命中任一水平轴。误差窗与 Part Search 一致并包含边界。
+  AND (
+      (NOT sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean)
+      OR (
+          sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+          AND least(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+                  AND least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
+          AND greatest(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+                  AND greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
+      )
+      OR (sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean
+          AND (filter_size.logical_width_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25))
+      OR (NOT sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+          AND (filter_size.logical_width_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25))
+  )
+  AND (
+      NOT sqlc.arg(has_height)::boolean
+      OR filter_size.logical_height_plate
+          BETWEEN sqlc.arg(height_plate)::double precision - 0.625
+              AND sqlc.arg(height_plate)::double precision + 0.625
   )
 ORDER BY c.updated_at DESC, c.id
 LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset)
@@ -388,72 +372,57 @@ WITH group_record AS MATERIALIZED (
 SELECT c.status, count(*)::bigint AS component_count
 FROM candidate_component_ids
 JOIN component_repo.component_catalog_candidates c ON c.id = candidate_component_ids.component_id
--- 状态统计必须复用与结果列表完全相同的尺寸归一化，否则分页总数和状态数量会发生漂移。
-LEFT JOIN LATERAL (
-    SELECT c.current_logical_size_a::double precision AS size_a,
-           c.current_logical_size_b::double precision AS size_b,
-           c.current_logical_size_c::double precision AS size_c
-    WHERE c.current_logical_size_a IS NOT NULL
-      AND c.current_logical_size_b IS NOT NULL
-      AND c.current_logical_size_c IS NOT NULL
-) normalized_size ON true
 LEFT JOIN LATERAL (
     SELECT translation_record.id, translation_record.name
     FROM component_repo.component_reviewed_translations translation_record
     WHERE c.content_kind = 'official'
-      AND cardinality(sqlc.arg(text_filters)::text[]) > 0
+      AND cardinality(sqlc.arg(name_patterns)::text[]) > 0
       AND translation_record.component_id = c.id
       AND translation_record.locale = sqlc.arg(locale)
     LIMIT 1
 ) translation ON true
+LEFT JOIN LATERAL (
+    -- 状态统计与列表复用同一展示尺寸和启用门控，确保总数语义不漂移。
+    SELECT projection.logical_width_stud,
+           projection.logical_depth_stud,
+           projection.logical_height_plate
+    FROM component_repo.component_catalog_projection projection
+    WHERE (sqlc.arg(has_width)::boolean OR sqlc.arg(has_depth)::boolean OR sqlc.arg(has_height)::boolean)
+      AND projection.id = c.id
+) filter_size ON true
 WHERE (
     (c.owner_id = sqlc.arg(owner_id) AND c.version_available)
     OR (c.status = 'active' AND c.public_version_available)
 )
-  AND NOT EXISTS (
-      SELECT 1
-      FROM unnest(sqlc.arg(text_filters)::text[]) AS requested_text(value)
-      WHERE NOT (
-          CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
-              ILIKE '%' || requested_text.value || '%'
-          OR c.id::text ILIKE '%' || requested_text.value || '%'
-      )
+  AND lower(CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END)
+      LIKE ALL(sqlc.arg(name_patterns)::text[])
+  AND (
+      sqlc.arg(component_id_filter)::text = ''
+      OR position(sqlc.arg(component_id_filter)::text IN lower(c.id::text)) > 0
   )
-  AND NOT EXISTS (
-      SELECT 1
-      FROM jsonb_to_recordset(sqlc.arg(size_filters)::jsonb)
-          AS requested_size(dimension_count integer, size_a double precision,
-                            size_b double precision, size_c double precision)
-      WHERE NOT COALESCE((
-          (
-              requested_size.dimension_count = 3
-              AND normalized_size.size_a > requested_size.size_a - 1
-              AND normalized_size.size_a < requested_size.size_a + 1
-              AND normalized_size.size_b > requested_size.size_b - 1
-              AND normalized_size.size_b < requested_size.size_b + 1
-              AND normalized_size.size_c > requested_size.size_c - 1
-              AND normalized_size.size_c < requested_size.size_c + 1
-          )
-          OR (
-              requested_size.dimension_count = 2
-              AND (
-                  (normalized_size.size_a > requested_size.size_a - 1
-                   AND normalized_size.size_a < requested_size.size_a + 1
-                   AND normalized_size.size_b > requested_size.size_b - 1
-                   AND normalized_size.size_b < requested_size.size_b + 1)
-                  OR
-                  (normalized_size.size_a > requested_size.size_a - 1
-                   AND normalized_size.size_a < requested_size.size_a + 1
-                   AND normalized_size.size_c > requested_size.size_b - 1
-                   AND normalized_size.size_c < requested_size.size_b + 1)
-                  OR
-                  (normalized_size.size_b > requested_size.size_a - 1
-                   AND normalized_size.size_b < requested_size.size_a + 1
-                   AND normalized_size.size_c > requested_size.size_b - 1
-                   AND normalized_size.size_c < requested_size.size_b + 1)
-              )
-          )
-      ), false)
+  AND (
+      (NOT sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean)
+      OR (
+          sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+          AND least(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+                  AND least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
+          AND greatest(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+                  AND greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
+      )
+      OR (sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean
+          AND (filter_size.logical_width_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25))
+      OR (NOT sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+          AND (filter_size.logical_width_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25))
+  )
+  AND (
+      NOT sqlc.arg(has_height)::boolean
+      OR filter_size.logical_height_plate
+          BETWEEN sqlc.arg(height_plate)::double precision - 0.625
+              AND sqlc.arg(height_plate)::double precision + 0.625
   )
 GROUP BY c.status
 ORDER BY c.status;

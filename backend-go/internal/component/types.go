@@ -22,11 +22,21 @@ type ComponentListRequest struct {
 	Status   string
 }
 
-// PublicFeedRequest 描述组件库广场查询；Cursor 只能继续相同搜索条件下的发布事件流。
+// ComponentSearchFilters 是 Component 列表共用的结构化筛选；所有非空字段按 AND 组合。
+// 名称与机器 ID 保持独立语义，宽/深允许平面旋转，高度始终使用 plate 轴。
+type ComponentSearchFilters struct {
+	Name        string
+	ComponentID string
+	WidthStud   *float64
+	DepthStud   *float64
+	HeightPlate *float64
+}
+
+// PublicFeedRequest 描述组件库广场查询；Cursor 只能继续相同结构化筛选下的发布事件流。
 type PublicFeedRequest struct {
 	Limit  int
 	Cursor string
-	Query  string
+	ComponentSearchFilters
 }
 
 // PublicFeedPublisher 是发布事件中已验证的发布人身份投影；公开资料尚未建模时只返回稳定用户 ID。
@@ -80,11 +90,11 @@ type ComponentPage struct {
 	NextCursor *string     `json:"nextCursor"`
 }
 
-// StarListRequest 描述当前 actor 的收藏列表查询；完整尺寸表达式复用分组搜索规范。
+// StarListRequest 描述当前 actor 的收藏列表查询；结构化字段与分组、公共 Feed 使用同一 AND 语义。
 type StarListRequest struct {
 	PageRequest
-	Locale   string
-	Query    string
+	Locale string
+	ComponentSearchFilters
 	Category string
 	Sort     string
 }
@@ -248,8 +258,8 @@ type Group struct {
 
 type ComponentGroupSearchRequest struct {
 	PageRequest
-	Locale   string
-	Queries  []string
+	Locale string
+	ComponentSearchFilters
 	Statuses []string
 }
 

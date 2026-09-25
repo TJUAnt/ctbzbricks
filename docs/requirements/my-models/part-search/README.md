@@ -16,7 +16,7 @@
 
 ## 1. 功能目标
 
-用户可以在当前生效的官方 Part Library 中，按零件描述、LDraw 零件编号和标称尺寸组合筛选零件，查看匹配总数、
+用户可以在当前生效的官方 Part Library 中，按零件描述、LDraw 零件编号和物理尺寸组合筛选零件，查看匹配总数、
 缩略图、展示名称、编号及尺寸，并进入绑定到同一零件库版本的详情页。LDraw 文件名只用于稳定识别零件，不作为
 唯一的展示名称或搜索入口。
 
@@ -24,7 +24,7 @@
 
 - 使用者必须已经登录；所有认证用户读取同一个共享官方 Part Library，不按用户所有权分区。
 - 系统必须存在唯一可用的 active Part Library Version；一次搜索及其结果链接固定使用该版本。
-- 搜索只读取已经完成几何解析且状态为 `ready` 的顶层 Part；sticker 和 decal 不进入搜索结果。
+- 搜索只读取已经完成几何解析且状态为 `ready` 的顶层 Part；sticker、decal 与其他非标准件同样可搜索。
 - 页面查询不会在线扫描 Studio/LDraw 目录，也不会因为搜索创建解析或预览任务。
 
 ## 3. 页面进入与默认行为
@@ -41,13 +41,14 @@
 |---|---|---|
 | 零件描述 | 最长 200 个 Unicode 字符 | 按空格、中英文逗号拆分并去重；每个 token 都必须命中源描述或当前语言的 reviewed 官方翻译 |
 | LDraw 零件编号 | 最长 128 个字符 | 对规范化编号执行不区分大小写的包含匹配；拒绝路径字符和 `..`；编号是机器值，不翻译 |
-| 宽 | 大于 0 且不超过 1000，单位 stud | 与可信标称平面尺寸精确匹配；单独填写时可匹配零件任一平面轴 |
-| 深 | 大于 0 且不超过 1000，单位 stud | 与可信标称平面尺寸精确匹配；单独填写时可匹配零件任一平面轴 |
-| 高 | 大于 0 且不超过 1000，单位 plate | 只匹配垂直高度，不与宽或深换轴 |
+| 宽 | 大于 0 且不超过 1000，单位 stud | 标准 Brick/Plate/Tile 使用标称平面尺寸，其他 ready Part 使用 bbox；单独填写时可匹配任一平面轴，每个物理轴允许 ±2mm |
+| 深 | 大于 0 且不超过 1000，单位 stud | 标准 Brick/Plate/Tile 使用标称平面尺寸，其他 ready Part 使用 bbox；单独填写时可匹配任一平面轴，每个物理轴允许 ±2mm |
+| 高 | 大于 0 且不超过 1000，单位 plate | 只匹配垂直高度，不与宽或深换轴；允许 ±2mm |
 
 - 所有已填写条件按 AND 组合；描述中的多个 token 也全部需要命中。
 - 宽和深同时填写时允许零件在平面内旋转 90°，因此 `2 × 4` 与 `4 × 2` 视为相同占地。
-- 任意尺寸条件只匹配 `derived_exact` 标称尺寸；近似包围盒可以展示，但不能命中精确尺寸筛选。
+- 任意尺寸条件同时匹配 `derived_exact` 标称尺寸和 `derived_approximate` bbox 尺寸；允许误差按物理轴换算为
+  平面 `±0.25 stud`、高度 `±0.625 plate`，边界值包含在内。
 - 用户提交搜索后回到第一页。未填写任何条件表示浏览全部当前可搜索零件。
 - 前端数字输入步长为 `0.1`，服务端仍负责最终范围和有限数校验。
 
@@ -58,7 +59,7 @@
 - 当前语言的 reviewed 官方名称；不存在时展示源描述。
 - 稳定的 LDraw 零件编号，例如 `3001.dat`。
 - 可用时展示逻辑尺寸：宽 × 深（stud）及高（plate）。
-- 尺寸必须明确标识为“标称尺寸”或“近似包围盒”，不能把近似值暗示为可精确筛选的数据。
+- 尺寸必须明确标识为“标称尺寸”或“包围盒尺寸”，使用户知道数值来源；两者都可以参与带 ±2mm 容差的尺寸筛选。
 - 当前版本的 verified GLB 预览可用时展示静态缩略图；不可用或生成失败时显示占位图，文本结果仍然可用。
 
 结果按描述相关度、源描述和唯一零件编号稳定排序。切换界面语言可以改变展示名称和可命中的 reviewed 翻译，但不应
@@ -97,7 +98,7 @@
 ## 9. 不在当前范围内
 
 - 不搜索 Component 或 Submodel，也不复刻旧 fitting candidate 的混合评分。
-- 不提供 connector、category、color、替代件、irregular、bbox tolerance 等筛选。
+- 不提供 connector、category、color、替代件、irregular 或自定义 tolerance 筛选；bbox 统一采用系统固定的 ±2mm。
 - 不允许用户通过搜索接口修改 Part Library、翻译、几何或预览资产。
 - 不在请求过程中解析 LDraw、生成 GLB、执行数据库迁移或重导入 snapshot。
 - 不承诺普通 B-tree 能优化描述/编号的前导通配符，也不把本地性能数字作为生产 SLO。
@@ -107,8 +108,9 @@
 1. 输入描述 `plate round` 时，只有描述或当前 reviewed 翻译同时命中两个 token 的 ready Part 返回。
 2. 只输入 `3024` 时，可以按编号找到相应 `.dat` Part，同时卡片名称仍展示描述而不是强制显示文件名。
 3. 描述、编号、宽、深和高任意组合时，所有已填写条件同时生效。
-4. 输入宽 2、深 4 时，`2 × 4` 和 `4 × 2` 的 exact Part 均可命中；高度不能参与该旋转。
-5. approximate Part 可以在无尺寸筛选时展示并标记为近似，但在任一尺寸筛选存在时不能命中。
+4. 输入宽 2、深 4 时，`2 × 4` 和 `4 × 2` 均可命中；高度不能参与该旋转，三轴各自包含恰好 2mm 的误差边界并排除超过边界的结果。
+5. 标准 Brick/Plate/Tile 返回标称尺寸；modified、slope、round、minifig、sticker/decal 等 ready Part 返回 bbox
+   尺寸并可命中尺寸筛选，卡片明确标识尺寸来源。
 6. 当前 locale 存在 reviewed translation 时使用其搜索和展示；只有 draft/rejected 时回退源描述。
 7. 有 verified 预览的卡片显示缩略图；预览签名或下载失败不影响其他结果及详情链接。
 8. 翻页时排序稳定，搜索响应中的总数、总页数和 items 属于同一 Part Library Version 和一致快照。
@@ -119,12 +121,14 @@
 
 - 仓库代码已经实现结构化搜索、reviewed translation、标称尺寸边界、结果缩略图和版本化详情链接，并通过 Go、
   PostgreSQL、前端测试、i18n 检查和构建。
-- 真实 Supabase 必须在确认精确数据库目标后应用 Goose v25，并使用 importer v4 重导入 active snapshot；完成前，
-  现有数据仍可能把 `.dat` 文件名作为展示名称，且尺寸筛选可能没有可用 exact 数据。
-- exact 标称尺寸目前只覆盖标准 `Brick/Plate/Tile W x D`；modified、slope、round、minifig、sticker 等仍需分类。
-- 当前 24,426 条数据的最深页存在约 3.6 MB 临时排序。产品已决定暂不执行 100,000 候选排序优化；单版本接近
+- 真实 Supabase 已应用 Goose v26，并使用 importer v5 导入唯一 active snapshot；24,954 个 Part 中 24,899 个
+  geometry ready，3,067 个使用标称尺寸、21,832 个使用 bbox，55 个源引用缺失而不可搜索；24,899 个 ready Part
+  均已绑定当前 generator 的 ready/verified Preview。
+- 当前尺寸分类已冻结为两类：标准 `Brick/Plate/Tile W x D` 且 bbox 三轴均在标称值 2mm 内时使用标称尺寸；
+  其余 ready Part 一律使用 bbox，不再为每种非标准类别建立枚举清单。
+- 当前 24,899 条可搜索数据在真实托管库的首屏和最深页均可能产生临时排序。产品已决定暂不执行 100,000 候选排序优化；单版本接近
   100,000、生产出现 temp file/延迟异常，或产品批准改变页码交互时重新评审。
 - reviewed translation 覆盖率尚未成为内容发布门禁。
 
-上述未完成项的编号、关闭条件和验证证据由 [Part Library 详细设计](../../../design/my-models/part-search/README.md#8-本次验证与清理项)
+上述未完成项的编号、关闭条件和验证证据由 [Part Library 详细设计](../../../design/my-models/part-search/README.md#9-验证与已知问题)
 与 [Go 迁移进度](../../../go_migration_progress.md) 维护；本需求文档不将仓库完成状态表述为已经部署。

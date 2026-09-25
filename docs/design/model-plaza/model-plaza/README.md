@@ -57,7 +57,8 @@
 `occurred_at >= window_start` 和 `(occurred_at,event_id)` cursor 从每个已订阅 Component 的事件索引取最多
 一页候选，再做全局 `ORDER BY occurred_at DESC,event_id DESC LIMIT page_size`。
 
-个人 Feed 没有文本筛选或 exact count；首屏和续页不要求与另一次查询共享快照。Component 翻译、每页 Star
+个人 Feed 没有文本筛选或 exact count；首屏和续页不要求与另一次查询共享快照。公共 Feed 提供与个人仓库一致的
+名称、Component ID、宽/深/高结构化 AND 筛选，cursor 绑定筛选签名，但仍不执行 exact count。Component 翻译、每页 Star
 聚合、当前 actor Star 状态、Feed entry 与 Artifact 元数据只能读取已经固定的页面 ID；Feed entry 必须是
 `ready/fallback` 且 `available_at` 非空，pending 不进入页面。图片 URL 在 SQL 完成后按当页 Storage key 一次
 批量签发，签名失败只把对应卡片降级为无图，不改变发布成功和 Feed 成员资格。验证必须复跑现有
@@ -66,7 +67,7 @@
 
 当前后端契约：
 
-- 公共页签：`GET /api/v1/component-public-feed`，由 v23 终态 Feed entry 部分索引驱动；
+- 公共页签：`GET /api/v1/component-public-feed?name&componentId&widthStud&depthStud&heightPlate`，由 v23 终态 Feed entry 部分索引驱动；
 - 个人订阅：`GET /api/v1/component-watch-feed`，由 actor active Watch 索引驱动，响应复用公共事件卡片投影；
 - 订阅管理：`GET /api/v1/component-watches` 与 `DELETE /api/v1/components/:componentId/watch`。
 
@@ -78,15 +79,15 @@
 
 - 三个接口都使用 JWT actor；公共 Feed 的 actor 只影响 Star/Watch 展示投影，个人订阅 Feed 和管理列表按 actor 隔离。
 - `tab=subscriptions` 是稳定路由机器值，不翻译；页签、管理入口、加载和空状态使用 typed semantic keys。
-- 当前资源版本为 `frontend-2026.09.16.1`，生产 locale 为 `zh-CN/en-US`；本次只删除与 Star 删除清理语义
-  冲突的旧空态，并复用已有 Star/Unstar key，没有新增 locale 分支。
+- 当前资源版本为 `frontend-2026.09.25.1`，生产 locale 为 `zh-CN/en-US`；公共筛选字段和尺寸提示使用 typed semantic
+  keys，没有新增 locale 分支。
 - Component 名称、描述、Release Note 与 locale 分类不因页面迁移改变。
 
 ## 5. 代码索引
 
 | 层 | 代码 |
 |---|---|
-| 广场壳层与页签 | `frontend/src/componentRepo/ComponentPlazaPage.tsx` |
+| 广场壳层与页签 | `frontend/src/componentRepo/ComponentPlazaPage.tsx`、`ComponentSearchForm.tsx` |
 | 个人仓库壳层 | `frontend/src/componentRepo/ComponentRepoPage.tsx` |
 | 公共事件卡片 | `frontend/src/componentRepo/ComponentPublicFeedCard.tsx`、`ComponentStarButton.tsx`、`componentPublicFeed.ts` |
 | 个人订阅 Feed | `frontend/src/componentRepo/ComponentWatchFeedPanel.tsx` |
@@ -97,7 +98,7 @@
 | 样式与资源 | `frontend/src/styles.css`、`frontend/src/i18n/resources/*/componentRepo.json` |
 | Worker / Renderer | `backend-go/internal/feedrender/`、`backend-go/internal/ldrawmaterial/`、`backend-go/cmd/worker/main.go`、`scripts/start-feed-render-worker.sh`、`scripts/start-feed-render-worker.ps1`、`Dockerfile.feed-render`、`compose.production.yml` |
 | 浏览器摄影棚 | `frontend/src/preview/studioPreviewRendering.ts`、`glbThumbnailRenderer.ts`、`frontend/src/parts/PartViewerPage.tsx` |
-| 测试 | `frontend/src/i18n/__tests__/localizedPages.test.tsx`、`ComponentPlazaBoundary.test.ts`、`ComponentWatchListPage.test.ts`、`ComponentStarButton.test.tsx`、`componentPublicFeed.test.ts`、`backend-go/internal/component/service_integration_test.go`、`watch_list_performance_integration_test.go` |
+| 测试 | `frontend/src/i18n/__tests__/localizedPages.test.tsx`、`ComponentPlazaBoundary.test.ts`、`ComponentWatchListPage.test.ts`、`ComponentStarButton.test.tsx`、`componentPublicFeed.test.ts`、`backend-go/tests/integration/component/service_test.go`、`backend-go/tests/performance/component/watch_list_test.go` |
 
 ## 6. 验证证据
 

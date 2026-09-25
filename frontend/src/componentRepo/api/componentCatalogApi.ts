@@ -22,17 +22,35 @@ import type {
   ComponentWatchResponse,
 } from '../componentRepoTypes';
 
+/** ComponentSearchFilters 与 Part Search 对齐：字段独立、非空条件全部按 AND 组合。 */
+export type ComponentSearchFilters = {
+  name?: string;
+  componentId?: string;
+  widthStud?: number;
+  depthStud?: number;
+  heightPlate?: number;
+};
+
+function appendComponentSearchFilters(url: URL, filters: ComponentSearchFilters | undefined): void {
+  if (!filters) return;
+  if (filters.name) url.searchParams.set('name', filters.name);
+  if (filters.componentId) url.searchParams.set('componentId', filters.componentId);
+  if (filters.widthStud !== undefined) url.searchParams.set('widthStud', String(filters.widthStud));
+  if (filters.depthStud !== undefined) url.searchParams.set('depthStud', String(filters.depthStud));
+  if (filters.heightPlate !== undefined) url.searchParams.set('heightPlate', String(filters.heightPlate));
+}
+
 /** 按事件倒序读取组件库广场；当前 actor 的 Watch 关系不参与 Feed 成员筛选。 */
 export async function listComponentPublicFeed(payload: {
   limit?: number;
   cursor?: string;
-  query?: string;
+  filters?: ComponentSearchFilters;
 } = {}): Promise<ComponentPublicFeedPageResponse> {
   const url = new URL(appConfig.componentRepoApi.componentPublicFeed, window.location.origin);
   url.searchParams.set('locale', currentTaskContext().locale);
   if (payload.limit) url.searchParams.set('limit', String(payload.limit));
   if (payload.cursor) url.searchParams.set('cursor', payload.cursor);
-  if (payload.query) url.searchParams.set('query', payload.query);
+  appendComponentSearchFilters(url, payload.filters);
   return requestJson<ComponentPublicFeedPageResponse>(url.toString());
 }
 
@@ -69,19 +87,19 @@ export async function listComponentGroupMembershipCandidates(payload: {
   page: number;
   pageSize: number;
 }): Promise<ComponentGroupMembershipCandidatePage> {
-  const queries = payload.query?.trim() ? [payload.query.trim()] : [];
+  const filters = payload.query?.trim() ? { name: payload.query.trim() } : undefined;
   const [owned, starred, existing] = await Promise.all([
     searchComponentGroupComponents(payload.rootGroupId, {
-      queries, statuses: null, page: payload.page, pageSize: payload.pageSize,
+      filters, statuses: null, page: payload.page, pageSize: payload.pageSize,
     }),
     listComponentStars({
       page: payload.page,
       pageSize: payload.pageSize,
-      query: payload.query?.trim() || undefined,
+      filters,
       sort: 'starred_at_desc',
     }),
     searchComponentGroupComponents(payload.groupId, {
-      queries, statuses: null, page: payload.page, pageSize: payload.pageSize,
+      filters, statuses: null, page: payload.page, pageSize: payload.pageSize,
     }),
   ]);
   const byId = new Map<string, ComponentResponse>();
@@ -117,7 +135,7 @@ export async function listComponents(payload: {
 export async function listComponentStars(payload: {
   page: number;
   pageSize: number;
-  query?: string;
+  filters?: ComponentSearchFilters;
   category?: string;
   sort?: 'starred_at_desc';
 }): Promise<ComponentStarPageResponse> {
@@ -125,7 +143,7 @@ export async function listComponentStars(payload: {
   url.searchParams.set('locale', currentTaskContext().locale);
   url.searchParams.set('page', String(payload.page));
   url.searchParams.set('pageSize', String(payload.pageSize));
-  if (payload.query) url.searchParams.set('query', payload.query);
+  appendComponentSearchFilters(url, payload.filters);
   if (payload.category) url.searchParams.set('category', payload.category);
   if (payload.sort) url.searchParams.set('sort', payload.sort);
   return requestJson<ComponentStarPageResponse>(url.toString());
@@ -236,7 +254,7 @@ export async function deleteComponentGroup(groupId: string): Promise<void> {
 export async function searchComponentGroupComponents(
   groupId: string,
   payload: {
-    queries: string[];
+    filters?: ComponentSearchFilters;
     statuses: string[] | null;
     page: number;
     pageSize: number;
@@ -244,7 +262,7 @@ export async function searchComponentGroupComponents(
 ): Promise<ComponentGroupSearchResponse> {
   const url = new URL(pathFor('componentGroupComponentSearch', { groupId }), window.location.origin);
   url.searchParams.set('locale', currentTaskContext().locale);
-  payload.queries.forEach((query) => url.searchParams.append('query', query));
+  appendComponentSearchFilters(url, payload.filters);
   url.searchParams.set('page', String(payload.page));
   url.searchParams.set('pageSize', String(payload.pageSize));
   payload.statuses?.forEach((status) => url.searchParams.append('status', status));

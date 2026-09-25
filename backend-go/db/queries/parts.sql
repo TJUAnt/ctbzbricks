@@ -9,7 +9,7 @@ LIMIT 1;
 
 -- name: CountSearchableParts :one
 -- 零件搜索只读取指定的不可变 Part Library；描述 token、编号和每个尺寸条件全部按 AND 组合。
--- 宽/深是可旋转的平面轴，高度单位为 plate 且绝不参与换轴；任一尺寸条件都只接受 derived_exact。
+-- 宽/深是可旋转的平面轴，高度单位为 plate 且绝不参与换轴；每个物理轴允许含边界的 ±2mm。
 WITH requested_translations AS MATERIALIZED (
     SELECT source.part_library_version_id, source.ldraw_part_num, source.name, source.locale
     FROM component_repo.part_translations source
@@ -27,8 +27,6 @@ LEFT JOIN requested_translations translation
  AND translation.ldraw_part_num = part.ldraw_part_num
 WHERE part.part_library_version_id = sqlc.arg(part_library_version_id)
   AND geometry.geometry_status = 'ready'
-  AND position('sticker' IN lower(part.source_name)) = 0
-  AND position('decal' IN lower(part.source_name)) = 0
   AND lower(part.source_name || ' ' || COALESCE(translation.name, ''))
       LIKE ALL(sqlc.arg(description_patterns)::text[])
   AND (
@@ -37,25 +35,31 @@ WHERE part.part_library_version_id = sqlc.arg(part_library_version_id)
   )
   AND (
       NOT (sqlc.arg(has_width)::boolean OR sqlc.arg(has_depth)::boolean OR sqlc.arg(has_height)::boolean)
-      OR geometry.logical_size_derivation_status = 'derived_exact'
+      OR geometry.logical_size_derivation_status IN ('derived_exact', 'derived_approximate')
   )
   AND (
       (NOT sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean)
       OR (
           sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
           AND least(geometry.logical_width_stud, geometry.logical_depth_stud)
-              = least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision)
+              BETWEEN least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+                  AND least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
           AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud)
-              = greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision)
+              BETWEEN greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+                  AND greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
       )
       OR (sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean
-          AND sqlc.arg(width_stud)::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+          AND (geometry.logical_width_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25
+               OR geometry.logical_depth_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25))
       OR (NOT sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
-          AND sqlc.arg(depth_stud)::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+          AND (geometry.logical_width_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25
+               OR geometry.logical_depth_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25))
   )
   AND (
       NOT sqlc.arg(has_height)::boolean
-      OR geometry.logical_height_plate = sqlc.arg(height_plate)::double precision
+      OR geometry.logical_height_plate
+          BETWEEN sqlc.arg(height_plate)::double precision - 0.625
+              AND sqlc.arg(height_plate)::double precision + 0.625
   );
 
 -- name: SearchParts :many
@@ -91,8 +95,6 @@ WITH requested_translations AS MATERIALIZED (
      AND translation.ldraw_part_num = part.ldraw_part_num
     WHERE part.part_library_version_id = sqlc.arg(part_library_version_id)
       AND geometry.geometry_status = 'ready'
-      AND position('sticker' IN lower(part.source_name)) = 0
-      AND position('decal' IN lower(part.source_name)) = 0
       AND lower(part.source_name || ' ' || COALESCE(translation.name, ''))
           LIKE ALL(sqlc.arg(description_patterns)::text[])
       AND (
@@ -101,25 +103,31 @@ WITH requested_translations AS MATERIALIZED (
       )
       AND (
           NOT (sqlc.arg(has_width)::boolean OR sqlc.arg(has_depth)::boolean OR sqlc.arg(has_height)::boolean)
-          OR geometry.logical_size_derivation_status = 'derived_exact'
+          OR geometry.logical_size_derivation_status IN ('derived_exact', 'derived_approximate')
       )
       AND (
           (NOT sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean)
           OR (
               sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
               AND least(geometry.logical_width_stud, geometry.logical_depth_stud)
-                  = least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision)
+                  BETWEEN least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+                      AND least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
               AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud)
-                  = greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision)
+                  BETWEEN greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+                      AND greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
           )
           OR (sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean
-              AND sqlc.arg(width_stud)::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+              AND (geometry.logical_width_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25
+                   OR geometry.logical_depth_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25))
           OR (NOT sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
-              AND sqlc.arg(depth_stud)::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+              AND (geometry.logical_width_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25
+                   OR geometry.logical_depth_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25))
       )
       AND (
           NOT sqlc.arg(has_height)::boolean
-          OR geometry.logical_height_plate = sqlc.arg(height_plate)::double precision
+          OR geometry.logical_height_plate
+              BETWEEN sqlc.arg(height_plate)::double precision - 0.625
+                  AND sqlc.arg(height_plate)::double precision + 0.625
       )
     ORDER BY relevance_rank, source_sort, part.ldraw_part_num
     LIMIT sqlc.arg(page_size)
@@ -229,10 +237,11 @@ WHERE part_library_version_id = sqlc.arg(part_library_version_id)
   AND status IN ('pending', 'running');
 
 -- name: GetPartPreviewPrebuildLibrary :one
+-- 显式指定版本时允许预生成 building 快照；默认入口仍只选择 active，避免新库未完成前提前切换在线搜索。
 SELECT id, source_hash, created_by
 FROM component_repo.part_library_versions
 WHERE id = sqlc.arg(part_library_version_id)
-  AND status = 'active';
+  AND status IN ('active', 'building');
 
 -- name: GetActivePartPreviewPrebuildLibrary :one
 SELECT id, source_hash, created_by
@@ -285,7 +294,7 @@ WHERE preview.part_library_version_id = candidate.part_library_version_id
   AND preview.ldraw_part_num = candidate.ldraw_part_num;
 
 -- name: ListPreparedPartPreviewPrebuildCandidates :many
--- 只读取已经绑定本次 task/generator 的非 ready 行；任务重试不会重新解释 active library。
+-- 每次只读取已经绑定本次 task/generator 的一小批 pending 行；远程 pooler 不承载 2.5 万行单次结果。
 SELECT preview.ldraw_part_num, preview.generation,
        geometry.source_relative_path, geometry.source_file_hash, geometry.face_count
 FROM component_repo.part_previews preview
@@ -295,8 +304,10 @@ JOIN component_repo.part_geometries geometry
 WHERE preview.part_library_version_id = sqlc.arg(part_library_version_id)
   AND preview.task_id = sqlc.arg(task_id)
   AND preview.generator_version = sqlc.arg(generator_version)
-  AND preview.status <> 'ready'
-  AND geometry.geometry_status = 'ready';
+  AND preview.status = 'pending'
+  AND geometry.geometry_status = 'ready'
+ORDER BY geometry.face_count, preview.ldraw_part_num
+LIMIT sqlc.arg(batch_size);
 
 -- name: MarkPartPreviewPrebuildFailed :execrows
 UPDATE component_repo.part_previews
@@ -307,6 +318,26 @@ WHERE part_library_version_id = sqlc.arg(part_library_version_id)
   AND task_id = sqlc.arg(task_id)
   AND generation = sqlc.arg(generation)
   AND status IN ('pending', 'running');
+
+-- name: IsVerifiedPartPreviewArtifactReusable :one
+-- 全库换代时允许复用完全相同的内容寻址 Artifact；逐字段校验避免把同 UUID 下的漂移 metadata 绑定到新 Part。
+SELECT EXISTS (
+  SELECT 1
+  FROM component_repo.artifacts artifact
+  WHERE artifact.id = sqlc.arg(artifact_id)
+    AND artifact.owner_id IS NULL
+    AND artifact.artifact_type = 'part_preview_glb'
+    AND artifact.source_kind = 'derived'
+    AND artifact.storage_provider = sqlc.arg(storage_provider)
+    AND artifact.storage_bucket = sqlc.arg(storage_bucket)
+    AND artifact.storage_key = sqlc.arg(storage_key)
+    AND artifact.sha256 = sqlc.arg(sha256)
+    AND artifact.file_size = sqlc.arg(file_size)
+    AND artifact.mime_type = 'model/gltf-binary'
+    AND artifact.immutable
+    AND artifact.verification_status = 'verified'
+    AND artifact.deleted_at IS NULL
+) AS reusable;
 
 -- name: FinalizePartPreviewArtifact :one
 -- Artifact upsert 与 Part 绑定必须同语句原子提交；全局 Artifact 为 NULL owner，Task owner 只记 uploaded_by。

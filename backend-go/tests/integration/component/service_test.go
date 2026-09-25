@@ -1,6 +1,6 @@
 //go:build integration
 
-package component
+package component_test
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/component"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentactivity"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/componentwatch"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/observability"
@@ -25,6 +26,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const maxGroupDepth = 5
+
+type testComponentService struct {
+	*Service
+	pool    *pgxpool.Pool
+	metrics *observability.Registry
+}
+
+func pointer[T any](value T) *T { return &value }
 
 func TestG3ComponentCatalogContract(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
@@ -40,7 +51,11 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	resetComponentRepo(t, pool)
 
 	metrics := observability.NewRegistry()
-	service := NewService(pool).WithMetrics(metrics)
+	service := &testComponentService{
+		Service: NewService(pool).WithMetrics(metrics),
+		pool:    pool,
+		metrics: metrics,
+	}
 	actorA := mustUUID(t, "20000000-0000-0000-0000-000000000001")
 	actorB := mustUUID(t, "20000000-0000-0000-0000-000000000002")
 
@@ -225,11 +240,15 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 		otherFeed.Items[0].Component.Watch.Watching {
 		t.Fatalf("public Feed must be independent of Watch membership: %+v, error=%v", otherFeed, err)
 	}
-	matchingFeed, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{Limit: 10, Query: "用户组件"})
+	matchingFeed, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{
+		Limit: 10, ComponentSearchFilters: ComponentSearchFilters{Name: "用户 组件"},
+	})
 	if err != nil || len(matchingFeed.Items) != 1 {
 		t.Fatalf("public Feed name search: %+v, error=%v", matchingFeed, err)
 	}
-	emptyFeed, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{Limit: 10, Query: "missing"})
+	emptyFeed, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{
+		Limit: 10, ComponentSearchFilters: ComponentSearchFilters{Name: "missing"},
+	})
 	if err != nil || len(emptyFeed.Items) != 0 {
 		t.Fatalf("public Feed non-matching search: %+v, error=%v", emptyFeed, err)
 	}
@@ -385,7 +404,7 @@ func TestG3ComponentCatalogContract(t *testing.T) {
 	}
 }
 
-func testOfficialTranslationSelection(t *testing.T, service *Service, pool *pgxpool.Pool, reviewer pgtype.UUID) {
+func testOfficialTranslationSelection(t *testing.T, service *testComponentService, pool *pgxpool.Pool, reviewer pgtype.UUID) {
 	t.Helper()
 	ctx := context.Background()
 	_, err := pool.Exec(ctx, `
@@ -421,7 +440,7 @@ func testOfficialTranslationSelection(t *testing.T, service *Service, pool *pgxp
 	}
 }
 
-func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actorB pgtype.UUID, componentID, publishVersionID string) int64 {
+func testGroupsMembershipsAndStars(t *testing.T, service *testComponentService, actorA, actorB pgtype.UUID, componentID, publishVersionID string) int64 {
 	t.Helper()
 	ctx := context.Background()
 	groups, err := service.ListGroups(ctx, actorA)
@@ -512,36 +531,47 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 		t.Fatalf("component group ids: %+v, %v", groupIDs, err)
 	}
 	search, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
-		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN", Queries: []string{"用户"}, Statuses: []string{"active"},
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN",
+		ComponentSearchFilters: ComponentSearchFilters{Name: "用户"}, Statuses: []string{"active"},
 	})
 	if err != nil || search.Total != 1 || len(search.Items) != 1 || search.Items[0].ID != componentID || search.StatusCounts["active"] != 1 {
 		t.Fatalf("group component search: %+v, %v", search, err)
 	}
-	for _, sizeQuery := range []string{"1x2x3", "1x2", "1x3", "2x3"} {
+	for _, filters := range []ComponentSearchFilters{
+		{WidthStud: pointer(1.0), DepthStud: pointer(2.0), HeightPlate: pointer(3.0)},
+		{WidthStud: pointer(2.0), DepthStud: pointer(1.0)},
+		{WidthStud: pointer(2.0)},
+		{HeightPlate: pointer(3.0)},
+		{WidthStud: pointer(0.75), HeightPlate: pointer(2.375)},
+	} {
 		sizeSearch, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
-			PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN", Queries: []string{sizeQuery}, Statuses: []string{"active"},
+			PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN",
+			ComponentSearchFilters: filters, Statuses: []string{"active"},
 		})
 		if err != nil || sizeSearch.Total != 1 || len(sizeSearch.Items) != 1 || sizeSearch.Items[0].ID != componentID || sizeSearch.StatusCounts["active"] != 1 {
-			t.Fatalf("size search %q: %+v, %v", sizeQuery, sizeSearch, err)
+			t.Fatalf("size search %+v: %+v, %v", filters, sizeSearch, err)
 		}
 	}
-	// 开区间必须排除恰好相差 1 的边界：组件最小维度为 1，查询 0 的上边界也是 1。
+	// Part Search 的 ±2 mm 是闭区间；超出 0.25 stud 一点时必须排除。
 	boundarySearch, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
-		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN", Queries: []string{"0x2x3"}, Statuses: []string{"active"},
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN",
+		ComponentSearchFilters: ComponentSearchFilters{WidthStud: pointer(0.74)}, Statuses: []string{"active"},
 	})
 	if err != nil || boundarySearch.Total != 0 || len(boundarySearch.Items) != 0 || boundarySearch.StatusCounts["active"] != 0 {
-		t.Fatalf("open interval boundary search: %+v, %v", boundarySearch, err)
+		t.Fatalf("outside tolerance boundary search: %+v, %v", boundarySearch, err)
 	}
 	compoundSearch, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
 		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN",
-		Queries: []string{"用户", "1x3", "2x3"}, Statuses: []string{"active"},
+		ComponentSearchFilters: ComponentSearchFilters{
+			Name: "用户 组件", ComponentID: componentID[:8], WidthStud: pointer(2.0), DepthStud: pointer(1.0), HeightPlate: pointer(3.0),
+		}, Statuses: []string{"active"},
 	})
 	if err != nil || compoundSearch.Total != 1 || len(compoundSearch.Items) != 1 || compoundSearch.Items[0].ID != componentID {
 		t.Fatalf("compound text and size search: %+v, %v", compoundSearch, err)
 	}
 	compoundMiss, err := service.SearchGroupComponents(ctx, actorA, firstID, ComponentGroupSearchRequest{
 		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "zh-CN",
-		Queries: []string{"用户", "0x2x3"}, Statuses: []string{"active"},
+		ComponentSearchFilters: ComponentSearchFilters{Name: "用户", HeightPlate: pointer(3.626)}, Statuses: []string{"active"},
 	})
 	if err != nil || compoundMiss.Total != 0 || len(compoundMiss.Items) != 0 {
 		t.Fatalf("compound search must require every condition: %+v, %v", compoundMiss, err)
@@ -662,7 +692,8 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 		t.Fatalf("public Feed second cursor page: %+v, error=%v", publicSecond, err)
 	}
 	if _, err := service.ListPublicFeed(ctx, actorB, PublicFeedRequest{
-		Limit: 1, Cursor: *publicFirst.NextCursor, Query: "changed-filter",
+		Limit: 1, Cursor: *publicFirst.NextCursor,
+		ComponentSearchFilters: ComponentSearchFilters{Name: "changed-filter"},
 	}); errorCode(err) != "request.validation_failed" {
 		t.Fatalf("public Feed accepted cursor after changing query: %v", err)
 	}
@@ -794,7 +825,10 @@ func testGroupsMembershipsAndStars(t *testing.T, service *Service, actorA, actor
 		t.Fatalf("out-of-range star page: %+v, %v", outOfRangeStars, err)
 	}
 	sizeStars, err := service.ListStars(ctx, actorB, StarListRequest{
-		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US", Query: "1x2x3", Sort: "starred_at_desc",
+		PageRequest: PageRequest{Page: 1, PageSize: 10}, Locale: "en-US",
+		ComponentSearchFilters: ComponentSearchFilters{
+			WidthStud: pointer(2.0), DepthStud: pointer(1.0), HeightPlate: pointer(3.0),
+		}, Sort: "starred_at_desc",
 	})
 	if err != nil || sizeStars.Total != 1 || len(sizeStars.Items) != 1 || sizeStars.Items[0].ID != componentID {
 		t.Fatalf("star logical size filter: %+v, %v", sizeStars, err)
@@ -934,7 +968,7 @@ func testPublishedEventRollback(t *testing.T, pool *pgxpool.Pool, actor, compone
 	}
 }
 
-func testWatchKeysetPagination(t *testing.T, service *Service, creator, actor pgtype.UUID) {
+func testWatchKeysetPagination(t *testing.T, service *testComponentService, creator, actor pgtype.UUID) {
 	t.Helper()
 	ctx := context.Background()
 	// official fixture 不需要复制 user Component 的 Import/Candidate 所有权链；这里只验证关系分页不变量。
@@ -1070,7 +1104,7 @@ func testWatchKeysetPagination(t *testing.T, service *Service, creator, actor pg
 	}
 }
 
-func testWatchFeedKeysetPagination(t *testing.T, service *Service, creator pgtype.UUID, userComponentID string) {
+func testWatchFeedKeysetPagination(t *testing.T, service *testComponentService, creator pgtype.UUID, userComponentID string) {
 	t.Helper()
 	ctx := context.Background()
 	watcher := mustUUID(t, "21000000-0000-0000-0000-000000000004")
@@ -1248,7 +1282,7 @@ func testWatchFeedKeysetPagination(t *testing.T, service *Service, creator pgtyp
 	}
 }
 
-func testStablePagination(t *testing.T, service *Service, actor pgtype.UUID) {
+func testStablePagination(t *testing.T, service *testComponentService, actor pgtype.UUID) {
 	t.Helper()
 	ctx := context.Background()
 	seedListableOfficialComponents(t, service.pool, actor)

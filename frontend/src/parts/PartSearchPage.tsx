@@ -19,7 +19,7 @@ type PartSearchItem = {
     depthStud: number;
     heightPlate: number;
   } | null;
-  logicalSizeDerivationStatus: string;
+  logicalSizeDerivationStatus: 'derived_exact' | 'derived_approximate';
 };
 
 type RecallColumnCount = 2 | 3 | 4 | 5 | 6;
@@ -156,7 +156,7 @@ export function PartSearchPage() {
                 {state.loading ? tr('partSearch:recalling') : tr('partSearch:recall')}
               </button>
             </div>
-            <p className="mt-3 text-xs text-zinc-500">{tr('partSearch:exactSizeHint')}</p>
+            <p className="mt-3 text-xs text-zinc-500">{tr('partSearch:sizeSearchHint')}</p>
           </form>
 
           {state.error ? (
@@ -243,8 +243,8 @@ function CandidateCard({
           })}
           <span className="ml-1 text-zinc-400">
             ({candidate.logicalSizeDerivationStatus === 'derived_exact'
-              ? tr('partSearch:sizeExact')
-              : tr('partSearch:sizeApproximate')})
+              ? tr('partSearch:sizeNominal')
+              : tr('partSearch:sizeBoundingBox')})
           </span>
         </div>
       ) : null}

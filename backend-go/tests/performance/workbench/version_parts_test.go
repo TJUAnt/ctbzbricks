@@ -1,6 +1,6 @@
 //go:build integration
 
-package workbench
+package workbench_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/workbench"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -147,7 +148,7 @@ func markVersionPartsPlanPreviewsReady(t *testing.T, ctx context.Context, pool *
 
 func explainVersionParts(t *testing.T, ctx context.Context, pool *pgxpool.Pool, refs []string) string {
 	t.Helper()
-	data, err := os.ReadFile("../../db/queries/workbench.sql")
+	data, err := os.ReadFile("../../../db/queries/workbench.sql")
 	if err != nil {
 		t.Fatalf("read authoritative Workbench SQL: %v", err)
 	}

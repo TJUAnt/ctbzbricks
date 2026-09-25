@@ -35,14 +35,13 @@ type Querier interface {
 	ComponentGroupDepth(ctx context.Context, arg ComponentGroupDepthParams) (int32, error)
 	ComponentGroupSubtreeDepth(ctx context.Context, arg ComponentGroupSubtreeDepthParams) (int32, error)
 	ComponentIsVisible(ctx context.Context, arg ComponentIsVisibleParams) (bool, error)
-	// 状态统计必须复用与结果列表完全相同的尺寸归一化，否则分页总数和状态数量会发生漂移。
 	CountComponentGroupStatuses(ctx context.Context, arg CountComponentGroupStatusesParams) ([]CountComponentGroupStatusesRow, error)
 	// 统计口径必须与列表的聚合状态一致，但不应用当前状态筛选，供前端切换筛选时保持完整计数。
 	CountOwnedImportProcessingStatuses(ctx context.Context, arg CountOwnedImportProcessingStatusesParams) ([]CountOwnedImportProcessingStatusesRow, error)
 	CountPartPreviewPrebuildCandidates(ctx context.Context, arg CountPartPreviewPrebuildCandidatesParams) (int64, error)
 	CountPreviewBoundsBackfillCandidates(ctx context.Context, generatorVersion *string) (int64, error)
 	// 零件搜索只读取指定的不可变 Part Library；描述 token、编号和每个尺寸条件全部按 AND 组合。
-	// 宽/深是可旋转的平面轴，高度单位为 plate 且绝不参与换轴；任一尺寸条件都只接受 derived_exact。
+	// 宽/深是可旋转的平面轴，高度单位为 plate 且绝不参与换轴；每个物理轴允许含边界的 ±2mm。
 	CountSearchableParts(ctx context.Context, arg CountSearchablePartsParams) (int64, error)
 	// 没有 active period 时追加新周期；并发重复 PUT 命中部分唯一索引时不更新任何既有行，由 Service 重试读取。
 	CreateActiveComponentWatchPeriod(ctx context.Context, arg CreateActiveComponentWatchPeriodParams) (CreateActiveComponentWatchPeriodRow, error)
@@ -118,6 +117,7 @@ type Querier interface {
 	GetOwnedVersionDiffHead(ctx context.Context, arg GetOwnedVersionDiffHeadParams) (GetOwnedVersionDiffHeadRow, error)
 	GetOwnedVersionPreviewState(ctx context.Context, arg GetOwnedVersionPreviewStateParams) (GetOwnedVersionPreviewStateRow, error)
 	GetPartPreview(ctx context.Context, arg GetPartPreviewParams) (GetPartPreviewRow, error)
+	// 显式指定版本时允许预生成 building 快照；默认入口仍只选择 active，避免新库未完成前提前切换在线搜索。
 	GetPartPreviewPrebuildLibrary(ctx context.Context, partLibraryVersionID pgtype.UUID) (GetPartPreviewPrebuildLibraryRow, error)
 	GetPartPreviewTaskInput(ctx context.Context, arg GetPartPreviewTaskInputParams) (GetPartPreviewTaskInputRow, error)
 	GetPixelBlob(ctx context.Context, arg GetPixelBlobParams) (GetPixelBlobRow, error)
@@ -136,6 +136,8 @@ type Querier interface {
 	GetVisibleVersionPreview(ctx context.Context, arg GetVisibleVersionPreviewParams) (GetVisibleVersionPreviewRow, error)
 	GetVisibleVersionSourceArtifact(ctx context.Context, arg GetVisibleVersionSourceArtifactParams) (ComponentRepoArtifact, error)
 	HeartbeatTask(ctx context.Context, arg HeartbeatTaskParams) (pgtype.Timestamptz, error)
+	// 全库换代时允许复用完全相同的内容寻址 Artifact；逐字段校验避免把同 UUID 下的漂移 metadata 绑定到新 Part。
+	IsVerifiedPartPreviewArtifactReusable(ctx context.Context, arg IsVerifiedPartPreviewArtifactReusableParams) (bool, error)
 	// actor 关系索引先限定有界候选；筛选后固定一页，再读取 Component 展示和当前发布版本。
 	// 搜索翻译仅在 search_query 非空时探测，普通列表不会在分页前逐行读取翻译。
 	ListActiveComponentWatches(ctx context.Context, arg ListActiveComponentWatchesParams) ([]ListActiveComponentWatchesRow, error)
@@ -163,7 +165,7 @@ type Querier interface {
 	ListOwnedTaskEvents(ctx context.Context, arg ListOwnedTaskEventsParams) ([]ComponentRepoTaskEvent, error)
 	// 一条语句保证 count 与 rows 的可见性快照一致；页外像素/预览正文不参与查询。
 	ListPixelProjects(ctx context.Context, arg ListPixelProjectsParams) (ListPixelProjectsRow, error)
-	// 只读取已经绑定本次 task/generator 的非 ready 行；任务重试不会重新解释 active library。
+	// 每次只读取已经绑定本次 task/generator 的一小批 pending 行；远程 pooler 不承载 2.5 万行单次结果。
 	ListPreparedPartPreviewPrebuildCandidates(ctx context.Context, arg ListPreparedPartPreviewPrebuildCandidatesParams) ([]ListPreparedPartPreviewPrebuildCandidatesRow, error)
 	ListPreviewBoundsBackfillCandidates(ctx context.Context, arg ListPreviewBoundsBackfillCandidatesParams) ([]ListPreviewBoundsBackfillCandidatesRow, error)
 	ListReadyPartGeometryForPreview(ctx context.Context, arg ListReadyPartGeometryForPreviewParams) ([]ListReadyPartGeometryForPreviewRow, error)
@@ -211,7 +213,6 @@ type Querier interface {
 	ReservePixelBlob(ctx context.Context, arg ReservePixelBlobParams) error
 	RetryOutboxEvent(ctx context.Context, arg RetryOutboxEventParams) (ComponentRepoOutboxEvent, error)
 	RetryTask(ctx context.Context, arg RetryTaskParams) (ComponentRepoTask, error)
-	// 尺寸搜索忽略 Box 轴方向：先把三个业务尺寸归一化为升序 a/b/c；任一尺寸缺失时不参与尺寸匹配。
 	SearchComponentGroupComponents(ctx context.Context, arg SearchComponentGroupComponentsParams) ([]SearchComponentGroupComponentsRow, error)
 	// 先固定排序后的页面，再关联 preview/artifact；候选集不会因 Storage 投影产生逐行放大。
 	// reviewed translation 既参与请求 locale 的描述检索，也作为展示名；无 reviewed 行时回退源描述。

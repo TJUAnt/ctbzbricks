@@ -169,45 +169,50 @@ LEFT JOIN LATERAL (
       AND item.locale = $2
     LIMIT 1
 ) translation ON true
+LEFT JOIN LATERAL (
+    -- 只有尺寸筛选启用时才读取当前展示 Version；无尺寸条件时执行计划必须让该内层零循环。
+    SELECT projection.logical_width_stud,
+           projection.logical_depth_stud,
+           projection.logical_height_plate
+    FROM component_repo.component_catalog_projection projection
+    WHERE ($3::boolean OR $4::boolean OR $5::boolean)
+      AND projection.id = component.id
+) filter_size ON true
 WHERE component.status = 'active'
   AND component.public_version_available
-  AND ($3::text = '' OR component.category = $3)
+  AND ($6::text = '' OR component.category = $6)
+  AND lower(CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END)
+      LIKE ALL($7::text[])
   AND (
-      $4::text = ''
-      OR CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END
-         ILIKE '%' || $4 || '%'
-      OR component.id::text ILIKE '%' || $4 || '%'
+      $8::text = ''
+      OR position($8::text IN lower(component.id::text)) > 0
   )
   AND (
-      $5::integer = 0
-      OR COALESCE(
-          ($5::integer = 3
-           AND component.current_logical_size_a > $6::double precision - 1
-           AND component.current_logical_size_a < $6::double precision + 1
-           AND component.current_logical_size_b > $7::double precision - 1
-           AND component.current_logical_size_b < $7::double precision + 1
-           AND component.current_logical_size_c > $8::double precision - 1
-           AND component.current_logical_size_c < $8::double precision + 1)
-          OR
-          ($5::integer = 2 AND (
-              (component.current_logical_size_a > $6::double precision - 1
-               AND component.current_logical_size_a < $6::double precision + 1
-               AND component.current_logical_size_b > $7::double precision - 1
-               AND component.current_logical_size_b < $7::double precision + 1)
-              OR
-              (component.current_logical_size_a > $6::double precision - 1
-               AND component.current_logical_size_a < $6::double precision + 1
-               AND component.current_logical_size_c > $7::double precision - 1
-               AND component.current_logical_size_c < $7::double precision + 1)
-              OR
-              (component.current_logical_size_b > $6::double precision - 1
-               AND component.current_logical_size_b < $6::double precision + 1
-               AND component.current_logical_size_c > $7::double precision - 1
-               AND component.current_logical_size_c < $7::double precision + 1)
-          )), false)
+      (NOT $3::boolean AND NOT $4::boolean)
+      OR (
+          $3::boolean AND $4::boolean
+          AND least(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN least($9::double precision, $10::double precision) - 0.25
+                  AND least($9::double precision, $10::double precision) + 0.25
+          AND greatest(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN greatest($9::double precision, $10::double precision) - 0.25
+                  AND greatest($9::double precision, $10::double precision) + 0.25
+      )
+      OR ($3::boolean AND NOT $4::boolean
+          AND (filter_size.logical_width_stud BETWEEN $9::double precision - 0.25 AND $9::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN $9::double precision - 0.25 AND $9::double precision + 0.25))
+      OR (NOT $3::boolean AND $4::boolean
+          AND (filter_size.logical_width_stud BETWEEN $10::double precision - 0.25 AND $10::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN $10::double precision - 0.25 AND $10::double precision + 0.25))
+  )
+  AND (
+      NOT $5::boolean
+      OR filter_size.logical_height_plate
+          BETWEEN $11::double precision - 0.625
+              AND $11::double precision + 0.625
   )
 ORDER BY star.starred_at DESC, component.id
-LIMIT $10 OFFSET $9
+LIMIT $13 OFFSET $12
 )
 SELECT page.id, page.owner_id, page.content_kind, page.selected_content_locale,
        page.selected_name, page.selected_description, page.has_description,
@@ -230,16 +235,19 @@ ORDER BY page.starred_at DESC, page.id
 `
 
 type ListStarredComponentsParams struct {
-	ActorID            pgtype.UUID
-	Locale             string
-	CategoryFilter     string
-	SearchQuery        string
-	SizeDimensionCount int32
-	SizeA              float64
-	SizeB              float64
-	SizeC              float64
-	PageOffset         int32
-	PageSize           int32
+	ActorID           pgtype.UUID
+	Locale            string
+	HasWidth          bool
+	HasDepth          bool
+	HasHeight         bool
+	CategoryFilter    string
+	NamePatterns      []string
+	ComponentIDFilter string
+	WidthStud         float64
+	DepthStud         float64
+	HeightPlate       float64
+	PageOffset        int32
+	PageSize          int32
 }
 
 type ListStarredComponentsRow struct {
@@ -273,12 +281,15 @@ func (q *Queries) ListStarredComponents(ctx context.Context, arg ListStarredComp
 	rows, err := q.db.Query(ctx, listStarredComponents,
 		arg.ActorID,
 		arg.Locale,
+		arg.HasWidth,
+		arg.HasDepth,
+		arg.HasHeight,
 		arg.CategoryFilter,
-		arg.SearchQuery,
-		arg.SizeDimensionCount,
-		arg.SizeA,
-		arg.SizeB,
-		arg.SizeC,
+		arg.NamePatterns,
+		arg.ComponentIDFilter,
+		arg.WidthStud,
+		arg.DepthStud,
+		arg.HeightPlate,
 		arg.PageOffset,
 		arg.PageSize,
 	)

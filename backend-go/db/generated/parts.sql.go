@@ -53,8 +53,6 @@ LEFT JOIN requested_translations translation
  AND translation.ldraw_part_num = part.ldraw_part_num
 WHERE part.part_library_version_id = $1
   AND geometry.geometry_status = 'ready'
-  AND position('sticker' IN lower(part.source_name)) = 0
-  AND position('decal' IN lower(part.source_name)) = 0
   AND lower(part.source_name || ' ' || COALESCE(translation.name, ''))
       LIKE ALL($2::text[])
   AND (
@@ -63,25 +61,31 @@ WHERE part.part_library_version_id = $1
   )
   AND (
       NOT ($4::boolean OR $5::boolean OR $6::boolean)
-      OR geometry.logical_size_derivation_status = 'derived_exact'
+      OR geometry.logical_size_derivation_status IN ('derived_exact', 'derived_approximate')
   )
   AND (
       (NOT $4::boolean AND NOT $5::boolean)
       OR (
           $4::boolean AND $5::boolean
           AND least(geometry.logical_width_stud, geometry.logical_depth_stud)
-              = least($7::double precision, $8::double precision)
+              BETWEEN least($7::double precision, $8::double precision) - 0.25
+                  AND least($7::double precision, $8::double precision) + 0.25
           AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud)
-              = greatest($7::double precision, $8::double precision)
+              BETWEEN greatest($7::double precision, $8::double precision) - 0.25
+                  AND greatest($7::double precision, $8::double precision) + 0.25
       )
       OR ($4::boolean AND NOT $5::boolean
-          AND $7::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+          AND (geometry.logical_width_stud BETWEEN $7::double precision - 0.25 AND $7::double precision + 0.25
+               OR geometry.logical_depth_stud BETWEEN $7::double precision - 0.25 AND $7::double precision + 0.25))
       OR (NOT $4::boolean AND $5::boolean
-          AND $8::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+          AND (geometry.logical_width_stud BETWEEN $8::double precision - 0.25 AND $8::double precision + 0.25
+               OR geometry.logical_depth_stud BETWEEN $8::double precision - 0.25 AND $8::double precision + 0.25))
   )
   AND (
       NOT $6::boolean
-      OR geometry.logical_height_plate = $9::double precision
+      OR geometry.logical_height_plate
+          BETWEEN $9::double precision - 0.625
+              AND $9::double precision + 0.625
   )
 `
 
@@ -99,7 +103,7 @@ type CountSearchablePartsParams struct {
 }
 
 // 零件搜索只读取指定的不可变 Part Library；描述 token、编号和每个尺寸条件全部按 AND 组合。
-// 宽/深是可旋转的平面轴，高度单位为 plate 且绝不参与换轴；任一尺寸条件都只接受 derived_exact。
+// 宽/深是可旋转的平面轴，高度单位为 plate 且绝不参与换轴；每个物理轴允许含边界的 ±2mm。
 func (q *Queries) CountSearchableParts(ctx context.Context, arg CountSearchablePartsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countSearchableParts,
 		arg.PartLibraryVersionID,
@@ -328,7 +332,7 @@ const getPartPreviewPrebuildLibrary = `-- name: GetPartPreviewPrebuildLibrary :o
 SELECT id, source_hash, created_by
 FROM component_repo.part_library_versions
 WHERE id = $1
-  AND status = 'active'
+  AND status IN ('active', 'building')
 `
 
 type GetPartPreviewPrebuildLibraryRow struct {
@@ -337,6 +341,7 @@ type GetPartPreviewPrebuildLibraryRow struct {
 	CreatedBy  pgtype.UUID
 }
 
+// 显式指定版本时允许预生成 building 快照；默认入口仍只选择 active，避免新库未完成前提前切换在线搜索。
 func (q *Queries) GetPartPreviewPrebuildLibrary(ctx context.Context, partLibraryVersionID pgtype.UUID) (GetPartPreviewPrebuildLibraryRow, error) {
 	row := q.db.QueryRow(ctx, getPartPreviewPrebuildLibrary, partLibraryVersionID)
 	var i GetPartPreviewPrebuildLibraryRow
@@ -432,6 +437,50 @@ func (q *Queries) GetPreviewActivePartLibraryVersion(ctx context.Context) (GetPr
 	return i, err
 }
 
+const isVerifiedPartPreviewArtifactReusable = `-- name: IsVerifiedPartPreviewArtifactReusable :one
+SELECT EXISTS (
+  SELECT 1
+  FROM component_repo.artifacts artifact
+  WHERE artifact.id = $1
+    AND artifact.owner_id IS NULL
+    AND artifact.artifact_type = 'part_preview_glb'
+    AND artifact.source_kind = 'derived'
+    AND artifact.storage_provider = $2
+    AND artifact.storage_bucket = $3
+    AND artifact.storage_key = $4
+    AND artifact.sha256 = $5
+    AND artifact.file_size = $6
+    AND artifact.mime_type = 'model/gltf-binary'
+    AND artifact.immutable
+    AND artifact.verification_status = 'verified'
+    AND artifact.deleted_at IS NULL
+) AS reusable
+`
+
+type IsVerifiedPartPreviewArtifactReusableParams struct {
+	ArtifactID      pgtype.UUID
+	StorageProvider string
+	StorageBucket   string
+	StorageKey      string
+	Sha256          string
+	FileSize        int64
+}
+
+// 全库换代时允许复用完全相同的内容寻址 Artifact；逐字段校验避免把同 UUID 下的漂移 metadata 绑定到新 Part。
+func (q *Queries) IsVerifiedPartPreviewArtifactReusable(ctx context.Context, arg IsVerifiedPartPreviewArtifactReusableParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isVerifiedPartPreviewArtifactReusable,
+		arg.ArtifactID,
+		arg.StorageProvider,
+		arg.StorageBucket,
+		arg.StorageKey,
+		arg.Sha256,
+		arg.FileSize,
+	)
+	var reusable bool
+	err := row.Scan(&reusable)
+	return reusable, err
+}
+
 const listPreparedPartPreviewPrebuildCandidates = `-- name: ListPreparedPartPreviewPrebuildCandidates :many
 SELECT preview.ldraw_part_num, preview.generation,
        geometry.source_relative_path, geometry.source_file_hash, geometry.face_count
@@ -442,14 +491,17 @@ JOIN component_repo.part_geometries geometry
 WHERE preview.part_library_version_id = $1
   AND preview.task_id = $2
   AND preview.generator_version = $3
-  AND preview.status <> 'ready'
+  AND preview.status = 'pending'
   AND geometry.geometry_status = 'ready'
+ORDER BY geometry.face_count, preview.ldraw_part_num
+LIMIT $4
 `
 
 type ListPreparedPartPreviewPrebuildCandidatesParams struct {
 	PartLibraryVersionID pgtype.UUID
 	TaskID               pgtype.UUID
 	GeneratorVersion     *string
+	BatchSize            int32
 }
 
 type ListPreparedPartPreviewPrebuildCandidatesRow struct {
@@ -460,9 +512,14 @@ type ListPreparedPartPreviewPrebuildCandidatesRow struct {
 	FaceCount          int32
 }
 
-// 只读取已经绑定本次 task/generator 的非 ready 行；任务重试不会重新解释 active library。
+// 每次只读取已经绑定本次 task/generator 的一小批 pending 行；远程 pooler 不承载 2.5 万行单次结果。
 func (q *Queries) ListPreparedPartPreviewPrebuildCandidates(ctx context.Context, arg ListPreparedPartPreviewPrebuildCandidatesParams) ([]ListPreparedPartPreviewPrebuildCandidatesRow, error) {
-	rows, err := q.db.Query(ctx, listPreparedPartPreviewPrebuildCandidates, arg.PartLibraryVersionID, arg.TaskID, arg.GeneratorVersion)
+	rows, err := q.db.Query(ctx, listPreparedPartPreviewPrebuildCandidates,
+		arg.PartLibraryVersionID,
+		arg.TaskID,
+		arg.GeneratorVersion,
+		arg.BatchSize,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -686,8 +743,6 @@ WITH requested_translations AS MATERIALIZED (
      AND translation.ldraw_part_num = part.ldraw_part_num
     WHERE part.part_library_version_id = $2
       AND geometry.geometry_status = 'ready'
-      AND position('sticker' IN lower(part.source_name)) = 0
-      AND position('decal' IN lower(part.source_name)) = 0
       AND lower(part.source_name || ' ' || COALESCE(translation.name, ''))
           LIKE ALL($5::text[])
       AND (
@@ -696,25 +751,31 @@ WITH requested_translations AS MATERIALIZED (
       )
       AND (
           NOT ($7::boolean OR $8::boolean OR $9::boolean)
-          OR geometry.logical_size_derivation_status = 'derived_exact'
+          OR geometry.logical_size_derivation_status IN ('derived_exact', 'derived_approximate')
       )
       AND (
           (NOT $7::boolean AND NOT $8::boolean)
           OR (
               $7::boolean AND $8::boolean
               AND least(geometry.logical_width_stud, geometry.logical_depth_stud)
-                  = least($10::double precision, $11::double precision)
+                  BETWEEN least($10::double precision, $11::double precision) - 0.25
+                      AND least($10::double precision, $11::double precision) + 0.25
               AND greatest(geometry.logical_width_stud, geometry.logical_depth_stud)
-                  = greatest($10::double precision, $11::double precision)
+                  BETWEEN greatest($10::double precision, $11::double precision) - 0.25
+                      AND greatest($10::double precision, $11::double precision) + 0.25
           )
           OR ($7::boolean AND NOT $8::boolean
-              AND $10::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+              AND (geometry.logical_width_stud BETWEEN $10::double precision - 0.25 AND $10::double precision + 0.25
+                   OR geometry.logical_depth_stud BETWEEN $10::double precision - 0.25 AND $10::double precision + 0.25))
           OR (NOT $7::boolean AND $8::boolean
-              AND $11::double precision IN (geometry.logical_width_stud, geometry.logical_depth_stud))
+              AND (geometry.logical_width_stud BETWEEN $11::double precision - 0.25 AND $11::double precision + 0.25
+                   OR geometry.logical_depth_stud BETWEEN $11::double precision - 0.25 AND $11::double precision + 0.25))
       )
       AND (
           NOT $9::boolean
-          OR geometry.logical_height_plate = $12::double precision
+          OR geometry.logical_height_plate
+              BETWEEN $12::double precision - 0.625
+                  AND $12::double precision + 0.625
       )
     ORDER BY relevance_rank, source_sort, part.ldraw_part_num
     LIMIT $14

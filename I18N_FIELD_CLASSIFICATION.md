@@ -1,6 +1,6 @@
 # 多语言领域字段分类
 
-> 更新日期：2026-09-12
+> 更新日期：2026-09-25
 > 适用里程碑：M4～M5
 
 | 实体 / 字段 | 分类 | 存储与展示规则 |
@@ -18,7 +18,7 @@
 | `LDrawPart.name/description` | 官方内容 | 英文源内容保存在主表，翻译保存在 `part_translations` |
 | Go Part Search 的 `parts.source_name` / `part_translations.name` / `ldraw_part_num` | 官方源内容 / reviewed official translation / 机器编号 | `description` 的全部 token 匹配 importer 从 LDraw 文件头固化的源描述与请求 locale 的 reviewed translation；结果优先返回 reviewed 名称，否则返回源描述及其 `contentLocale`。`partNumber` 独立匹配稳定编号且不翻译；`imageUrl` 当前为 `null`，预览 Artifact 定位符仍属于机器数据。 |
 | 零件查找 `query` 及解析结果 | 用户查询 / 机器数据 | 空格或逗号分隔的名称关键词按用户原文用于检索，不保存、不翻译；从 `axb` / `axbxc` 提取的尺寸、关键词命中数和排序分数是机器数据 |
-| 组件列表搜索 `query`、尺寸、状态与分页 | 用户查询 / 机器数据 / 官方内容选择 | 查询词按用户原文使用，不保存、不翻译；尺寸、状态、页码、容差和匹配分数保持机器数据。用户组件匹配原始名称；官方组件只匹配请求 locale 下实际选中的 reviewed 名称，缺失时按既有规则回退源内容 |
+| Component 列表结构化筛选 `name/componentId/widthStud/depthStud/heightPlate`、状态与分页 | 用户查询 / 机器数据 / 官方内容选择 | `name` token 按用户原文用于检索，不保存、不翻译；Component ID、三轴数值、旋转/容差、状态、页码和 cursor 保持机器数据。用户 Component 匹配原始名称；Group/Star 的 official Component 只匹配请求 locale 下实际选中的 reviewed 名称，公共 Feed 只含 user Component。字段标签和尺寸提示使用 typed semantic key。 |
 | 自动外部接口 ID、连接点类型、识别状态、识别规则版本 | 机器数据 | 由组件分析算法确定并随版本冻结，不提供用户创建或编辑，不翻译 |
 | 组件预览零件 `availability`、可计算数量、缺失几何/mesh 状态及 BOM `previewModel` | 机器数据 | API 返回稳定状态值；缺失零件不参与尺寸、连接识别或整体 GLB。BOM `previewModel` 的 artifact ID、短期 URL、content type 与 generator version 只是 ready Part Preview 的机器定位符，不翻译、不持久化最终缩略图文案；界面状态与占位标签通过语义键本地化 |
 | `ComponentVersion.preview_artifact_id/preview_status/preview_generator_version` 与 GLB 完整性字段 | 机器数据 | 使用版本 ID 直接定位派生 GLB；状态、生成器版本、artifact ID 和 SHA-256 不翻译。零件清单名称仍由独立 locale-aware API 选择 reviewed 翻译，不写入 GLB 定位数据 |

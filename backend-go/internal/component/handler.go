@@ -29,13 +29,11 @@ func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/components", h.listComponents)
 	group.GET("/component-public-feed", h.listPublicFeed)
 	group.GET("/component-stars", h.listStars)
-	group.POST("/components", h.createComponent)
 	group.GET("/components/:componentId", h.getComponent)
 	group.PATCH("/components/:componentId", h.updateComponent)
 	group.DELETE("/components/:componentId", h.deleteComponent)
 
 	group.GET("/components/:componentId/versions", h.listVersions)
-	group.POST("/components/:componentId/versions", h.createVersion)
 	group.GET("/component-versions/:versionId", h.getVersion)
 	group.GET("/component-versions/:versionId/diff", h.getVersionDiff)
 	group.PATCH("/component-versions/:versionId", h.updateVersion)
@@ -76,8 +74,13 @@ func (h *Handler) listPublicFeed(c *gin.Context) {
 		}
 		limit = parsed
 	}
+	filters, err := componentSearchFiltersFromQuery(c)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
 	result, err := h.service.ListPublicFeed(c.Request.Context(), actor.ID, PublicFeedRequest{
-		Limit: limit, Cursor: c.Query("cursor"), Query: c.Query("query"),
+		Limit: limit, Cursor: c.Query("cursor"), ComponentSearchFilters: filters,
 	})
 	h.writeJSON(c, http.StatusOK, result, err)
 }
@@ -90,12 +93,17 @@ func (h *Handler) listStars(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
+	filters, err := componentSearchFiltersFromQuery(c)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
 	result, err := h.service.ListStars(c.Request.Context(), actor.ID, StarListRequest{
-		PageRequest: page,
-		Locale:      c.Query("locale"),
-		Query:       c.Query("query"),
-		Category:    c.Query("category"),
-		Sort:        c.Query("sort"),
+		PageRequest:            page,
+		Locale:                 c.Query("locale"),
+		ComponentSearchFilters: filters,
+		Category:               c.Query("category"),
+		Sort:                   c.Query("sort"),
 	})
 	h.writeJSON(c, http.StatusOK, result, err)
 }
@@ -117,17 +125,6 @@ func (h *Handler) listComponents(c *gin.Context) {
 		Category: c.Query("category"), Status: c.Query("status"),
 	})
 	h.writeJSON(c, http.StatusOK, result, err)
-}
-
-func (h *Handler) createComponent(c *gin.Context) {
-	actor, _ := actorFromContext(c)
-	var input CreateComponentInput
-	if err := decodeJSON(c, &input); err != nil {
-		h.writeError(c, validationError("body"))
-		return
-	}
-	result, err := h.service.CreateComponent(c.Request.Context(), actor.ID, input)
-	h.writeJSON(c, http.StatusCreated, result, err)
 }
 
 func (h *Handler) getComponent(c *gin.Context) {
@@ -161,17 +158,6 @@ func (h *Handler) listVersions(c *gin.Context) {
 	}
 	result, err := h.service.ListVersions(c.Request.Context(), actor.ID, c.Param("componentId"), page)
 	h.writeJSON(c, http.StatusOK, result, err)
-}
-
-func (h *Handler) createVersion(c *gin.Context) {
-	actor, _ := actorFromContext(c)
-	var input CreateVersionInput
-	if err := decodeJSON(c, &input); err != nil {
-		h.writeError(c, validationError("body"))
-		return
-	}
-	result, err := h.service.CreateVersion(c.Request.Context(), actor.ID, c.Param("componentId"), input)
-	h.writeJSON(c, http.StatusCreated, result, err)
 }
 
 func (h *Handler) getVersion(c *gin.Context) {
@@ -283,7 +269,7 @@ func (h *Handler) listGroupMembers(c *gin.Context) {
 	h.writeJSON(c, http.StatusOK, result, err)
 }
 
-// searchGroupComponents 接收可重复 query 参数，并把复合条件交给 Service 以 AND 语义执行。
+// searchGroupComponents 接收名称、机器 ID 与三轴尺寸的结构化条件，并统一按 AND 语义执行。
 func (h *Handler) searchGroupComponents(c *gin.Context) {
 	actor, _ := actorFromContext(c)
 	page, err := pageFromQuery(c)
@@ -291,8 +277,13 @@ func (h *Handler) searchGroupComponents(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
+	filters, err := componentSearchFiltersFromQuery(c)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
 	result, err := h.service.SearchGroupComponents(c.Request.Context(), actor.ID, c.Param("groupId"), ComponentGroupSearchRequest{
-		PageRequest: page, Locale: c.Query("locale"), Queries: c.QueryArray("query"), Statuses: c.QueryArray("status"),
+		PageRequest: page, Locale: c.Query("locale"), ComponentSearchFilters: filters, Statuses: c.QueryArray("status"),
 	})
 	h.writeJSON(c, http.StatusOK, result, err)
 }
@@ -400,6 +391,37 @@ func positiveIntQuery(raw string, fallback int) (int, error) {
 		return 0, errors.New("invalid positive integer")
 	}
 	return value, nil
+}
+
+// componentSearchFiltersFromQuery 只解析结构化机器值；展示名称按用户原文传给 Service 做规范化和长度校验。
+func componentSearchFiltersFromQuery(c *gin.Context) (ComponentSearchFilters, error) {
+	width, err := optionalFloatQuery(c.Query("widthStud"), "widthStud")
+	if err != nil {
+		return ComponentSearchFilters{}, err
+	}
+	depth, err := optionalFloatQuery(c.Query("depthStud"), "depthStud")
+	if err != nil {
+		return ComponentSearchFilters{}, err
+	}
+	height, err := optionalFloatQuery(c.Query("heightPlate"), "heightPlate")
+	if err != nil {
+		return ComponentSearchFilters{}, err
+	}
+	return ComponentSearchFilters{
+		Name: c.Query("name"), ComponentID: c.Query("componentId"),
+		WidthStud: width, DepthStud: depth, HeightPlate: height,
+	}, nil
+}
+
+func optionalFloatQuery(raw, field string) (*float64, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return nil, validationError(field)
+	}
+	return &value, nil
 }
 
 func actorFromContext(c *gin.Context) (auth.Actor, bool) {

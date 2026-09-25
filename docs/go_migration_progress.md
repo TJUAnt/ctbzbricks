@@ -2,7 +2,7 @@
 
 > 后续领域专项：[2D 像素化与拼接方案 Go 迁移](go_pixel_2d_migration.md)（P2D，独立记录；不计入 Component Repo G0～G8）。
 
-> 最后更新：2026-09-19（Part Library 描述与标称尺寸搜索）
+> 最后更新：2026-09-22（Part Library v4 激活与旧快照清理）
 > 状态依据：[go_component_migration_plan.md](./go_component_migration_plan.md)
 > 跟进指南：[go_migration_followup_guide.md](./go_migration_followup_guide.md)
 > 记录规则：本文只保留当前状态、已验证里程碑和未关闭门禁；过程细节由专项文档、测试和 Git 历史承载。
@@ -21,10 +21,9 @@
 | G7 关系、校验和预览 | Completed | relation、interface、可选 validation、BOM 与 GLB preview 均由 Go 执行 |
 | G8 前端切换与 Python 退出 | Completed | Component Repo public API/task consumer 已 Go-only；Python public router 已删除，双语言、双身份 Auth/Storage RLS、恢复/回滚和真实指标门禁通过 |
 
-当前仓库 schema head 为 **v25**（v19 属于独立 P2D 路线，v20 为 Watch Feed 索引，v21 补齐 official 发布事件
+当前仓库和已确认的 Supabase `wkwffflomyrgqpilsozx` / `postgres` schema head 均为 **v26**（v19 属于独立 P2D 路线，v20 为 Watch Feed 索引，v21 补齐 official 发布事件
 受信发布者，v22 为公共 Feed 事件索引，v23 为 Feed 图片终态投影和索引，v24 为 Component 目录/审核翻译共享投影与
-keyset/search 索引，v25 为 Part 精确标称尺寸搜索索引）；真实 Supabase 仍为 v24，尚未应用 v25 或执行 importer v4
-重导入。Component Preview v6 与 renderer v4 已在仓库实现 `ldraw-studio-pbr-v1`，本地 Blender 集成通过；应用发布、v6 Artifact 重建范围、v4 服务器运行、浏览器视觉与生产资源/查询计划验收仍待统一执行。Go API 已覆盖目录、公共广场 Feed、版本、分组、Star、Watch/Feed、Artifact、上传、Import、Candidate、
+keyset/search 索引，v25 为 Part 标称尺寸索引，v26 扩展为标称+bbox 尺寸搜索）；importer v5 快照已在真实库成为唯一 `active`，旧 v4 及更早快照均已删除。当前数据库约 377MB；24,954 Part 中 24,899 ready、3,067 标称尺寸、21,832 bbox。Component Preview v6 与 renderer v4 已在仓库实现 `ldraw-studio-pbr-v1`，本地 Blender 集成通过；应用发布、v6 Artifact 重建范围、v4 服务器运行、浏览器视觉与生产资源验收仍待统一执行。Go API 已覆盖目录、公共广场 Feed、版本、分组、Star、Watch/Feed、Artifact、上传、Import、Candidate、
 关系审核、Part Library、任务、BOM、Preview、Search 和 Version Diff。Component Repo 不再新增 Python task；
 `component.import.parse` 与 `component.relations.detect` 已由 Go Worker 执行。
 
@@ -58,7 +57,7 @@ schema head，也不代表浏览器、RLS、冷热缓存或生产 SLO 已验收�
 | Task | logical job、execution/attempt、依赖、租约、重试、取消、事件 | PostgreSQL 是权威状态，不使用进程内队列 |
 | Scene/Candidate | Studio/LDraw 解析、多 root expansion、hash/signature、relation 审核 | source 与 derived Artifact 分离 |
 | Preview | Component v6 PBR GLB、Part meshopt GLB、partial preview、Box、共享摄影棚静态缩略图 | 固定 148 色/九类材质 Profile；Storage 保存正文，数据库保存状态和引用；Part 内部多材质/TEXMAP 仍是明确缺口 |
-| Part Library | Studio manifest/import、LDraw geometry、connector/interface、reviewed official description、结构化 Search | active snapshot 冻结解析与关系语义；精确尺寸只使用 `derived_exact` |
+| Part Library | Studio manifest/import、LDraw geometry、connector/interface、reviewed official description、结构化 Search | active snapshot 冻结解析与关系语义；标准件用 `derived_exact` 标称尺寸，其他 ready Part 用 `derived_approximate` bbox，统一每轴 ±2mm |
 
 ## 4. 里程碑证据摘要
 
@@ -99,12 +98,16 @@ schema head，也不代表浏览器、RLS、冷热缓存或生产 SLO 已验收�
 | 2026-09-16 / G8 Star 偏移清理 | 关闭 STAR-CLEAN-03/06/07 与 STAR-CONSISTENCY-01/STAR-A11Y-01；STAR-CLEAN-04 保持条件延期 | List SQL 窗口计数 + REPEATABLE READ 只读快照，`relationshipTotal` 退出公共 API/UI；页内计数修复百万关系全表扫描；统一双语可访问按钮。100,000 Component / 1,000,000 Star 权威 SQL 计划、Go check/PostgreSQL 集成、前端 24 文件/104 项、i18n/build 通过；资源版本 `frontend-2026.09.16.1` |
 | 2026-09-19 / G8 Component 详情与导入体验 | 关闭 COMPONENT-CLEAN-11；连接分析退出详情读取，BOM 复用 ready Part Preview，Source 以“图纸源文件”下载，Import 显示上传/解析/Preview 三阶段，本人操作收敛为发布与更多菜单 | BOM 24,000 Part / 1,000 refs 四类计划均为键索引点查、无 Seq Scan/spill；210 Part Studio fixture 解析约从 4.91～5.03 ms/op 降至 2.34～2.37 ms/op；完整 Go check/PostgreSQL 门禁和前端 i18n/test/build 通过；schema 保持 v24，逐步说明书仍为 COMPONENT-CLEAN-12 |
 | 2026-09-19 / G8 Part Library Search / Goose v25 | `xxx.dat` 只作为机器编号；importer v4 固化规范化 LDraw 描述，并为标准 Brick/Plate/Tile 派生 exact 标称尺寸；API/UI 拆分描述、编号、宽/深/高 AND 筛选并选择 reviewed translation | v25 精确尺寸 partial expression index；24,426 Part 计划中尺寸首屏 0.528 ms、最深页 54.703 ms 且约 3.6 MB external merge；按产品决定不做 100,000 候选排序，登记 PERF-01；真实 Supabase 与 active snapshot 未更新 |
+| 2026-09-20 / G8 测试执行边界整理 | `internal/**` 只保留同包单元测试；跨 PostgreSQL/HTTP/Storage/Worker 的黑盒用例迁入 `tests/integration`，容量与执行计划门禁迁入 `tests/performance`；sqlc 生成目录不再放手写测试 | 11 个 Integration 文件和 8 个 Performance 文件均采用外部测试包及 `integration` build tag；`make check`、tag 全包编译、隔离 PostgreSQL v25 往返/全量集成/API-Worker 启动无 DDL 契约通过；API、schema 与 i18n 契约未改变 |
+| 2026-09-21 / G8 Part Library 分阶段部署 | 已确认真实 Supabase `wkwffflomyrgqpilsozx` / `postgres`，留存旧版本/Goose 状态，应用 v25；以 importer v4 导入 `building` 版本 `4cafdd06-3359-4259-b1c7-aa9ad6b59db3`，24,954 Part、24,899 ready 几何、3,592 exact、192,202 connector；`3001/3023/3070b` 描述与尺寸均已只读核对 | 旧 active v2 与 24,373 个 ready 预览未动。新版本预生成 durable task `2bcf71c3-e07c-4475-8078-13b4d2f32d36` 已启动，早期 3 个 `storage_put` 失败另记 PREVIEW-01；完成并满足 Artifact 门禁前不切 active，DATA-01 仍开放。Go `make check`、前端 i18n/check、106 测试、build 与 diff check 通过；真实 API、浏览器与完整新版本性能门禁待执行 |
+| 2026-09-22 / G8 Part Library 空间清理 | 预生成任务 succeeded，24,899 个 ready geometry 全部有当前生成器 ready/verified 预览；v4 `4cafdd06-3359-4259-b1c7-aa9ad6b59db3` 原子激活。用户批准开发库级联清理后，删除旧 v2/v1 两份快照及 23 Version、22 Component、24 Import、4 UploadSession；独立 1 Component/4 Import 保留 | 仅受控事务中临时停用 SceneSnapshot 删除保护触发器，提交前恢复；Part/connector 等外键级联。五张大表 `VACUUM FULL ANALYZE` 后数据库从 657,140,883 降到 383,716,499 bytes；24,954 Part、24,899 ready geometry/preview、192,202 connector 守恒，触发器已启用。恢复 CSV 只完整覆盖 23 张小表，SceneSnapshot 大正文及旧 Part 本体未备份；旧源需重导入。`backend-go make check`、前端 `i18n:check`/106 tests/build、`git diff --check` 通过。未删除 Artifact/Task/Storage，API/浏览器与生产计划门禁仍待执行。 |
+| 2026-09-24 / G8 Part Search bbox 语义与 importer v5 | Goose v26 将尺寸索引扩展到 exact/approximate；importer v5 以“可信标准件标称尺寸，否则 bbox”冻结分类，每物理轴 ±2mm，sticker/decal 可搜索。真实库以 v5 `a33262fd-c702-4bd5-84c6-8966761ca88d` 替换并级联删除 v4 | 24,954 Part、24,899 ready、3,067 exact、21,832 approximate、55 failed、192,202 connector；数据库 395,758,739 bytes（约 377MB）。真实 API 验证 Brick/Plate/sticker、zh-CN fallback 与代表详情 GLB；真实 PG17.6 计划中标称 2.549ms、bbox 1.403ms、最深页 156.197ms/5.152MB temp。task `592ac3da-7735-437c-8854-665e675559ef` succeeded，24,899 个 ready geometry 的当前 generator Preview 全部 ready/verified；SIZE-01 关闭，PERF-01 延期，DATA-01 仅剩认证浏览器验收。 |
 
 ## 5. 最新里程碑：Component 详情与导入体验收口
 
 日期：2026-09-19
 阶段：G8 / Component Repo 详情与导入
-状态：COMPONENT-CLEAN-11 complete in repository；仓库 schema head 与真实 Supabase 均为 v24，本轮没有迁移；
+状态：COMPONENT-CLEAN-11 complete in repository；该 2026-09-19 切片时仓库 schema head 与真实 Supabase 均为 v24，本轮没有迁移；
 应用发布、真实浏览器缩略图/进度视觉验收以及 Component Preview v6 / renderer v4 联合部署仍待执行
 
 ### 5.1 已实现
@@ -406,7 +409,7 @@ frontend npm run build                                     PASS
 
 前端列表、详情和公共 Feed 统一使用原生 `ComponentStarButton`，复用既有双语 Star/Unstar key；冲突的“关系
 保留并恢复显示”资源删除。`backend-go make check`、`make test-postgres`、Star 百万关系计划门禁、前端
-`i18n:check`、24 文件/104 项测试及 build 均通过。本切片没有新增迁移，真实 Supabase schema 仍为 v24；
+`i18n:check`、24 文件/104 项测试及 build 均通过。该切片没有新增迁移，彼时真实 Supabase schema 为 v24；
 公共 API 变化需随下次应用发布上线，不能把仓库完成写成已部署。
 
 ### 5.12 Part Library 描述与标称尺寸搜索
@@ -424,7 +427,51 @@ PostgreSQL 14.17、24,426 Part、`work_mem=4MB` warm-cache 计划：无筛选首
 `plate` 高匹配 34.469 ms、精确尺寸 0.528 ms、最深页 54.703 ms、`plate` exact count 33.562 ms；翻译集合只物化
 一次，尺寸使用 v25 索引。最深页仍有约 3.6 MB external merge，按产品决定暂不做 100,000 候选排序/keyset，
 以 `PART-LIBRARY-PERF-01` 延期。Go `make check`、完整隔离 PostgreSQL、前端 i18n/25 文件 106 项测试/build、
-`git diff --check` 与未登录浏览器筛选壳层通过。真实 Supabase 仍为 v24，真实 active snapshot 尚未执行 importer v4 重导入。
+`git diff --check` 与未登录浏览器筛选壳层通过。截至该切片，真实 Supabase 尚为 v24，active snapshot
+尚未执行 importer v4 重导入；2026-09-21 已推进为 v25 + building，见上方里程碑。
+
+### 5.13 Go 测试执行边界整理
+
+2026-09-20 将生产包内的跨边界测试一次性迁出：36 个同包单元测试文件继续与 `internal/**` 实现共置；11 个
+PostgreSQL/HTTP/Storage/Worker 集成文件统一放入 `backend-go/tests/integration/<domain>`；8 个容量、深页与
+`EXPLAIN (ANALYZE, BUFFERS, SETTINGS)` 文件统一放入 `backend-go/tests/performance/<domain>`。所有迁出测试采用
+`<domain>_test` 外部包，只通过公开入口使用生产代码；Part Search 计划门禁从 `db/generated` 迁出并读取实际 sqlc
+生成 SQL，生成目录恢复为纯生成代码。Pixel 2D 的功能集成与十万项目计划门禁也拆成两个独立执行层。
+
+任务状态机新增只面向进程内依赖注入的 `WithClock`，用于外部包稳定验证 lease/retry/outbox 时间边界，不改变
+PostgreSQL 权威状态、事务或公共 HTTP 契约。原先遗漏 tag 的 Feed renderer 集成文件补齐 `integration` build tag。
+`Makefile` 新增 `test-integration`、`test-performance`，隔离数据库脚本默认发现两个新根目录；未显式设置对应
+`RUN_*` 的性能用例仍跳过但会编译。目录规则与所有性能开关记录在 `backend-go/tests/README.md`，受影响的
+Component、Star、Watch、Model Plaza、Public Feed 和 Part Search 详细设计已同步测试索引。
+
+验证证据：`go test ./...`、`make check`、`go test -run '^$' -tags=integration ./tests/integration/... ./tests/performance/...`
+均通过；`make test-postgres` 完成 Goose `0 -> v25 -> v24 -> v25`、重复 up、11 个 Integration 包和 4 个
+Performance 包，并确认 API/Worker 启动前后 schema 完全一致。`internal` 与 `db/generated` 已无 Integration 或
+Performance 测试文件。本切片不修改 API、schema、Storage、用户文案或 locale-sensitive 数据，i18n 无影响。
+
+### 5.14 Part Search bbox 搜索与 importer v5
+
+2026-09-24 按产品确认把尺寸语义收敛为两类：描述和 bbox 均符合标准 Brick/Plate/Tile 的 Part 使用标称尺寸，
+其余 ready Part 一律使用 bbox；两类都按每物理轴 ±2mm 搜索，sticker/decal 不再排除。算法版本
+`ldraw-description-nominal-or-bbox-v2` 与 importer v5 共同参与确定性 Library ID。Goose v26 将查询专用表达式
+索引扩展到 exact/approximate；UI 与详情显示“标称尺寸/包围盒尺寸”，中英文 catalog 更新为
+`frontend-2026.09.23.1`。
+
+明确目标 `wkwffflomyrgqpilsozx / postgres` 应用 v26 后，受控脚本删除 v4 并导入唯一 active v5
+`a33262fd-c702-4bd5-84c6-8966761ca88d`：24,954 Part、24,899 ready、3,067 exact、21,832 approximate、
+55 failed、192,202 connector，数据库约 377MB。预生成 Worker 的全量候选读取曾经跨远程 pooler 阻塞心跳，
+已改为 500 行准备/领取批次并用 2 个连接隔离业务与心跳；durable task 可在进程退出后从 pending 断点继续。
+全库换代若计算出的内容哈希已有完整定位一致的 verified Artifact，会直接重绑而不重复 Storage PUT；集成测试确认
+复用时 PUT 计数不增加，而单项对象丢失修复仍保留 PUT。最终 task `592ac3da-7735-437c-8854-665e675559ef`
+succeeded；24,899 个 ready geometry 全部具有当前 `part-preview-ldraw-meshopt-glb-v2` ready/verified Preview，
+缺失、无效与失败计数均为 0；数据库为 395,758,739 bytes（约 377MB）。
+
+真实 Go API 使用短期本地测试 JWT 验证 `3001` 标称 Brick、zh-CN Plate fallback 和 `003238j` sticker bbox；
+真实 PostgreSQL 17.6 warm-cache 计划为：无筛选 116.034ms、编号 27.423ms、`plate` 51.109ms、zh-CN+尺寸
+2.023ms、标称尺寸 2.549ms、bbox 1.403ms、最深页 156.197ms、count 45.604ms。尺寸使用 v26 索引；首屏与
+最深页在 `work_mem=2184kB` 下分别出现约 3.6MB/5.152MB temp，按产品决定继续登记 PERF-01，不冒充已优化。
+`PART-LIBRARY-SIZE-01` 已以真实重导入审计和代表 fixture 关闭；全量 v5 Preview 门禁已通过，认证浏览器结果/详情
+仍归 DATA-01。
 
 ## 6. 未关闭门禁
 
@@ -474,20 +521,28 @@ PostgreSQL 14.17、24,426 Part、`work_mem=4MB` warm-cache 计划：无筛选首
 
 ### 6.4 Part Library 路线跟踪
 
-- [ ] `PART-LIBRARY-DATA-01`：确认精确数据库目标后应用 Goose v25，并用保留脚本触发 importer v4 重导入；
-  以 `3001.dat`、`3023.dat` 和 tile 样例核对描述、exact 标称尺寸和组合搜索，真实环境证据前不标记部署完成。
-- [ ] `PART-LIBRARY-SIZE-01`：S4 继续覆盖 modified/slope/round/minifig/sticker 等 exact/approximate/not-applicable
-  分类，并冻结算法版本和代表 fixture。
-- [ ] `PART-LIBRARY-PERF-01`（Deferred）：当前 24,426 条最深页约 54.703 ms、3.6 MB external merge；产品决定
+- [ ] `PART-LIBRARY-DATA-01`：v26/importer v5 已在真实库成为唯一 active，真实 API 的标称/bbox/sticker/zh-CN
+  fallback、代表详情 GLB 与查询计划已验收；24,899 个 ready geometry 的当前 generator Preview 全部 ready/verified。
+  关闭条件只剩认证浏览器中的代表结果卡片、缩略图和交互式 3D 详情；当前浏览器未登录，不能把壳层验收替代结果验收。
+- [x] `PART-LIBRARY-SIZE-01`：分类冻结为可信标准 Brick/Plate/Tile 标称尺寸、其他 ready Part bbox；
+  `ldraw-description-nominal-or-bbox-v2`、代表 fixture 与 ±2mm 边界测试通过，真实 v5 审计为 3,067/21,832/55。
+- [ ] `PART-LIBRARY-PERF-01`（Deferred）：真实 24,899 候选首屏约 116.034ms/3.6MB temp，最深页约
+  156.197ms/5.152MB temp；产品决定
   暂不执行 100,000 候选排序优化。单版本接近 100,000、生产 temp/延迟异常或页码交互获准改变时重开。
 - [ ] `PART-LIBRARY-SEARCH-01`：描述/编号包含匹配当前采用单 snapshot 有界扫描；容量或指标触发时再选择并验证
   FTS/trigram/权威规范化投影，不能添加无计划证据的普通 B-tree。
 - [ ] `PART-LIBRARY-I18N-01`：建立 active snapshot 按 locale 的 reviewed translation 覆盖率、审核责任和发布门禁。
+- [x] `PART-LIBRARY-PREVIEW-01`：该项记录 v4 初期 3 个 `storage_put` 失败并已收敛；v5 全量预览没有复用 v4
+  完成状态，已由 task `592ac3da-7735-437c-8854-665e675559ef` 和 24,899/24,899 ready/verified 审计独立通过。
+- [ ] `PART-LIBRARY-STORAGE-01`（后续独立清理）：旧 Part 预览解绑后仍有 5,619 条未被当前 Part 预览引用的
+  `part_preview_glb` Artifact 元数据，合计声明文件大小 101,511,940 bytes，其中 2 条仍被 Task 结果引用。
+  本轮不直接 SQL 删除 `storage.objects`，不把数据库配额已降到阈值以下误写成 Storage 对象已回收。关闭条件：
+  排除一切现存 Artifact/Task 引用后，通过 Storage API 分批删除精确孤儿对象并复核 bucket 与元数据一致性。
 
 ## 7. 下一步顺序
 
-1. 确认真实数据库目标，先做恢复点与只读 importer/version 预检，再应用 Goose v25 和 importer v4 重导入；核对代表
-   Part 描述/尺寸/API，并完成 `/part-search` 双语言浏览器验收。
+1. 在已登录浏览器验证代表结果卡片、缩略图和交互式详情后关闭 `PART-LIBRARY-DATA-01`；24,899 个 ready geometry
+   的当前 generator ready/verified Artifact 门禁已通过。旧孤儿 Storage 对象按 `PART-LIBRARY-STORAGE-01` 另行清理。
 2. 发布当前 Go API/前端并在联合验收开始前再次确认没有旧 renderer version 的 queued/running task；构建并启动固定标签的三个镜像，受控生成 v6 Preview 并发布一条新版本，确认 GLB/图片 metadata 分别为 `ldraw-studio-pbr-v1` 与 `blender_cycles_4_1`，完成 Watch、目录 cursor、真实浏览器、渲染资源和生产 PostgreSQL 计划/延迟验收。
 3. 持续采集 active Watch/actor、Feed 窗口内发布量、Rewatch 频率、closed 总量、表/索引大小与
    autovacuum/bloat；接近当前包络 70% 或包络提高时重新执行计划门禁。本地时间不得作为生产 SLO。

@@ -1,10 +1,14 @@
-package feedrender
+//go:build integration
+
+package feedrender_test
 
 import (
 	"context"
 	"os"
 	"testing"
 	"time"
+
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/feedrender"
 )
 
 func TestImageRendererWithBlender(t *testing.T) {

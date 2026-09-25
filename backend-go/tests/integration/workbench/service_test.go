@@ -1,6 +1,6 @@
 //go:build integration
 
-package workbench
+package workbench_test
 
 import (
 	"bytes"
@@ -23,9 +23,16 @@ import (
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/workbench"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type identityPartGLBOptimizer struct{}
+
+func (identityPartGLBOptimizer) Optimize(_ context.Context, source []byte) ([]byte, error) {
+	return source, nil
+}
 
 func TestG7WorkbenchContract(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
@@ -183,6 +190,17 @@ func TestG7WorkbenchContract(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := pool.Exec(ctx, `UPDATE component_repo.parts
+		SET source_name = 'Sticker 2.2 x 3.2 irregular outline'
+		WHERE part_library_version_id = $1 AND ldraw_part_num = '3002.dat'`, testUUID(t, fixturePartLibraryID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE component_repo.part_geometries
+		SET logical_width_stud = 2.2, logical_depth_stud = 3.2, logical_height_plate = 3.5,
+		    logical_size_derivation_status = 'derived_approximate'
+		WHERE part_library_version_id = $1 AND ldraw_part_num = '3002.dat'`, testUUID(t, fixturePartLibraryID)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO component_repo.part_geometries (
 			part_library_version_id, ldraw_part_num, source_relative_path, source_file_hash,
@@ -208,6 +226,23 @@ func TestG7WorkbenchContract(t *testing.T) {
 		partSearch.Items[0].LDrawPartNum != "3001.dat" || partSearch.PartLibraryVersionID != fixturePartLibraryID ||
 		partSearch.Items[0].Name != "2×4 砖" || partSearch.Items[0].TranslationStatus != "reviewed" {
 		t.Fatalf("Part search = %+v error=%v", partSearch, err)
+	}
+	toleranceWidth, toleranceDepth, toleranceHeight := 3.45, 2.45, 4.125
+	bboxSearch, err := service.SearchParts(ctx, PartSearchRequest{
+		Description: "sticker irregular", PartNumber: "3002", WidthStud: &toleranceWidth, DepthStud: &toleranceDepth,
+		HeightPlate: &toleranceHeight, Locale: "en-US", Page: 1, PageSize: 20,
+	})
+	if err != nil || bboxSearch.Total != 1 || len(bboxSearch.Items) != 1 ||
+		bboxSearch.Items[0].LogicalSizeDerivationStatus != "derived_approximate" {
+		t.Fatalf("bbox tolerance search = %+v error=%v", bboxSearch, err)
+	}
+	toleranceWidth = 3.451
+	beyondTolerance, err := service.SearchParts(ctx, PartSearchRequest{
+		PartNumber: "3002", WidthStud: &toleranceWidth, DepthStud: &toleranceDepth,
+		HeightPlate: &toleranceHeight, Locale: "en-US", Page: 1, PageSize: 20,
+	})
+	if err != nil || beyondTolerance.Total != 0 || len(beyondTolerance.Items) != 0 {
+		t.Fatalf("bbox beyond-tolerance search = %+v error=%v", beyondTolerance, err)
 	}
 	failedGeometrySearch, err := service.SearchParts(ctx, PartSearchRequest{PartNumber: "3003", Page: 1, PageSize: 20})
 	if err != nil || failedGeometrySearch.Total != 0 || len(failedGeometrySearch.Items) != 0 {
@@ -384,6 +419,54 @@ func TestG7WorkbenchContract(t *testing.T) {
 	if err != nil || len(searchWithPreview.Items) != 1 || searchWithPreview.Items[0].PreviewModel == nil ||
 		searchWithPreview.Items[0].PreviewModel.Compression != "meshopt" || store.batchSigns() != batchSignsBefore+1 {
 		t.Fatalf("Part search preview projection = %+v batchSigns=%d error=%v", searchWithPreview, store.batchSigns(), err)
+	}
+	const reuseLibraryID = "77000000-0000-0000-0000-000000000021"
+	if _, err := pool.Exec(ctx, `INSERT INTO component_repo.part_library_versions (
+		id,source_name,source_hash,connector_count,status,created_by,preview_ready,relation_ready
+	) VALUES ($1,'reuse-fixture',repeat('a',64),0,'building',$2,false,false)`,
+		testUUID(t, reuseLibraryID), owner); err != nil {
+		t.Fatalf("seed reusable Part library: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO component_repo.parts (part_library_version_id,ldraw_part_num,source_name,content_locale)
+		SELECT $1,ldraw_part_num,source_name,content_locale
+		FROM component_repo.parts
+		WHERE part_library_version_id=$2 AND ldraw_part_num='3001.dat'`,
+		testUUID(t, reuseLibraryID), testUUID(t, fixturePartLibraryID)); err != nil {
+		t.Fatalf("seed reusable Part: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO component_repo.part_geometries (
+			part_library_version_id,ldraw_part_num,source_relative_path,source_file_hash,bbox_min,bbox_max,
+			logical_width_stud,logical_depth_stud,logical_height_plate,vertex_count,face_count,
+			geometry_status,geometry_error_code,geometry_error_params,logical_size_derivation_status
+		)
+		SELECT $1,ldraw_part_num,source_relative_path,source_file_hash,bbox_min,bbox_max,
+		       logical_width_stud,logical_depth_stud,logical_height_plate,vertex_count,face_count,
+		       geometry_status,geometry_error_code,geometry_error_params,logical_size_derivation_status
+		FROM component_repo.part_geometries
+		WHERE part_library_version_id=$2 AND ldraw_part_num='3001.dat'`,
+		testUUID(t, reuseLibraryID), testUUID(t, fixturePartLibraryID)); err != nil {
+		t.Fatalf("seed reusable Part geometry: %v", err)
+	}
+	putsBeforeReuse := store.putCount
+	reuseSchedule, err := SchedulePartPreviewPrebuild(ctx, pool, reuseLibraryID, false, true)
+	if err != nil || reuseSchedule.Matched != 1 || reuseSchedule.TaskStatus != task.StatusQueued {
+		t.Fatalf("schedule reusable Part preview = %+v error=%v", reuseSchedule, err)
+	}
+	claimedReuse, ok, err := queue.Claim(ctx, "g8-part-preview-reuse", []string{PartPreviewPrebuildType}, time.Minute)
+	if err != nil || !ok || uuidutil.String(claimedReuse.ID) != reuseSchedule.TaskID {
+		t.Fatalf("claim reusable Part preview = %+v found=%v error=%v", claimedReuse, ok, err)
+	}
+	reuseResult, err := NewPartPreviewPrebuildTaskHandler(partHandler).Handle(ctx, claimedReuse)
+	if err != nil {
+		t.Fatalf("prebuild reusable Part preview: %v", err)
+	}
+	if err := queue.Complete(ctx, "g8-part-preview-reuse", claimedReuse, reuseResult); err != nil {
+		t.Fatal(err)
+	}
+	reusedPart, err := service.GetPartPreview(ctx, reuseLibraryID, "3001.dat", "en-US")
+	if err != nil || reusedPart.Model == nil || readyPart.Model == nil ||
+		reusedPart.Model.ArtifactID != readyPart.Model.ArtifactID || store.putCount != putsBeforeReuse {
+		t.Fatalf("reused Part preview = %+v writes=%d/%d error=%v", reusedPart, store.putCount, putsBeforeReuse, err)
 	}
 }
 

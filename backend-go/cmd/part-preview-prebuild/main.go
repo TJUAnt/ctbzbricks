@@ -23,7 +23,7 @@ func main() {
 	var libraryID string
 	flag.BoolVar(&execute, "execute", false, "schedule the durable prebuild task")
 	flag.BoolVar(&force, "force", false, "create a new execution when the same logical task already succeeded")
-	flag.StringVar(&libraryID, "part-library-version-id", "", "active Part Library is used when omitted")
+	flag.StringVar(&libraryID, "part-library-version-id", "", "explicit active/building Part Library; active is used when omitted")
 	flag.Parse()
 
 	cfg, err := config.Load()

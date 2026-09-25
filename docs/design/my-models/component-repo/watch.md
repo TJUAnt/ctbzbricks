@@ -186,10 +186,10 @@ SHA-256 清单见[组件广场验证证据](../../model-plaza/model-plaza/README
 和深 cursor 的生产样本。
 
 - Go Service/cursor 单测：[service_test.go](../../../../backend-go/internal/componentwatch/service_test.go)
-- Component、发布、并发、分页和删除集成：[service_integration_test.go](../../../../backend-go/internal/component/service_integration_test.go)
-- HTTP 契约：[component_integration_test.go](../../../../backend-go/internal/httpapi/component_integration_test.go)
-- Schema/触发器：[schema_integration_test.go](../../../../backend-go/internal/database/schema_integration_test.go)
-- 百万关系计划：[watch_list_performance_integration_test.go](../../../../backend-go/internal/component/watch_list_performance_integration_test.go)
+- Component、发布、并发、分页和删除集成：[service_test.go](../../../../backend-go/tests/integration/component/service_test.go)
+- HTTP 契约：[component_test.go](../../../../backend-go/tests/integration/httpapi/component_test.go)
+- Schema/触发器：[schema_test.go](../../../../backend-go/tests/integration/database/schema_test.go)
+- 百万关系计划：[watch_list_test.go](../../../../backend-go/tests/performance/component/watch_list_test.go)
 - 前端状态、窗口与广场边界：[ComponentWatchListPage.test.ts](../../../../frontend/src/componentRepo/__tests__/ComponentWatchListPage.test.ts)、[ComponentPlazaBoundary.test.ts](../../../../frontend/src/componentRepo/__tests__/ComponentPlazaBoundary.test.ts)
 - API adapter：[componentRepoApi.test.ts](../../../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
 - 双语言页面：[localizedPages.test.tsx](../../../../frontend/src/i18n/__tests__/localizedPages.test.tsx)

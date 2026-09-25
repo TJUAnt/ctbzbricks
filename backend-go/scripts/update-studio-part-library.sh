@@ -16,8 +16,8 @@ STUDIO_MANIFEST_OUT_DIR="${STUDIO_MANIFEST_OUT_DIR:-${TMPDIR:-/tmp}/ctbzbricks-s
 SKIP_STUDIO_DRY_RUN="${SKIP_STUDIO_DRY_RUN:-0}"
 STUDIO_COLLIDER_STORAGE="${STUDIO_COLLIDER_STORAGE:-metadata-only}"
 FORCE_STUDIO_REIMPORT="${FORCE_STUDIO_REIMPORT:-0}"
-# importer v4 会固化规范化描述和可解释标称尺寸；仅比较 manifest hash 会错误跳过这次可重建投影升级。
-STUDIO_IMPORTER_VERSION="studio-part-library-importer-v4"
+# importer v5 会固化规范化描述，并按标准标称尺寸或非标准 bbox 建立统一尺寸搜索投影。
+STUDIO_IMPORTER_VERSION="studio-part-library-importer-v5"
 
 if [[ ! -d "${STUDIO_ROOT}" ]]; then
   echo "error: Studio root does not exist: ${STUDIO_ROOT}" >&2

@@ -28,9 +28,9 @@ fi
 export WORKER_ID="${WORKER_ID:-part-preview-prebuild}"
 export WORKER_TASK_TYPES="component.part_preview.prebuild"
 export WORKER_CONCURRENCY="1"
-# Supabase session pool 较小；专用 Worker 复用一个 session，几何/Storage 仍在 Handler 内 8 路并发。
+# 预生成长任务至少保留一条独立 heartbeat session；业务查询/结果写入共享另一条，避免批量准备时 lease 失联。
 export DATABASE_POOL_MIN_CONNS="1"
-export DATABASE_POOL_MAX_CONNS="${PART_PREVIEW_DATABASE_MAX_CONNS:-1}"
+export DATABASE_POOL_MAX_CONNS="${PART_PREVIEW_DATABASE_MAX_CONNS:-2}"
 # 远程 pooler 的批量准备可能超过 30 秒；较长 lease 防止健康连接排队时被误判为失联。
 export WORKER_LEASE_DURATION="${PART_PREVIEW_WORKER_LEASE_DURATION:-5m}"
 export WORKER_HEARTBEAT_INTERVAL="${PART_PREVIEW_WORKER_HEARTBEAT_INTERVAL:-30s}"

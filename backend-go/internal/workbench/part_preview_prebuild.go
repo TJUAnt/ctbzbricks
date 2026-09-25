@@ -62,30 +62,11 @@ func (h *PartPreviewPrebuildTaskHandler) Handle(ctx context.Context, claimed tas
 			break
 		}
 	}
-	candidates, err := h.part.q.ListPreparedPartPreviewPrebuildCandidates(ctx, db.ListPreparedPartPreviewPrebuildCandidatesParams{
-		TaskID: claimed.ID, PartLibraryVersionID: libraryID, GeneratorVersion: stringPointer(payload.GeneratorVersion),
-	})
-	if err != nil {
-		return task.Result{}, partPreviewPrebuildFailure("candidate_list", true)
-	}
-	// 先生成轻量 Part，既能快速验证端到端链路，也避免启动时所有并发槽同时被极端大网格占满。
-	sort.Slice(candidates, func(left, right int) bool {
-		if candidates[left].FaceCount == candidates[right].FaceCount {
-			return candidates[left].LdrawPartNum < candidates[right].LdrawPartNum
-		}
-		return candidates[left].FaceCount < candidates[right].FaceCount
-	})
-	// 受控并发减少 2.4 万个独立 gltfpack/Storage 往返的墙钟时间；每行 generation 条件仍隔离迟到写入。
-	workerCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	jobs := make(chan db.ListPreparedPartPreviewPrebuildCandidatesRow)
 	var ready atomic.Int64
 	var failed atomic.Int64
-	var firstError error
-	var errorOnce sync.Once
-	var workers sync.WaitGroup
 	const concurrency = 8
-	process := func(candidate db.ListPreparedPartPreviewPrebuildCandidatesRow) error {
+	const batchSize = 500
+	process := func(workerCtx context.Context, candidate db.ListPreparedPartPreviewPrebuildCandidatesRow) error {
 		partPayload := partPreviewPayload{
 			PartLibraryVersionID: payload.PartLibraryVersionID, LDrawPartNum: candidate.LdrawPartNum,
 			GeneratorVersion: payload.GeneratorVersion, Generation: candidate.Generation,
@@ -127,40 +108,67 @@ func (h *PartPreviewPrebuildTaskHandler) Handle(ctx context.Context, claimed tas
 		}
 		return nil
 	}
-	for index := 0; index < concurrency; index++ {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for candidate := range jobs {
-				if err := process(candidate); err != nil {
-					errorOnce.Do(func() {
-						firstError = err
-						cancel()
-					})
-					return
-				}
-			}
-		}()
-	}
-sendLoop:
-	for _, candidate := range candidates {
-		select {
-		case <-workerCtx.Done():
-			break sendLoop
-		case jobs <- candidate:
+	matched := 0
+	for {
+		candidates, listErr := h.part.q.ListPreparedPartPreviewPrebuildCandidates(ctx, db.ListPreparedPartPreviewPrebuildCandidatesParams{
+			TaskID: claimed.ID, PartLibraryVersionID: libraryID,
+			GeneratorVersion: stringPointer(payload.GeneratorVersion), BatchSize: batchSize,
+		})
+		if listErr != nil {
+			return task.Result{}, partPreviewPrebuildFailure("candidate_list", true)
 		}
-	}
-	close(jobs)
-	workers.Wait()
-	if firstError != nil {
-		return task.Result{}, firstError
-	}
-	if err := ctx.Err(); err != nil {
-		return task.Result{}, err
+		if len(candidates) == 0 {
+			break
+		}
+		// 每批仍先生成轻量 Part；固定 500 行避免远程 pooler 的大结果阻塞首条完成与 heartbeat。
+		sort.Slice(candidates, func(left, right int) bool {
+			if candidates[left].FaceCount == candidates[right].FaceCount {
+				return candidates[left].LdrawPartNum < candidates[right].LdrawPartNum
+			}
+			return candidates[left].FaceCount < candidates[right].FaceCount
+		})
+		workerCtx, cancel := context.WithCancel(ctx)
+		jobs := make(chan db.ListPreparedPartPreviewPrebuildCandidatesRow)
+		var firstError error
+		var errorOnce sync.Once
+		var workers sync.WaitGroup
+		for index := 0; index < concurrency; index++ {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				for candidate := range jobs {
+					if err := process(workerCtx, candidate); err != nil {
+						errorOnce.Do(func() {
+							firstError = err
+							cancel()
+						})
+						return
+					}
+				}
+			}()
+		}
+	sendLoop:
+		for _, candidate := range candidates {
+			select {
+			case <-workerCtx.Done():
+				break sendLoop
+			case jobs <- candidate:
+			}
+		}
+		close(jobs)
+		workers.Wait()
+		cancel()
+		if firstError != nil {
+			return task.Result{}, firstError
+		}
+		if err := ctx.Err(); err != nil {
+			return task.Result{}, err
+		}
+		matched += len(candidates)
 	}
 	return task.Result{Payload: mustJSON(map[string]any{
 		"partLibraryVersionId": payload.PartLibraryVersionID, "generatorVersion": payload.GeneratorVersion,
-		"matched": len(candidates), "ready": ready.Load(), "failed": failed.Load(),
+		"matched": matched, "ready": ready.Load(), "failed": failed.Load(),
 	})}, nil
 }
 
@@ -180,7 +188,8 @@ type PartPreviewPrebuildSchedule struct {
 	TaskStatus           string
 }
 
-// SchedulePartPreviewPrebuild 创建单个持久全库任务；dryRun 只读取规模，不修改任务或预览状态。
+// SchedulePartPreviewPrebuild 创建单个持久全库任务；显式版本可指向 building 快照以先备妥预览再激活。
+// 未指定版本仍只使用 active；dryRun 只读取规模，不修改任务或预览状态。
 func SchedulePartPreviewPrebuild(ctx context.Context, pool *pgxpool.Pool, partLibraryVersionID string, dryRun, force bool) (PartPreviewPrebuildSchedule, error) {
 	q := db.New(pool)
 	var library db.GetPartPreviewPrebuildLibraryRow

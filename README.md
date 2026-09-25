@@ -29,7 +29,7 @@ A data platform for LEGO bricks.
 | 我的模型 / 我的模型 | [Component 详细设计](./docs/design/my-models/component-repo/README.md) · [个人仓库功能需求](./docs/requirements/my-models/component-repo/README.md) | 个人仓库、目录、详情、版本、上传导入、发布、Preview GLB、BOM、Diff 与删除 | 详情已隐藏连接分析、BOM 展示 Part 缩略图、Source 可下载并显示三阶段 Import 进度；本人操作收敛为发布与更多菜单。COMPONENT-CLEAN-11 已关闭，逐步说明书仍为 CLEAN-12，视觉验收待执行 |
 | 我的模型 / 我的模型 / Star | [Star 详细设计](./docs/design/my-models/component-repo/star.md) | Star/Unstar、收藏列表、计数、尺寸筛选与删除联动 | 已实现；列表与精确总数已统一快照，内部清理计数退出公共契约，可访问按钮与已知清理项已收敛；OFFSET 按容量条件延期 |
 | 我的模型 / 我的模型 / Watch | [Watch 详细设计](./docs/design/my-models/component-repo/watch.md) | Watch/Unwatch、独立订阅 Component Repo 列表、动态 Feed、发布事件与删除联动 | 仓库实现和 WATCH-CLEAN-01～05 清理完成；个人 Feed 已复用公共大图事件卡片，生产数据库为 v24，应用发布与浏览器验收待执行 |
-| 我的模型 / 零件搜索 | [Part Library 详细设计](./docs/design/my-models/part-search/README.md) · [Part Search 功能需求](./docs/requirements/my-models/part-search/README.md) | Studio snapshot 导入、官方描述、标称尺寸派生、Part Search、预览与详情 | 仓库已完成描述/编号/尺寸独立筛选、reviewed translation 与 exact 尺寸边界；Goose v25、importer v4 真实重导入和浏览器验收待执行，深页排序按 PART-LIBRARY-PERF-01 延期 |
+| 我的模型 / 零件搜索 | [Part Library 详细设计](./docs/design/my-models/part-search/README.md) · [Part Search 功能需求](./docs/requirements/my-models/part-search/README.md) | Studio snapshot 导入、官方描述、标称/bbox 尺寸、Part Search、预览与详情 | 真实库 Goose v26 / importer v5 已成为唯一 active；24,899 ready Part 支持名称与每轴 ±2mm 尺寸组合搜索并全部具有 ready/verified Preview，SIZE-01 已关闭。认证浏览器结果/详情仍属 DATA-01，页码排序按 PERF-01 延期 |
 
 统一接口契约以 [docs/api.md](./docs/api.md) 为准，Go 迁移事实以
 [docs/go_migration_progress.md](./docs/go_migration_progress.md) 为准。专项产品与容量决策见

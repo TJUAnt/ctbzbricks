@@ -16,7 +16,6 @@ import {
   Search,
   Star,
   Upload,
-  X,
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import appConfig from '../app/appConfig';
@@ -36,6 +35,13 @@ import {
   type ComponentResponse,
   type ComponentVersionResponse,
 } from './componentRepoApi';
+import {
+  componentSearchFilters,
+  ComponentSearchForm,
+  emptyComponentSearchValues,
+  hasComponentSearchFilters,
+  type ComponentSearchValues,
+} from './ComponentSearchForm';
 import {
   ComponentGroupDialog,
   ComponentGroupMembershipDialog,
@@ -71,7 +77,6 @@ type ComponentRepoListState = {
 type LibraryView = 'library' | 'starred';
 
 const componentSearchPageSize = 20;
-const componentSearchDebounceMs = 300;
 
 /** ComponentRepoPage 只管理当前 actor 的个人仓库、分组、收藏和版本入口。 */
 export function ComponentRepoPage() {
@@ -88,8 +93,8 @@ export function ComponentRepoPage() {
     totalPages: 0,
     statusCounts: {},
   });
-  const [queries, setQueries] = React.useState<string[]>([]);
-  const [queryDraft, setQueryDraft] = React.useState('');
+  const [searchDraft, setSearchDraft] = React.useState<ComponentSearchValues>(emptyComponentSearchValues);
+  const [searchFilters, setSearchFilters] = React.useState(() => componentSearchFilters(emptyComponentSearchValues));
   const [filter, setFilter] = React.useState<LibraryFilter>('all');
   const [category, setCategory] = React.useState('');
   const [libraryView, setLibraryView] = React.useState<LibraryView>('library');
@@ -165,56 +170,53 @@ export function ComponentRepoPage() {
   React.useEffect(() => {
     if (libraryView === 'library' && !selectedGroupId) return undefined;
     const requestId = ++searchRequestIdRef.current;
-    const timeoutId = window.setTimeout(() => {
-      setState((current) => ({
-        ...current,
-        status: 'loading',
-        error: null,
-      }));
-      const request = libraryView === 'starred'
-        ? listComponentStars({
-          page,
-          pageSize: componentSearchPageSize,
-          query: queries.join(' '),
-          category,
-          sort: 'starred_at_desc',
-        }).then((result) => ({
-          ...result,
-          statusCounts: { active: result.total },
-        }))
-        : searchComponentGroupComponents(selectedGroupId!, {
-          queries,
-          statuses: statusesForFilter(filter),
-          page,
-          pageSize: componentSearchPageSize,
-          });
-      void request
-        .then((result) => {
-          if (requestId !== searchRequestIdRef.current) return;
-          setState({
-            status: 'ready',
-            components: result.items,
-            error: null,
-            total: result.total,
-            page: result.page,
-            totalPages: result.totalPages,
-            statusCounts: result.statusCounts,
-          });
-        })
-        .catch((error: Error) => {
-          if (requestId !== searchRequestIdRef.current) return;
-          setState((current) => ({
-            ...current,
-            status: 'error',
-            error: error instanceof Error ? error.message : appConfig.texts.loadFailed,
-          }));
+    setState((current) => ({
+      ...current,
+      status: 'loading',
+      error: null,
+    }));
+    const request = libraryView === 'starred'
+      ? listComponentStars({
+        page,
+        pageSize: componentSearchPageSize,
+        filters: searchFilters,
+        category,
+        sort: 'starred_at_desc',
+      }).then((result) => ({
+        ...result,
+        statusCounts: { active: result.total },
+      }))
+      : searchComponentGroupComponents(selectedGroupId!, {
+        filters: searchFilters,
+        statuses: statusesForFilter(filter),
+        page,
+        pageSize: componentSearchPageSize,
+      });
+    void request
+      .then((result) => {
+        if (requestId !== searchRequestIdRef.current) return;
+        setState({
+          status: 'ready',
+          components: result.items,
+          error: null,
+          total: result.total,
+          page: result.page,
+          totalPages: result.totalPages,
+          statusCounts: result.statusCounts,
         });
-    }, componentSearchDebounceMs);
+      })
+      .catch((error: Error) => {
+        if (requestId !== searchRequestIdRef.current) return;
+        setState((current) => ({
+          ...current,
+          status: 'error',
+          error: error instanceof Error ? error.message : appConfig.texts.loadFailed,
+        }));
+      });
     return () => {
-      window.clearTimeout(timeoutId);
       searchRequestIdRef.current += 1;
     };
-  }, [category, contentLocale, filter, libraryView, page, queries, refreshRevision, selectedGroupId]);
+  }, [category, contentLocale, filter, libraryView, page, refreshRevision, searchFilters, selectedGroupId]);
 
   const items = React.useMemo(
     () => buildLibraryItems(state.components),
@@ -400,53 +402,16 @@ export function ComponentRepoPage() {
             tree={groupTree}
           /> : null}
           <div className="component-library-main">
-        <div className="component-library-toolbar">
-          <form
-            className="component-library-search-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const nextQuery = queryDraft.trim();
-              if (!nextQuery) return;
-              // 个人分组支持多个 AND 条件；收藏 API 是单查询契约，因此新条件替换旧条件。
-              setQueries((current) => libraryView !== 'library'
-                ? [nextQuery]
-                : current.some(
-                  (condition) => condition.toLocaleLowerCase() === nextQuery.toLocaleLowerCase(),
-                ) ? current : [...current, nextQuery]);
-              setQueryDraft('');
-              setPage(1);
-            }}
-          >
-            <label className="component-library-search">
-              <Search aria-hidden="true" />
-              <input
-                aria-label={tr('componentRepo:searchComponents')}
-                onChange={(event) => setQueryDraft(event.target.value)}
-                placeholder={tr('componentRepo:searchComponentNameIdOrSize')}
-                value={queryDraft}
-              />
-            </label>
-            {queries.map((query) => (
-              <span
-                aria-label={tr('componentRepo:activeSearchCondition')}
-                className="component-library-search-condition"
-                key={query}
-              >
-                <span title={query}>{query}</span>
-                <button
-                  aria-label={tr('componentRepo:clearSearchCondition', { query })}
-                  onClick={() => {
-                    // 单个标签只撤销自身条件，其他已固化条件必须继续参与搜索。
-                    setQueries((current) => current.filter((condition) => condition !== query));
-                    setPage(1);
-                  }}
-                  type="button"
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </span>
-            ))}
-          </form>
+        <ComponentSearchForm
+          loading={state.status === 'loading'}
+          onChange={setSearchDraft}
+          onSubmit={() => {
+            setSearchFilters(componentSearchFilters(searchDraft));
+            setPage(1);
+          }}
+          values={searchDraft}
+        />
+        <div className="component-library-toolbar component-library-filter-toolbar">
           {libraryView === 'starred' ? <label className="component-library-category-filter">
             <span>{tr('componentRepo:categoryFilter')}</span>
             <input
@@ -559,14 +524,14 @@ export function ComponentRepoPage() {
           <div className="component-library-empty">
             <span><Search aria-hidden="true" /></span>
             <strong>{tr(libraryView === 'starred'
-              ? queries.length > 0 || category.trim() !== ''
+              ? hasComponentSearchFilters(searchFilters) || category.trim() !== ''
                 ? 'componentRepo:noMatchingComponents'
                 : 'componentRepo:noStarredComponents'
               : stats.total === 0
                 ? 'componentRepo:noComponentsUploaded'
                 : 'componentRepo:noMatchingComponents')}</strong>
             <p>{tr(libraryView === 'starred'
-              ? queries.length > 0 || category.trim() !== ''
+              ? hasComponentSearchFilters(searchFilters) || category.trim() !== ''
                 ? 'componentRepo:tryChangingStarFilters'
                 : 'componentRepo:browseComponentsToStar'
               : stats.total === 0

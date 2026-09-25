@@ -5293,6 +5293,88 @@ button {
   padding: 13px 22px;
 }
 
+.component-search-form {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid #edf0f4;
+  background: #fbfcfe;
+  padding: 14px 22px 12px;
+}
+
+.component-search-fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) minmax(160px, 1.4fr) repeat(3, minmax(100px, 1fr)) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.component-search-field {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 720;
+}
+
+.component-search-field input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  border: 1px solid #dce3ec;
+  border-radius: 9px;
+  outline: 0;
+  background: #fff;
+  color: #1c2d44;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.component-search-field input:focus {
+  border-color: #86b9ee;
+  box-shadow: 0 0 0 2px rgba(13, 112, 218, 0.11);
+}
+
+.component-search-fields > button {
+  display: inline-flex;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid #0865ca;
+  border-radius: 9px;
+  background: #0d70da;
+  color: #fff;
+  cursor: pointer;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.component-search-fields > button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.component-search-fields > button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.component-search-form > p {
+  margin: 0;
+  color: #7b899a;
+  font-size: 11px;
+}
+
+.component-library-filter-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .component-watch-toolbar {
   grid-template-columns: minmax(240px, 1fr) minmax(190px, auto) auto;
 }
@@ -6945,6 +7027,20 @@ button {
 
   .component-library-toolbar {
     grid-template-columns: minmax(0, 1fr) 38px;
+  }
+
+  .component-search-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .component-search-name,
+  .component-search-fields > button {
+    grid-column: 1 / -1;
+  }
+
+  .component-library-filter-toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
   }
 
   .component-library-search {

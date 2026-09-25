@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 
-import { tuneStudioMaterial, tuneStudioObject } from '../studioPreviewRendering';
+import { addStudioLights, tuneStudioMaterial, tuneStudioObject } from '../studioPreviewRendering';
 
 describe('Studio preview material runtime', () => {
   it('uses physical transmission once for supported GLB materials', () => {
@@ -30,6 +30,31 @@ describe('Studio preview material runtime', () => {
     tuneStudioMaterial(chrome);
 
     expect(rubber.envMapIntensity).toBeLessThan(chrome.envMapIntensity);
+  });
+
+  it('uses a bounded neutral plastic profile for Part thumbnails', () => {
+    const material = new THREE.MeshStandardMaterial({
+      color: '#ffffff',
+      metalness: 0.8,
+      roughness: 0.9,
+    });
+
+    tuneStudioMaterial(material, 'part-neutral');
+
+    expect(material.color.equals(new THREE.Color('#7c8ca3'))).toBe(true);
+    expect(material.metalness).toBe(0);
+    expect(material.roughness).toBeCloseTo(0.56);
+    expect(material.envMapIntensity).toBeCloseTo(0.62);
+  });
+
+  it('keeps the Part thumbnail light count fixed while reducing fill intensity', () => {
+    const scene = new THREE.Scene();
+
+    addStudioLights(scene, false, 'part-neutral');
+
+    const lights = scene.children.filter((child): child is THREE.Light => child instanceof THREE.Light);
+    expect(lights).toHaveLength(3);
+    expect(lights.map((light) => light.intensity)).toEqual([0.46, 1.55, 0.28]);
   });
 
   it('prepares every mesh material and geometry bound', () => {

@@ -34,7 +34,7 @@ type PartLibraryVersion struct {
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
-// PartSearchRequest 是零件搜索的结构化有界输入；各非空条件按 AND 组合，平面尺寸允许旋转，高度保持独立。
+// PartSearchRequest 是零件搜索的结构化有界输入；各非空条件按 AND 组合，平面尺寸允许旋转且每轴容差 ±2mm。
 type PartSearchRequest struct {
 	Description string   `json:"description"`
 	PartNumber  string   `json:"partNumber"`

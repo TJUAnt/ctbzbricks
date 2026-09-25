@@ -142,13 +142,11 @@ outbox_events
 
 ```text
 GET    /api/v1/components
-POST   /api/v1/components
 GET    /api/v1/components/:componentId
 PATCH  /api/v1/components/:componentId
 DELETE /api/v1/components/:componentId
 
 GET    /api/v1/components/:componentId/versions
-POST   /api/v1/components/:componentId/versions
 GET    /api/v1/component-versions/:versionId
 DELETE /api/v1/component-versions/:versionId
 POST   /api/v1/component-versions/:versionId/publish
@@ -157,6 +155,9 @@ POST   /api/v1/component-versions/:versionId/archive
 GET    /api/v1/component-versions/:versionId/parts
 GET    /api/v1/component-versions/:versionId/source
 ```
+
+G8 后契约清理：Component 与初始 Draft Version 只由新建 Import 的 Parse Worker 在一个事务中创建，不再提供拆分的
+公开 POST；更新 Import 也由同一来源链创建 Candidate/Draft。该结论取代早期草案中的两个创建入口。
 
 ### 5.2 分组、Star 与 Watch
 

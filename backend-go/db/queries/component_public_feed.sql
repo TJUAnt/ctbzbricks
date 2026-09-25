@@ -57,12 +57,45 @@ WITH feed_page AS MATERIALIZED (
 		 AND version.id=source_event.component_version_id
 		 AND version.component_id=component.id
 		 AND version.deleted_at IS NULL
+		LEFT JOIN LATERAL (
+			-- 只有尺寸筛选启用时才读取当前展示 Version；无尺寸条件时执行计划必须让该内层零循环。
+			SELECT projection.logical_width_stud,
+			       projection.logical_depth_stud,
+			       projection.logical_height_plate
+			FROM component_repo.component_catalog_projection projection
+			WHERE (sqlc.arg(has_width)::boolean OR sqlc.arg(has_depth)::boolean OR sqlc.arg(has_height)::boolean)
+			  AND projection.id = component.id
+		) filter_size ON true
 		WHERE source_event.id=entry.event_id
 		  AND source_event.event_type='component.version.published.v1'
+		  AND lower(component.name) LIKE ALL(sqlc.arg(name_patterns)::text[])
 		  AND (
-		      sqlc.arg(search_query)::text=''
-		      OR component.name ILIKE '%' || sqlc.arg(search_query) || '%'
-		      OR component.id::text=sqlc.arg(search_query)
+		      sqlc.arg(component_id_filter)::text = ''
+		      OR position(sqlc.arg(component_id_filter)::text IN lower(component.id::text)) > 0
+		  )
+		  AND (
+		      (NOT sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean)
+		      OR (
+		          sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+		          AND least(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+		              BETWEEN least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+		                  AND least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
+		          AND greatest(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+		              BETWEEN greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+		                  AND greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
+		      )
+		      OR (sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean
+		          AND (filter_size.logical_width_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25
+		               OR filter_size.logical_depth_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25))
+		      OR (NOT sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+		          AND (filter_size.logical_width_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25
+		               OR filter_size.logical_depth_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25))
+		  )
+		  AND (
+		      NOT sqlc.arg(has_height)::boolean
+		      OR filter_size.logical_height_plate
+		          BETWEEN sqlc.arg(height_plate)::double precision - 0.625
+		              AND sqlc.arg(height_plate)::double precision + 0.625
 		  )
 		OFFSET 0
 	) source ON true

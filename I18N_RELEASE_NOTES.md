@@ -2,6 +2,20 @@
 
 资源版本只追加、不复用。前端资源内容由 SHA-256 锁定，服务端导出版本写入每个正式产物。
 
+## frontend-2026.09.25.1
+
+- Component 个人分组、收藏与公共 Feed 统一为名称、Component ID、宽/深 stud 和高 plate 的结构化双语筛选表单。
+- 所有非空字段按 AND 组合；名称按空白或逗号分词，宽深允许旋转，每个物理轴沿用 Part Search 的 ±2 mm 误差。
+- 内容哈希：`879e389ede216b86229de9a13465352baab34e1c820bd6b16e0967e0dd1c10d3`
+- Component ID、尺寸数值、状态、分类、游标和 API 字段继续保持稳定机器值；用户名称与 reviewed official translation 选择规则不变。
+
+## frontend-2026.09.23.1
+
+- Part Search 明确为描述包含检索与物理尺寸筛选；标准 Brick/Plate/Tile 展示标称尺寸，其他 ready 零件展示包围盒尺寸。
+- 尺寸提示统一说明宽深可旋转且每个物理轴允许 ±2 mm，Part 详情同步展示尺寸来源。
+- 内容哈希：`fc6dd2d6e90b821dac934e441ba510f7657f1771ee8f1458fa44b9279ca66db7`
+- Part 编号、尺寸数值、派生状态、Library/Artifact ID 和 API 字段继续保持稳定机器值；Part 源描述及 reviewed translation 选择规则不变。
+
 ## frontend-2026.09.19.2
 
 - Part Search 将描述、LDraw 编号、宽/深 stud 和高 plate 拆为独立双语筛选项，并补充精确标称尺寸与近似包围盒说明。

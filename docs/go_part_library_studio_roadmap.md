@@ -383,11 +383,12 @@ API/Worker + Storage 完成真实 GLB Artifact materialize。当前状态以本�
 - preview 不因 logical size 缺失而失败；
 - 搜索/推荐如果使用 logical size，必须显式过滤 status 或降低 approximate 权重。
 
-2026-09-19 已完成第一阶段可解释基线：importer v4 将 LDraw header 描述规范化，并只把描述直接符合
-`Brick W x D`、`Plate W x D`、`Tile W x D` 的标准件写为 `derived_exact`；Brick 高度固定为 3 plate，
-Plate/Tile 高度固定为 1 plate。其他 ready Part 继续保留 bbox 换算值并标记 `derived_approximate`，Part Search
-只允许前者命中独立宽/深/高精确筛选。该实现关闭了“近似 bbox 被当成标称尺寸”的语义偏移，但不表示 slope、
-modified、round、minifig、sticker 等分类规则已经完成；扩展覆盖继续作为 S4 未完成范围。
+2026-09-24 按产品确认完成 S4 收口：importer v5 将 LDraw header 描述规范化；描述符合
+`Brick/Plate/Tile W x D`、不含第三维，且 bbox 三个物理轴均在标称值 2mm 内时写入 `derived_exact`，其余 ready
+Part 一律保留 bbox 并写为 `derived_approximate`。Part Search 同时接受两种来源，平面轴容差 ±0.25 stud、垂直轴
+±0.625 plate，边界包含；sticker/decal 不再排除。规则版本 `ldraw-description-nominal-or-bbox-v2` 与 importer
+version 共同参与确定性 Library ID。真实 v5 重导入审计为 3,067 exact、21,832 approximate、55 failed，
+`3001/3023/3070b` 与 sticker fixture、恰好/超过 2mm 边界均有测试，因此不再为 slope/minifig 等类别建立枚举表。
 
 ### S5：connectivity 与 collider 接入
 
@@ -452,19 +453,20 @@ collider clearance/raycast 算法不属于本次 S5：未来应把压缩 collide
 
 ### S6：切换与清理
 
-目标：将 active Part Library 切到 Studio-based version，并保留旧版本审计。
+目标：将 active Part Library 切到 Studio-based version。原先保留旧版本审计的默认目标已被
+2026-09-22 用户对非生产库的显式清理授权覆盖；这不是未来生产数据的默认保留策略。
 
 交付：
 
 - active Part Library discovery 指向新版本；
 - 真实 Part preview smoke；
 - Component BOM 与 Part viewer 使用新版本；
-- 旧 legacy-based Part Library 标记为 archived/deprecated，而不是静默覆盖。
+- 常规切换保留旧版本；本次非生产库的两份旧快照及其引用链在另一个受控事务中物理清理。
 
 验收：
 
 - 前端 Part viewer 可以预览 Studio 新版本中的代表 Part；
-- BOM 中冻结的旧版本仍可解析；
+- 常规切换下 BOM 的冻结旧版本仍可解析；本次获批清理后旧 Version 页与相应 BOM 不再存在；
 - 迁移台账记录新旧版本数量、hash、外部编号覆盖率和已知缺口。
 
 ## 6. 开发者实现注意事项
@@ -489,12 +491,11 @@ collider clearance/raycast 算法不属于本次 S5：未来应把压缩 collide
 
 ## 7. 当前未解决问题
 
-- importer v4 和 Goose v25 尚未写入真实 active Part Library；执行前必须确认精确数据库目标，并在重导入后核对
-  `3001.dat`、`3023.dat`、tile 样例的描述、`derived_exact` 尺寸和搜索结果。
-- S4 当前只覆盖描述可直接解释的标准 Brick/Plate/Tile；modified、slope、round、hinge、minifig、sticker 等
-  仍为 approximate 或后续应转 not-applicable，不能进入精确尺寸筛选。
-- Part Search 当前按 24,426 条 active snapshot 保留页码。PostgreSQL 14.17、`work_mem=4MB` 的最深页本地计划
-  约 54.703 ms，并产生约 3.6 MB external merge；按产品决定暂不做 100,000 候选排序/keyset 优化，单版本接近
+- importer v5 和 Goose v26 已写入真实库，v5 成为唯一 active；真实 API 的标称、bbox、sticker 与 zh-CN fallback
+  组合搜索及真实查询计划已验收；24,899 个 ready geometry 均有当前 generator ready/verified Preview。仅认证浏览器
+  结果卡片、缩略图与交互式 3D 详情仍待收尾。
+- Part Search 当前按 24,899 个 ready 候选保留页码。真实 PostgreSQL 17.6、`work_mem=2184kB` 的首屏约
+  116.034ms/3.6MB external merge，最深页约 156.197ms/5.152MB external merge；按产品决定暂不做 100,000 候选排序/keyset 优化，单版本接近
   100,000、生产 temp file/延迟异常或产品批准改变交互时重新开启。
 - 后续 Studio snapshot 更新仍必须由保留脚本确认精确数据库目标；同一 active/ready manifest
   默认 no-op，强制重建需显式设置 `FORCE_STUDIO_REIMPORT=1`。

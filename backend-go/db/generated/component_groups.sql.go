@@ -96,8 +96,8 @@ const countComponentGroupStatuses = `-- name: CountComponentGroupStatuses :many
 WITH group_record AS MATERIALIZED (
     SELECT group_item.id, group_item.owner_id, group_item.group_type
     FROM component_repo.component_groups group_item
-    WHERE group_item.id = $5
-      AND group_item.owner_id = $3
+    WHERE group_item.id = $11
+      AND group_item.owner_id = $6
 ), candidate_component_ids AS MATERIALIZED (
     SELECT component.id AS component_id
     FROM group_record
@@ -115,14 +115,6 @@ SELECT c.status, count(*)::bigint AS component_count
 FROM candidate_component_ids
 JOIN component_repo.component_catalog_candidates c ON c.id = candidate_component_ids.component_id
 LEFT JOIN LATERAL (
-    SELECT c.current_logical_size_a::double precision AS size_a,
-           c.current_logical_size_b::double precision AS size_b,
-           c.current_logical_size_c::double precision AS size_c
-    WHERE c.current_logical_size_a IS NOT NULL
-      AND c.current_logical_size_b IS NOT NULL
-      AND c.current_logical_size_c IS NOT NULL
-) normalized_size ON true
-LEFT JOIN LATERAL (
     SELECT translation_record.id, translation_record.name
     FROM component_repo.component_reviewed_translations translation_record
     WHERE c.content_kind = 'official'
@@ -131,65 +123,65 @@ LEFT JOIN LATERAL (
       AND translation_record.locale = $2
     LIMIT 1
 ) translation ON true
+LEFT JOIN LATERAL (
+    -- 状态统计与列表复用同一展示尺寸和启用门控，确保总数语义不漂移。
+    SELECT projection.logical_width_stud,
+           projection.logical_depth_stud,
+           projection.logical_height_plate
+    FROM component_repo.component_catalog_projection projection
+    WHERE ($3::boolean OR $4::boolean OR $5::boolean)
+      AND projection.id = c.id
+) filter_size ON true
 WHERE (
-    (c.owner_id = $3 AND c.version_available)
+    (c.owner_id = $6 AND c.version_available)
     OR (c.status = 'active' AND c.public_version_available)
 )
-  AND NOT EXISTS (
-      SELECT 1
-      FROM unnest($1::text[]) AS requested_text(value)
-      WHERE NOT (
-          CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
-              ILIKE '%' || requested_text.value || '%'
-          OR c.id::text ILIKE '%' || requested_text.value || '%'
-      )
+  AND lower(CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END)
+      LIKE ALL($1::text[])
+  AND (
+      $7::text = ''
+      OR position($7::text IN lower(c.id::text)) > 0
   )
-  AND NOT EXISTS (
-      SELECT 1
-      FROM jsonb_to_recordset($4::jsonb)
-          AS requested_size(dimension_count integer, size_a double precision,
-                            size_b double precision, size_c double precision)
-      WHERE NOT COALESCE((
-          (
-              requested_size.dimension_count = 3
-              AND normalized_size.size_a > requested_size.size_a - 1
-              AND normalized_size.size_a < requested_size.size_a + 1
-              AND normalized_size.size_b > requested_size.size_b - 1
-              AND normalized_size.size_b < requested_size.size_b + 1
-              AND normalized_size.size_c > requested_size.size_c - 1
-              AND normalized_size.size_c < requested_size.size_c + 1
-          )
-          OR (
-              requested_size.dimension_count = 2
-              AND (
-                  (normalized_size.size_a > requested_size.size_a - 1
-                   AND normalized_size.size_a < requested_size.size_a + 1
-                   AND normalized_size.size_b > requested_size.size_b - 1
-                   AND normalized_size.size_b < requested_size.size_b + 1)
-                  OR
-                  (normalized_size.size_a > requested_size.size_a - 1
-                   AND normalized_size.size_a < requested_size.size_a + 1
-                   AND normalized_size.size_c > requested_size.size_b - 1
-                   AND normalized_size.size_c < requested_size.size_b + 1)
-                  OR
-                  (normalized_size.size_b > requested_size.size_a - 1
-                   AND normalized_size.size_b < requested_size.size_a + 1
-                   AND normalized_size.size_c > requested_size.size_b - 1
-                   AND normalized_size.size_c < requested_size.size_b + 1)
-              )
-          )
-      ), false)
+  AND (
+      (NOT $3::boolean AND NOT $4::boolean)
+      OR (
+          $3::boolean AND $4::boolean
+          AND least(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN least($8::double precision, $9::double precision) - 0.25
+                  AND least($8::double precision, $9::double precision) + 0.25
+          AND greatest(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN greatest($8::double precision, $9::double precision) - 0.25
+                  AND greatest($8::double precision, $9::double precision) + 0.25
+      )
+      OR ($3::boolean AND NOT $4::boolean
+          AND (filter_size.logical_width_stud BETWEEN $8::double precision - 0.25 AND $8::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN $8::double precision - 0.25 AND $8::double precision + 0.25))
+      OR (NOT $3::boolean AND $4::boolean
+          AND (filter_size.logical_width_stud BETWEEN $9::double precision - 0.25 AND $9::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN $9::double precision - 0.25 AND $9::double precision + 0.25))
+  )
+  AND (
+      NOT $5::boolean
+      OR filter_size.logical_height_plate
+          BETWEEN $10::double precision - 0.625
+              AND $10::double precision + 0.625
   )
 GROUP BY c.status
 ORDER BY c.status
 `
 
 type CountComponentGroupStatusesParams struct {
-	TextFilters []string
-	Locale      string
-	OwnerID     pgtype.UUID
-	SizeFilters []byte
-	GroupID     pgtype.UUID
+	NamePatterns      []string
+	Locale            string
+	HasWidth          bool
+	HasDepth          bool
+	HasHeight         bool
+	OwnerID           pgtype.UUID
+	ComponentIDFilter string
+	WidthStud         float64
+	DepthStud         float64
+	HeightPlate       float64
+	GroupID           pgtype.UUID
 }
 
 type CountComponentGroupStatusesRow struct {
@@ -197,13 +189,18 @@ type CountComponentGroupStatusesRow struct {
 	ComponentCount int64
 }
 
-// 状态统计必须复用与结果列表完全相同的尺寸归一化，否则分页总数和状态数量会发生漂移。
 func (q *Queries) CountComponentGroupStatuses(ctx context.Context, arg CountComponentGroupStatusesParams) ([]CountComponentGroupStatusesRow, error) {
 	rows, err := q.db.Query(ctx, countComponentGroupStatuses,
-		arg.TextFilters,
+		arg.NamePatterns,
 		arg.Locale,
+		arg.HasWidth,
+		arg.HasDepth,
+		arg.HasHeight,
 		arg.OwnerID,
-		arg.SizeFilters,
+		arg.ComponentIDFilter,
+		arg.WidthStud,
+		arg.DepthStud,
+		arg.HeightPlate,
 		arg.GroupID,
 	)
 	if err != nil {
@@ -780,14 +777,6 @@ SELECT c.id, c.owner_id, c.content_kind,
 FROM candidate_component_ids
 JOIN component_repo.component_catalog_candidates c ON c.id = candidate_component_ids.component_id
 LEFT JOIN LATERAL (
-    SELECT c.current_logical_size_a::double precision AS size_a,
-           c.current_logical_size_b::double precision AS size_b,
-           c.current_logical_size_c::double precision AS size_c
-    WHERE c.current_logical_size_a IS NOT NULL
-      AND c.current_logical_size_b IS NOT NULL
-      AND c.current_logical_size_c IS NOT NULL
-) normalized_size ON true
-LEFT JOIN LATERAL (
     SELECT translation_record.id, translation_record.locale, translation_record.name,
            translation_record.description, translation_record.tags
     FROM component_repo.component_reviewed_translations translation_record
@@ -796,60 +785,53 @@ LEFT JOIN LATERAL (
       AND translation_record.locale = $3
     LIMIT 1
 ) translation ON true
+LEFT JOIN LATERAL (
+    -- 只有尺寸筛选启用时才读取当前展示 Version；无尺寸条件时执行计划必须让该内层零循环。
+    SELECT projection.logical_width_stud,
+           projection.logical_depth_stud,
+           projection.logical_height_plate
+    FROM component_repo.component_catalog_projection projection
+    WHERE ($4::boolean OR $5::boolean OR $6::boolean)
+      AND projection.id = c.id
+) filter_size ON true
 WHERE (
     (c.owner_id = $2 AND c.version_available)
     OR (c.status = 'active' AND c.public_version_available)
 )
-  AND (cardinality($4::text[]) = 0 OR c.status = ANY($4::text[]))
-  -- 每个重复 query 都是独立条件；NOT EXISTS 反例使全部文字条件按 AND 组合。
-  AND NOT EXISTS (
-      SELECT 1
-      FROM unnest($5::text[]) AS requested_text(value)
-      WHERE NOT (
-          CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END
-              ILIKE '%' || requested_text.value || '%'
-          OR c.id::text ILIKE '%' || requested_text.value || '%'
-      )
+  AND (cardinality($7::text[]) = 0 OR c.status = ANY($7::text[]))
+  AND lower(CASE WHEN translation.id IS NULL THEN c.name ELSE translation.name END)
+      LIKE ALL($8::text[])
+  AND (
+      $9::text = ''
+      OR position($9::text IN lower(c.id::text)) > 0
   )
-  -- 二维/三维条件也逐个满足；COALESCE(false) 确保缺少 Box 时不会被 SQL NULL 误判为通过。
-  AND NOT EXISTS (
-      SELECT 1
-      FROM jsonb_to_recordset($6::jsonb)
-          AS requested_size(dimension_count integer, size_a double precision,
-                            size_b double precision, size_c double precision)
-      WHERE NOT COALESCE((
-          (
-              requested_size.dimension_count = 3
-              AND normalized_size.size_a > requested_size.size_a - 1
-              AND normalized_size.size_a < requested_size.size_a + 1
-              AND normalized_size.size_b > requested_size.size_b - 1
-              AND normalized_size.size_b < requested_size.size_b + 1
-              AND normalized_size.size_c > requested_size.size_c - 1
-              AND normalized_size.size_c < requested_size.size_c + 1
-          )
-          OR (
-              requested_size.dimension_count = 2
-              AND (
-                  (normalized_size.size_a > requested_size.size_a - 1
-                   AND normalized_size.size_a < requested_size.size_a + 1
-                   AND normalized_size.size_b > requested_size.size_b - 1
-                   AND normalized_size.size_b < requested_size.size_b + 1)
-                  OR
-                  (normalized_size.size_a > requested_size.size_a - 1
-                   AND normalized_size.size_a < requested_size.size_a + 1
-                   AND normalized_size.size_c > requested_size.size_b - 1
-                   AND normalized_size.size_c < requested_size.size_b + 1)
-                  OR
-                  (normalized_size.size_b > requested_size.size_a - 1
-                   AND normalized_size.size_b < requested_size.size_a + 1
-                   AND normalized_size.size_c > requested_size.size_b - 1
-                   AND normalized_size.size_c < requested_size.size_b + 1)
-              )
-          )
-      ), false)
+  -- 宽深允许平面旋转；单轴宽/深命中任一水平轴。误差窗与 Part Search 一致并包含边界。
+  AND (
+      (NOT $4::boolean AND NOT $5::boolean)
+      OR (
+          $4::boolean AND $5::boolean
+          AND least(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN least($10::double precision, $11::double precision) - 0.25
+                  AND least($10::double precision, $11::double precision) + 0.25
+          AND greatest(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN greatest($10::double precision, $11::double precision) - 0.25
+                  AND greatest($10::double precision, $11::double precision) + 0.25
+      )
+      OR ($4::boolean AND NOT $5::boolean
+          AND (filter_size.logical_width_stud BETWEEN $10::double precision - 0.25 AND $10::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN $10::double precision - 0.25 AND $10::double precision + 0.25))
+      OR (NOT $4::boolean AND $5::boolean
+          AND (filter_size.logical_width_stud BETWEEN $11::double precision - 0.25 AND $11::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN $11::double precision - 0.25 AND $11::double precision + 0.25))
+  )
+  AND (
+      NOT $6::boolean
+      OR filter_size.logical_height_plate
+          BETWEEN $12::double precision - 0.625
+              AND $12::double precision + 0.625
   )
 ORDER BY c.updated_at DESC, c.id
-LIMIT $8 OFFSET $7
+LIMIT $14 OFFSET $13
 ), page_star_counts AS (
     SELECT aggregate_star.component_id, count(*)::bigint AS star_count
     FROM component_repo.component_stars aggregate_star
@@ -872,14 +854,20 @@ ORDER BY page.updated_at DESC, page.id
 `
 
 type SearchComponentGroupComponentsParams struct {
-	GroupID       pgtype.UUID
-	OwnerID       pgtype.UUID
-	Locale        string
-	StatusFilters []string
-	TextFilters   []string
-	SizeFilters   []byte
-	PageOffset    int32
-	PageSize      int32
+	GroupID           pgtype.UUID
+	OwnerID           pgtype.UUID
+	Locale            string
+	HasWidth          bool
+	HasDepth          bool
+	HasHeight         bool
+	StatusFilters     []string
+	NamePatterns      []string
+	ComponentIDFilter string
+	WidthStud         float64
+	DepthStud         float64
+	HeightPlate       float64
+	PageOffset        int32
+	PageSize          int32
 }
 
 type SearchComponentGroupComponentsRow struct {
@@ -907,15 +895,20 @@ type SearchComponentGroupComponentsRow struct {
 	TotalCount            int64
 }
 
-// 尺寸搜索忽略 Box 轴方向：先把三个业务尺寸归一化为升序 a/b/c；任一尺寸缺失时不参与尺寸匹配。
 func (q *Queries) SearchComponentGroupComponents(ctx context.Context, arg SearchComponentGroupComponentsParams) ([]SearchComponentGroupComponentsRow, error) {
 	rows, err := q.db.Query(ctx, searchComponentGroupComponents,
 		arg.GroupID,
 		arg.OwnerID,
 		arg.Locale,
+		arg.HasWidth,
+		arg.HasDepth,
+		arg.HasHeight,
 		arg.StatusFilters,
-		arg.TextFilters,
-		arg.SizeFilters,
+		arg.NamePatterns,
+		arg.ComponentIDFilter,
+		arg.WidthStud,
+		arg.DepthStud,
+		arg.HeightPlate,
 		arg.PageOffset,
 		arg.PageSize,
 	)

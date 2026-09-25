@@ -1,6 +1,6 @@
 //go:build integration
 
-package component
+package component_test
 
 import (
 	"context"
@@ -32,25 +32,27 @@ func TestZZStarSizeQueryPlanEnvelope(t *testing.T) {
 	actor := mustUUID(t, "15000000-0000-0000-0000-000000000001")
 	queries := db.New(pool)
 	for _, scenario := range []struct {
-		name           string
-		locale         string
-		query          string
-		dimensionCount int32
-		sizeA          float64
-		sizeB          float64
-		sizeC          float64
+		name         string
+		locale       string
+		namePatterns []string
+		hasWidth     bool
+		hasDepth     bool
+		hasHeight    bool
+		widthStud    float64
+		depthStud    float64
+		heightPlate  float64
 	}{
-		{name: "unfiltered", locale: "en-US"},
-		{name: "selective-size", locale: "en-US", dimensionCount: 3, sizeA: 4, sizeB: 5, sizeC: 6},
-		{name: "high-match-size", locale: "en-US", dimensionCount: 3, sizeA: 1, sizeB: 2, sizeC: 3},
-		{name: "zero-match-size", locale: "en-US", dimensionCount: 3, sizeA: 20, sizeB: 21, sizeC: 22},
-		{name: "reviewed-translation-selective", locale: "zh-CN", query: "收藏翻译 1000"},
-		{name: "reviewed-translation-high", locale: "zh-CN", query: "收藏翻译"},
+		{name: "unfiltered", locale: "en-US", namePatterns: []string{}},
+		{name: "selective-size", locale: "en-US", namePatterns: []string{}, hasWidth: true, hasDepth: true, hasHeight: true, widthStud: 4, depthStud: 5, heightPlate: 6},
+		{name: "high-match-size", locale: "en-US", namePatterns: []string{}, hasWidth: true, hasDepth: true, hasHeight: true, widthStud: 1, depthStud: 2, heightPlate: 3},
+		{name: "zero-match-size", locale: "en-US", namePatterns: []string{}, hasWidth: true, hasDepth: true, hasHeight: true, widthStud: 20, depthStud: 21, heightPlate: 22},
+		{name: "reviewed-translation-selective", locale: "zh-CN", namePatterns: []string{"%收藏翻译%", "%1000%"}},
+		{name: "reviewed-translation-high", locale: "zh-CN", namePatterns: []string{"%收藏翻译%"}},
 	} {
 		params := db.ListStarredComponentsParams{
-			Locale: scenario.locale, ActorID: actor, SearchQuery: scenario.query,
-			SizeDimensionCount: scenario.dimensionCount, SizeA: scenario.sizeA, SizeB: scenario.sizeB, SizeC: scenario.sizeC,
-			PageSize: 20,
+			Locale: scenario.locale, ActorID: actor, NamePatterns: scenario.namePatterns,
+			HasWidth: scenario.hasWidth, HasDepth: scenario.hasDepth, HasHeight: scenario.hasHeight,
+			WidthStud: scenario.widthStud, DepthStud: scenario.depthStud, HeightPlate: scenario.heightPlate, PageSize: 20,
 		}
 		if _, err := queries.ListStarredComponents(ctx, params); err != nil {
 			t.Fatalf("warm %s Star page: %v", scenario.name, err)
@@ -65,8 +67,8 @@ func TestZZStarSizeQueryPlanEnvelope(t *testing.T) {
 		if strings.Contains(plan, "Seq Scan on components") {
 			t.Fatalf("%s plan scanned the complete Component relation instead of probing actor candidates:\n%s", scenario.name, plan)
 		}
-		if scenario.dimensionCount != 0 && !strings.Contains(plan, "current_logical_size_a") {
-			t.Fatalf("%s plan did not filter through the persisted projection:\n%s", scenario.name, plan)
+		if (scenario.hasWidth || scenario.hasDepth || scenario.hasHeight) && !strings.Contains(plan, "logical_width_stud") {
+			t.Fatalf("%s plan did not filter through the display projection:\n%s", scenario.name, plan)
 		}
 		if !strings.Contains(scenario.name, "zero-match") && !strings.Contains(plan, "WindowAgg") {
 			t.Fatalf("%s plan did not compute exact total before pagination:\n%s", scenario.name, plan)
@@ -81,7 +83,7 @@ func TestZZStarSizeQueryPlanEnvelope(t *testing.T) {
 		t.Logf("star-%s %s", scenario.name, explainTiming(plan))
 	}
 	emptyActor := mustUUID(t, "15000000-0000-0000-0000-000000000999")
-	emptyParams := db.ListStarredComponentsParams{Locale: "en-US", ActorID: emptyActor, PageSize: 20}
+	emptyParams := db.ListStarredComponentsParams{Locale: "en-US", ActorID: emptyActor, NamePatterns: []string{}, PageSize: 20}
 	if _, err := queries.ListStarredComponents(ctx, emptyParams); err != nil {
 		t.Fatalf("warm empty-actor Star page: %v", err)
 	}
@@ -102,8 +104,9 @@ func TestZZStarSizeQueryPlanEnvelope(t *testing.T) {
 		offset int32
 	}{{name: "first-page"}, {name: "deepest-page", offset: 980}} {
 		plan := explainStarPage(t, ctx, pool, db.ListStarredComponentsParams{
-			Locale: "en-US", ActorID: actor, SizeDimensionCount: 3,
-			SizeA: 1, SizeB: 2, SizeC: 3, PageOffset: page.offset, PageSize: 20,
+			Locale: "en-US", ActorID: actor, NamePatterns: []string{},
+			HasWidth: true, HasDepth: true, HasHeight: true,
+			WidthStud: 1, DepthStud: 2, HeightPlate: 3, PageOffset: page.offset, PageSize: 20,
 		})
 		if strings.Contains(plan, "Seq Scan on component_stars") {
 			t.Fatalf("%s plan did not use the actor relationship index:\n%s", page.name, plan)
@@ -195,12 +198,16 @@ func seedStarSizePlanEnvelope(t *testing.T, ctx context.Context, pool *pgxpool.P
 		);
 		INSERT INTO component_repo.components (
 			id, owner_id, content_kind, content_locale, name, status, created_by,
+			logical_width_stud, logical_depth_stud, logical_height_plate,
 			current_logical_size_a, current_logical_size_b, current_logical_size_c
 		)
 		SELECT md5('star-size-component-' || item)::uuid,
 		       CASE WHEN item % 10 = 0 THEN NULL ELSE '15000000-0000-0000-0000-000000000002'::uuid END,
 		       CASE WHEN item % 10 = 0 THEN 'official' ELSE 'user' END, 'en-US',
 		       'Star size ' || item, 'active', '15000000-0000-0000-0000-000000000002',
+		       CASE WHEN item % 100 = 0 THEN 4 ELSE 1 END,
+		       CASE WHEN item % 100 = 0 THEN 5 ELSE 2 END,
+		       CASE WHEN item % 100 = 0 THEN 6 ELSE 3 END,
 		       CASE WHEN item % 100 = 0 THEN 4 ELSE 1 END,
 		       CASE WHEN item % 100 = 0 THEN 5 ELSE 2 END,
 		       CASE WHEN item % 100 = 0 THEN 6 ELSE 3 END
@@ -258,7 +265,7 @@ func seedStarSizePlanEnvelope(t *testing.T, ctx context.Context, pool *pgxpool.P
 
 func explainStarPage(t *testing.T, ctx context.Context, pool *pgxpool.Pool, params db.ListStarredComponentsParams) string {
 	t.Helper()
-	data, err := os.ReadFile("../../db/queries/component_stars.sql")
+	data, err := os.ReadFile("../../../db/queries/component_stars.sql")
 	if err != nil {
 		t.Fatalf("read authoritative Star SQL: %v", err)
 	}
@@ -268,14 +275,16 @@ func explainStarPage(t *testing.T, ctx context.Context, pool *pgxpool.Pool, para
 	}
 	querySQL = strings.NewReplacer(
 		"sqlc.arg(actor_id)", "$1", "sqlc.arg(locale)", "$2",
-		"sqlc.arg(category_filter)", "$3", "sqlc.arg(search_query)", "$4",
-		"sqlc.arg(size_dimension_count)", "$5", "sqlc.arg(size_a)", "$6",
-		"sqlc.arg(size_b)", "$7", "sqlc.arg(size_c)", "$8",
-		"sqlc.arg(page_offset)", "$9", "sqlc.arg(page_size)", "$10",
+		"sqlc.arg(has_width)", "$3", "sqlc.arg(has_depth)", "$4", "sqlc.arg(has_height)", "$5",
+		"sqlc.arg(category_filter)", "$6", "sqlc.arg(name_patterns)", "$7",
+		"sqlc.arg(component_id_filter)", "$8", "sqlc.arg(width_stud)", "$9",
+		"sqlc.arg(depth_stud)", "$10", "sqlc.arg(height_plate)", "$11",
+		"sqlc.arg(page_offset)", "$12", "sqlc.arg(page_size)", "$13",
 	).Replace(querySQL)
 	return collectExplain(t, ctx, pool, "EXPLAIN (ANALYZE, BUFFERS, SETTINGS)\n"+querySQL,
-		params.ActorID, params.Locale, params.CategoryFilter, params.SearchQuery,
-		params.SizeDimensionCount, params.SizeA, params.SizeB, params.SizeC,
+		params.ActorID, params.Locale, params.HasWidth, params.HasDepth, params.HasHeight,
+		params.CategoryFilter, params.NamePatterns, params.ComponentIDFilter,
+		params.WidthStud, params.DepthStud, params.HeightPlate,
 		params.PageOffset, params.PageSize)
 }
 

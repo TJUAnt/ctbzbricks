@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertCircle, Bell, Boxes, CheckCircle2, LoaderCircle, RefreshCw, Search, X } from 'lucide-react';
+import { AlertCircle, Bell, Boxes, CheckCircle2, LoaderCircle, RefreshCw, Search } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import appConfig from '../app/appConfig';
@@ -13,6 +13,13 @@ import {
 import { ComponentPublicFeedCard } from './ComponentPublicFeedCard';
 import { routeFor } from './ComponentRepoPresenters';
 import { ComponentWatchFeedPanel } from './ComponentWatchFeedPanel';
+import {
+  componentSearchFilters,
+  ComponentSearchForm,
+  emptyComponentSearchValues,
+  hasComponentSearchFilters,
+  type ComponentSearchValues,
+} from './ComponentSearchForm';
 import {
   appendPublicFeedItems,
   projectPublicFeedItems,
@@ -38,8 +45,8 @@ export function ComponentPlazaPage() {
   const requestIDRef = React.useRef(0);
   const loadingMoreRef = React.useRef(false);
   const sentinelRef = React.useRef<HTMLDivElement | null>(null);
-  const [queryDraft, setQueryDraft] = React.useState('');
-  const [query, setQuery] = React.useState('');
+  const [searchDraft, setSearchDraft] = React.useState<ComponentSearchValues>(emptyComponentSearchValues);
+  const [searchFilters, setSearchFilters] = React.useState(() => componentSearchFilters(emptyComponentSearchValues));
   const [refreshRevision, setRefreshRevision] = React.useState(0);
   const [starMutations, setStarMutations] = React.useState<Set<string>>(new Set());
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -56,7 +63,7 @@ export function ComponentPlazaPage() {
     loadingMoreRef.current = false;
     setState((current) => ({ ...current, status: 'loading', items: [], nextCursor: null, loadingMore: false, error: null }));
     try {
-      const result = await listComponentPublicFeed({ limit: feedPageSize, query });
+      const result = await listComponentPublicFeed({ limit: feedPageSize, filters: searchFilters });
       if (requestID !== requestIDRef.current) return;
       setState({
         status: 'ready',
@@ -75,7 +82,7 @@ export function ComponentPlazaPage() {
         error: error instanceof Error ? error.message : appConfig.texts.loadFailed,
       });
     }
-  }, [query]);
+  }, [searchFilters]);
 
   React.useEffect(() => {
     if (tab !== 'public') return undefined;
@@ -93,7 +100,7 @@ export function ComponentPlazaPage() {
     loadingMoreRef.current = true;
     setState((current) => ({ ...current, loadingMore: true }));
     try {
-      const result = await listComponentPublicFeed({ limit: feedPageSize, cursor, query });
+      const result = await listComponentPublicFeed({ limit: feedPageSize, cursor, filters: searchFilters });
       if (requestID !== requestIDRef.current) return;
       setState((current) => ({
         ...current,
@@ -111,7 +118,7 @@ export function ComponentPlazaPage() {
     } finally {
       loadingMoreRef.current = false;
     }
-  }, [query, state.nextCursor, state.status, tab]);
+  }, [searchFilters, state.nextCursor, state.status, tab]);
 
   React.useEffect(() => {
     const target = sentinelRef.current;
@@ -194,39 +201,13 @@ export function ComponentPlazaPage() {
             </div>
           </header>
 
-          <div className="component-library-toolbar">
-            <form
-              className="component-library-search-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setQuery(queryDraft.trim());
-              }}
-            >
-              <label className="component-library-search">
-                <Search aria-hidden="true" />
-                <input
-                  aria-label={tr('componentRepo:searchComponents')}
-                  onChange={(event) => setQueryDraft(event.target.value)}
-                  placeholder={tr('componentRepo:searchComponentNameOrId')}
-                  value={queryDraft}
-                />
-              </label>
-              {query ? (
-                <span aria-label={tr('componentRepo:activeSearchCondition')} className="component-library-search-condition">
-                  <span title={query}>{query}</span>
-                  <button
-                    aria-label={tr('componentRepo:clearSearchCondition', { query })}
-                    onClick={() => {
-                      setQueryDraft('');
-                      setQuery('');
-                    }}
-                    type="button"
-                  >
-                    <X aria-hidden="true" />
-                  </button>
-                </span>
-              ) : null}
-            </form>
+          <ComponentSearchForm
+            loading={state.status === 'loading'}
+            onChange={setSearchDraft}
+            onSubmit={() => setSearchFilters(componentSearchFilters(searchDraft))}
+            values={searchDraft}
+          />
+          <div className="component-library-toolbar component-library-filter-toolbar">
             <button
               aria-label={tr('componentRepo:refreshComponentList')}
               className="component-library-refresh"
@@ -256,8 +237,8 @@ export function ComponentPlazaPage() {
           {state.status !== 'loading' && state.items.length === 0 ? (
             <div className="component-library-empty">
               <span><Search aria-hidden="true" /></span>
-              <strong>{tr(query ? 'componentRepo:noMatchingComponents' : 'componentRepo:noCommunityUpdates')}</strong>
-              <p>{tr(query ? 'componentRepo:tryChangingTheSearchTermOrStatusFilter' : 'componentRepo:noCommunityUpdatesDescription')}</p>
+              <strong>{tr(hasComponentSearchFilters(searchFilters) ? 'componentRepo:noMatchingComponents' : 'componentRepo:noCommunityUpdates')}</strong>
+              <p>{tr(hasComponentSearchFilters(searchFilters) ? 'componentRepo:tryChangingTheSearchTermOrStatusFilter' : 'componentRepo:noCommunityUpdatesDescription')}</p>
             </div>
           ) : null}
           {state.nextCursor ? (

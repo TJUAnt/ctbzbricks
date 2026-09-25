@@ -1,6 +1,6 @@
 //go:build integration
 
-package task
+package task_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,7 +35,7 @@ func TestDurableTaskLifecycle(t *testing.T) {
 	t.Run("idempotency is owner scoped and emits event plus outbox", func(t *testing.T) {
 		resetTaskFixtures(t, pool)
 		service := NewService(pool)
-		service.now = func() time.Time { return baseTime }
+		service.WithClock(func() time.Time { return baseTime })
 		input := taskFixture(actor, "same-request", 3, baseTime)
 		first, created, err := service.Enqueue(ctx, input)
 		if err != nil || !created {
@@ -60,7 +61,7 @@ func TestDurableTaskLifecycle(t *testing.T) {
 		resetTaskFixtures(t, pool)
 		current := time.Now().UTC().Add(time.Second)
 		service := NewService(pool)
-		service.now = func() time.Time { return current }
+		service.WithClock(func() time.Time { return current })
 		queued, _, err := service.Enqueue(ctx, taskFixture(actor, "recoverable", 2, current))
 		if err != nil {
 			t.Fatalf("enqueue recoverable task: %v", err)
@@ -130,7 +131,7 @@ func TestDurableTaskLifecycle(t *testing.T) {
 	t.Run("skip locked claims never duplicate a task", func(t *testing.T) {
 		resetTaskFixtures(t, pool)
 		service := NewService(pool)
-		service.now = func() time.Time { return baseTime }
+		service.WithClock(func() time.Time { return baseTime })
 		const count = 12
 		for index := 0; index < count; index++ {
 			if _, _, err := service.Enqueue(ctx, taskFixture(actor, fmt.Sprintf("claim-%d", index), 3, baseTime)); err != nil {
@@ -171,7 +172,7 @@ func TestDurableTaskLifecycle(t *testing.T) {
 		resetTaskFixtures(t, pool)
 		current := time.Now().UTC().Add(time.Second)
 		service := NewService(pool)
-		service.now = func() time.Time { return current }
+		service.WithClock(func() time.Time { return current })
 		queued, _, err := service.Enqueue(ctx, taskFixture(actor, "attempt-fence", 3, current))
 		if err != nil {
 			t.Fatalf("enqueue fenced task: %v", err)
@@ -216,7 +217,7 @@ func TestDurableTaskLifecycle(t *testing.T) {
 		resetTaskFixtures(t, pool)
 		current := time.Now().UTC().Add(time.Second)
 		service := NewService(pool)
-		service.now = func() time.Time { return current }
+		service.WithClock(func() time.Time { return current })
 		input := taskFixture(actor, "logical-computation", 1, current)
 
 		first, created, err := service.Enqueue(ctx, input)
@@ -258,7 +259,7 @@ func TestDurableTaskLifecycle(t *testing.T) {
 	t.Run("concurrent scheduling creates one logical job execution", func(t *testing.T) {
 		resetTaskFixtures(t, pool)
 		service := NewService(pool)
-		service.now = func() time.Time { return baseTime }
+		service.WithClock(func() time.Time { return baseTime })
 		input := taskFixture(actor, "concurrent-logical-computation", 3, baseTime)
 		const callers = 8
 		ids := make(chan string, callers)
@@ -296,7 +297,7 @@ func TestDurableTaskLifecycle(t *testing.T) {
 	t.Run("dependencies block claims and propagate terminal failure", func(t *testing.T) {
 		resetTaskFixtures(t, pool)
 		service := NewService(pool)
-		service.now = func() time.Time { return baseTime }
+		service.WithClock(func() time.Time { return baseTime })
 		prerequisite, _, err := service.Enqueue(ctx, taskFixture(actor, "dependency-artifact", 1, baseTime))
 		if err != nil {
 			t.Fatalf("enqueue prerequisite: %v", err)
@@ -334,7 +335,7 @@ func TestDurableTaskLifecycle(t *testing.T) {
 		resetTaskFixtures(t, pool)
 		current := time.Now().UTC().Add(time.Second)
 		service := NewService(pool)
-		service.now = func() time.Time { return current }
+		service.WithClock(func() time.Time { return current })
 		if _, _, err := service.Enqueue(ctx, taskFixture(actor, "outbox", 3, current)); err != nil {
 			t.Fatalf("enqueue outbox fixture: %v", err)
 		}

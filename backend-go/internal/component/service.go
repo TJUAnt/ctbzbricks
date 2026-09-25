@@ -5,12 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
-	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
@@ -32,17 +31,19 @@ const (
 	defaultPageSize                = 20
 	maxPageSize                    = 100
 	maxGroupDepth                  = 5
-	maxSearchConditions            = 8
 	watchEndReasonComponentDeleted = "component_deleted"
 )
 
-var componentSizeQueryPattern = regexp.MustCompile(`^\s*(\d+(?:\.\d+)?|\.\d+)\s*[xX×]\s*(\d+(?:\.\d+)?|\.\d+)(?:\s*[xX×]\s*(\d+(?:\.\d+)?|\.\d+))?\s*$`)
-
-type componentSizeFilter struct {
-	DimensionCount int32   `json:"dimension_count"`
-	A              float64 `json:"size_a"`
-	B              float64 `json:"size_b"`
-	C              float64 `json:"size_c"`
+type normalizedComponentSearch struct {
+	NamePatterns []string
+	ComponentID  string
+	HasWidth     bool
+	HasDepth     bool
+	HasHeight    bool
+	WidthStud    float64
+	DepthStud    float64
+	HeightPlate  float64
+	Signature    string
 }
 
 type Service struct {
@@ -54,15 +55,15 @@ type Service struct {
 }
 
 type publicFeedCursorPayload struct {
-	AvailableAt string `json:"availableAt"`
-	EventID     string `json:"eventId"`
-	Query       string `json:"query"`
+	AvailableAt     string `json:"availableAt"`
+	EventID         string `json:"eventId"`
+	FilterSignature string `json:"filterSignature"`
 }
 
 type decodedPublicFeedCursor struct {
-	AvailableAt pgtype.Timestamptz
-	EventID     pgtype.UUID
-	Query       string
+	AvailableAt     pgtype.Timestamptz
+	EventID         pgtype.UUID
+	FilterSignature string
 }
 
 func NewService(pool *pgxpool.Pool) *Service {
@@ -211,17 +212,20 @@ func (s *Service) ListPublicFeed(ctx context.Context, actor pgtype.UUID, request
 	if limit < 1 || limit > maxPageSize {
 		return PublicFeedPage{}, validationError("limit")
 	}
-	query := strings.TrimSpace(request.Query)
-	if len(query) > 200 {
-		return PublicFeedPage{}, validationError("query")
+	filters, err := normalizeComponentSearch(request.ComponentSearchFilters)
+	if err != nil {
+		return PublicFeedPage{}, err
 	}
 	cursor, err := decodePublicFeedCursor(request.Cursor)
-	if err != nil || (cursor.AvailableAt.Valid && cursor.Query != query) {
+	if err != nil || (cursor.AvailableAt.Valid && cursor.FilterSignature != filters.Signature) {
 		return PublicFeedPage{}, validationError("cursor")
 	}
 	rows, err := s.q.ListComponentPublicFeed(ctx, db.ListComponentPublicFeedParams{
-		ActorID: actor, SearchQuery: query, CursorAvailableAt: cursor.AvailableAt,
-		CursorEventID: cursor.EventID, PageSize: int32(limit + 1),
+		ActorID: actor, NamePatterns: filters.NamePatterns, ComponentIDFilter: filters.ComponentID,
+		HasWidth: filters.HasWidth, HasDepth: filters.HasDepth, HasHeight: filters.HasHeight,
+		WidthStud: filters.WidthStud, DepthStud: filters.DepthStud, HeightPlate: filters.HeightPlate,
+		CursorAvailableAt: cursor.AvailableAt,
+		CursorEventID:     cursor.EventID, PageSize: int32(limit + 1),
 	})
 	if err != nil {
 		return PublicFeedPage{}, err
@@ -253,7 +257,7 @@ func (s *Service) ListPublicFeed(ctx context.Context, actor pgtype.UUID, request
 	var next *string
 	if hasMore && len(rows) > 0 {
 		last := rows[len(rows)-1]
-		encoded, encodeErr := encodePublicFeedCursor(last.AvailableAt.Time, last.EventID, query)
+		encoded, encodeErr := encodePublicFeedCursor(last.AvailableAt.Time, last.EventID, filters.Signature)
 		if encodeErr != nil {
 			return PublicFeedPage{}, encodeErr
 		}
@@ -283,13 +287,15 @@ func decodePublicFeedCursor(raw string) (decodedPublicFeedCursor, error) {
 		return decodedPublicFeedCursor{}, err
 	}
 	return decodedPublicFeedCursor{
-		AvailableAt: pgtype.Timestamptz{Time: when.UTC(), Valid: true}, EventID: eventID, Query: payload.Query,
+		AvailableAt: pgtype.Timestamptz{Time: when.UTC(), Valid: true}, EventID: eventID,
+		FilterSignature: payload.FilterSignature,
 	}, nil
 }
 
-func encodePublicFeedCursor(availableAt time.Time, eventID pgtype.UUID, query string) (string, error) {
+func encodePublicFeedCursor(availableAt time.Time, eventID pgtype.UUID, filterSignature string) (string, error) {
 	payload, err := json.Marshal(publicFeedCursorPayload{
-		AvailableAt: availableAt.UTC().Format(time.RFC3339Nano), EventID: uuidutil.String(eventID), Query: query,
+		AvailableAt: availableAt.UTC().Format(time.RFC3339Nano), EventID: uuidutil.String(eventID),
+		FilterSignature: filterSignature,
 	})
 	if err != nil {
 		return "", err
@@ -300,23 +306,22 @@ func encodePublicFeedCursor(availableAt time.Time, eventID pgtype.UUID, query st
 // ListStars 返回 actor 当前仍公开可见的个人收藏；分页行与精确总数固定在同一个只读快照中。
 func (s *Service) ListStars(ctx context.Context, actor pgtype.UUID, request StarListRequest) (StarPage, error) {
 	request.PageRequest = normalizePage(request.PageRequest)
-	if len(request.Query) > 200 || len(request.Category) > 128 {
-		return StarPage{}, validationError("query")
+	filters, err := normalizeComponentSearch(request.ComponentSearchFilters)
+	if err != nil {
+		return StarPage{}, err
+	}
+	if len(request.Category) > 128 {
+		return StarPage{}, validationError("category")
 	}
 	if request.Sort != "" && request.Sort != "starred_at_desc" {
 		return StarPage{}, validationError("sort")
 	}
-	searchQuery := strings.TrimSpace(request.Query)
-	sizeFilter := componentSizeFilter{}
-	if parsed, ok := parseComponentSizeQuery(searchQuery); ok {
-		// 完整尺寸表达式只参与 Box 匹配，避免同时把“2x4x3”误当名称关键字。
-		sizeFilter = parsed
-		searchQuery = ""
-	}
 	params := db.ListStarredComponentsParams{
 		Locale: localeutil.Display(request.Locale), ActorID: actor,
-		CategoryFilter: strings.TrimSpace(request.Category), SearchQuery: searchQuery,
-		SizeDimensionCount: sizeFilter.DimensionCount, SizeA: sizeFilter.A, SizeB: sizeFilter.B, SizeC: sizeFilter.C,
+		CategoryFilter: strings.TrimSpace(request.Category), NamePatterns: filters.NamePatterns,
+		ComponentIDFilter: filters.ComponentID,
+		HasWidth:          filters.HasWidth, HasDepth: filters.HasDepth, HasHeight: filters.HasHeight,
+		WidthStud: filters.WidthStud, DepthStud: filters.DepthStud, HeightPlate: filters.HeightPlate,
 		PageOffset: int32((request.Page - 1) * request.PageSize), PageSize: int32(request.PageSize),
 	}
 	rows, total, err := s.listStarRowsAtSnapshot(ctx, params)
@@ -803,8 +808,8 @@ func (s *Service) ListComponentGroupIDs(ctx context.Context, actor pgtype.UUID, 
 	return ids, nil
 }
 
-// SearchGroupComponents 在同一 owner/group 可见性边界内执行复合查询；每个文字或尺寸条件都必须满足。
-// 条件在进入 SQL 前完成裁剪、去重和尺寸解析；尺寸条件编码为内部 JSON 数组，避免动态拼接 SQL。
+// SearchGroupComponents 在同一 owner/group 可见性边界内执行结构化查询；所有非空字段都必须满足。
+// 名称 token、机器 ID 与三轴尺寸在进入 SQL 前完成规范化，避免不同列表各自解释同一个搜索框。
 func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, groupID string, input ComponentGroupSearchRequest) (ComponentGroupSearchPage, error) {
 	id, err := resourceID(groupID, "groupId")
 	if err != nil {
@@ -814,9 +819,6 @@ func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, 
 		return ComponentGroupSearchPage{}, notFound("component_repo.group_not_found", "groupId", groupID)
 	} else if err != nil {
 		return ComponentGroupSearchPage{}, err
-	}
-	if len(input.Queries) > maxSearchConditions {
-		return ComponentGroupSearchPage{}, validationError("query")
 	}
 	if len(input.Statuses) > 16 {
 		return ComponentGroupSearchPage{}, validationError("statuses")
@@ -836,50 +838,30 @@ func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, 
 	}
 	page := normalizePage(input.PageRequest)
 	locale := localeutil.Display(input.Locale)
-	textFilters := make([]string, 0, len(input.Queries))
-	sizeFilters := make([]componentSizeFilter, 0, len(input.Queries))
-	seenQueries := make(map[string]struct{}, len(input.Queries))
-	for _, rawQuery := range input.Queries {
-		query := strings.TrimSpace(rawQuery)
-		if query == "" {
-			continue
-		}
-		if len(query) > 200 {
-			return ComponentGroupSearchPage{}, validationError("query")
-		}
-		normalizedQuery := strings.ToLower(query)
-		if _, exists := seenQueries[normalizedQuery]; exists {
-			continue
-		}
-		seenQueries[normalizedQuery] = struct{}{}
-		if sizeFilter, ok := parseComponentSizeQuery(query); ok {
-			sizeFilters = append(sizeFilters, sizeFilter)
-			continue
-		}
-		textFilters = append(textFilters, query)
-	}
-	sizeFiltersJSON, err := json.Marshal(sizeFilters)
+	filters, err := normalizeComponentSearch(input.ComponentSearchFilters)
 	if err != nil {
 		return ComponentGroupSearchPage{}, err
 	}
-	rows, err := s.q.SearchComponentGroupComponents(ctx, db.SearchComponentGroupComponentsParams{
-		Locale: locale, OwnerID: actor, GroupID: id, StatusFilters: statuses, TextFilters: textFilters,
-		SizeFilters: sizeFiltersJSON,
-		PageOffset:  int32((page.Page - 1) * page.PageSize), PageSize: int32(page.PageSize),
-	})
+	listParams := db.SearchComponentGroupComponentsParams{
+		Locale: locale, OwnerID: actor, GroupID: id, StatusFilters: statuses,
+		NamePatterns: filters.NamePatterns, ComponentIDFilter: filters.ComponentID,
+		HasWidth: filters.HasWidth, HasDepth: filters.HasDepth, HasHeight: filters.HasHeight,
+		WidthStud: filters.WidthStud, DepthStud: filters.DepthStud, HeightPlate: filters.HeightPlate,
+		PageOffset: int32((page.Page - 1) * page.PageSize), PageSize: int32(page.PageSize),
+	}
+	countParams := db.CountComponentGroupStatusesParams{
+		Locale: locale, GroupID: id, OwnerID: actor, NamePatterns: filters.NamePatterns,
+		ComponentIDFilter: filters.ComponentID,
+		HasWidth:          filters.HasWidth, HasDepth: filters.HasDepth, HasHeight: filters.HasHeight,
+		WidthStud: filters.WidthStud, DepthStud: filters.DepthStud, HeightPlate: filters.HeightPlate,
+	}
+	rows, counts, err := s.searchGroupRowsAtSnapshot(ctx, listParams, countParams)
 	if err != nil {
 		return ComponentGroupSearchPage{}, err
 	}
 	items := make([]Component, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, componentFromGroupSearch(row))
-	}
-	counts, err := s.q.CountComponentGroupStatuses(ctx, db.CountComponentGroupStatusesParams{
-		Locale: locale, GroupID: id, OwnerID: actor, TextFilters: textFilters,
-		SizeFilters: sizeFiltersJSON,
-	})
-	if err != nil {
-		return ComponentGroupSearchPage{}, err
 	}
 	statusCounts := make(map[string]int64, len(counts))
 	for _, count := range counts {
@@ -902,33 +884,94 @@ func (s *Service) SearchGroupComponents(ctx context.Context, actor pgtype.UUID, 
 	return ComponentGroupSearchPage{Items: items, Total: total, Page: page.Page, PageSize: page.PageSize, TotalPages: totalPages, StatusCounts: statusCounts}, nil
 }
 
-// parseComponentSizeQuery 只把完整的二维或三维表达式识别为尺寸搜索，避免普通名称中的数字被误判。
-// 尺寸先升序归一化：三值逐维匹配；两值由 SQL 枚举 ab/ac/bc，保持与 Box 轴方向无关。
-func parseComponentSizeQuery(query string) (componentSizeFilter, bool) {
-	matches := componentSizeQueryPattern.FindStringSubmatch(query)
-	if matches == nil {
-		return componentSizeFilter{}, false
+// searchGroupRowsAtSnapshot 让页面、精确总数和状态统计共享同一只读快照，避免两次 READ COMMITTED 读取漂移。
+func (s *Service) searchGroupRowsAtSnapshot(
+	ctx context.Context,
+	listParams db.SearchComponentGroupComponentsParams,
+	countParams db.CountComponentGroupStatusesParams,
+) ([]db.SearchComponentGroupComponentsRow, []db.CountComponentGroupStatusesRow, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, nil, err
 	}
-	values := make([]float64, 0, 3)
-	for _, raw := range matches[1:] {
-		if raw == "" {
+	defer tx.Rollback(ctx)
+	queries := db.New(tx)
+	rows, err := queries.SearchComponentGroupComponents(ctx, listParams)
+	if err != nil {
+		return nil, nil, err
+	}
+	counts, err := queries.CountComponentGroupStatuses(ctx, countParams)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+	return rows, counts, nil
+}
+
+// normalizeComponentSearch 复用 Part Search 的结构化筛选约束：名称 token 全部命中、ID 独立匹配、三轴均为可选条件。
+func normalizeComponentSearch(input ComponentSearchFilters) (normalizedComponentSearch, error) {
+	if len([]rune(input.Name)) > 200 {
+		return normalizedComponentSearch{}, validationError("name")
+	}
+	componentID := strings.ToLower(strings.TrimSpace(input.ComponentID))
+	if len([]rune(componentID)) > 128 || strings.ContainsAny(componentID, "/\\") || strings.Contains(componentID, "..") {
+		return normalizedComponentSearch{}, validationError("componentId")
+	}
+	for field, value := range map[string]*float64{
+		"widthStud": input.WidthStud, "depthStud": input.DepthStud, "heightPlate": input.HeightPlate,
+	} {
+		if value != nil && (*value <= 0 || *value > 1000 || math.IsNaN(*value) || math.IsInf(*value, 0)) {
+			return normalizedComponentSearch{}, validationError(field)
+		}
+	}
+	fragments := strings.FieldsFunc(input.Name, func(r rune) bool {
+		return r == ',' || r == '，' || unicode.IsSpace(r)
+	})
+	patterns := make([]string, 0, len(fragments))
+	seen := map[string]struct{}{}
+	escapeLike := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	for _, fragment := range fragments {
+		token := strings.ToLower(strings.TrimSpace(fragment))
+		if token == "" {
 			continue
 		}
-		value, err := strconv.ParseFloat(raw, 64)
-		if err != nil {
-			return componentSizeFilter{}, false
+		if _, exists := seen[token]; exists {
+			continue
 		}
-		values = append(values, value)
+		seen[token] = struct{}{}
+		patterns = append(patterns, "%"+escapeLike.Replace(token)+"%")
 	}
-	if len(values) != 2 && len(values) != 3 {
-		return componentSizeFilter{}, false
+	filters := normalizedComponentSearch{
+		NamePatterns: patterns, ComponentID: componentID,
+		HasWidth: input.WidthStud != nil, HasDepth: input.DepthStud != nil, HasHeight: input.HeightPlate != nil,
+		WidthStud: optionalComponentDimension(input.WidthStud), DepthStud: optionalComponentDimension(input.DepthStud),
+		HeightPlate: optionalComponentDimension(input.HeightPlate),
 	}
-	sort.Float64s(values)
-	filter := componentSizeFilter{DimensionCount: int32(len(values)), A: values[0], B: values[1]}
-	if len(values) == 3 {
-		filter.C = values[2]
+	signature, err := json.Marshal(struct {
+		NamePatterns []string `json:"namePatterns"`
+		ComponentID  string   `json:"componentId"`
+		HasWidth     bool     `json:"hasWidth"`
+		HasDepth     bool     `json:"hasDepth"`
+		HasHeight    bool     `json:"hasHeight"`
+		WidthStud    float64  `json:"widthStud"`
+		DepthStud    float64  `json:"depthStud"`
+		HeightPlate  float64  `json:"heightPlate"`
+	}{filters.NamePatterns, filters.ComponentID, filters.HasWidth, filters.HasDepth, filters.HasHeight,
+		filters.WidthStud, filters.DepthStud, filters.HeightPlate})
+	if err != nil {
+		return normalizedComponentSearch{}, err
 	}
-	return filter, true
+	filters.Signature = string(signature)
+	return filters, nil
+}
+
+func optionalComponentDimension(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func (s *Service) CreateGroup(ctx context.Context, actor pgtype.UUID, input CreateGroupInput) (Group, error) {

@@ -18,7 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const StudioImporterVersion = "studio-part-library-importer-v4"
+const StudioImporterVersion = "studio-part-library-importer-v5"
 
 const (
 	ColliderStorageMetadataOnly = "metadata-only"
@@ -38,29 +38,31 @@ type ImportOptions struct {
 }
 
 type ImportResult struct {
-	LibraryID             string
-	Status                string
-	ManifestSHA256        string
-	PartCount             int
-	GeometryReady         int
-	GeometryFailed        int
-	PreviewRows           int64
-	PreviewReady          bool
-	RelationReady         bool
-	ConnectorCount        int
-	ConnectorFiles        int
-	ConnectorHash         string
-	ConnectorFailed       int
-	ColliderCount         int
-	ColliderFiles         int
-	ColliderHash          string
-	ColliderFailed        int
-	ColliderStored        int
-	ColliderStorage       string
-	DryRun                bool
-	FailuresSample        []GeometryFailure
-	SidecarFailuresSample []SidecarFailure
-	Elapsed               time.Duration
+	LibraryID              string
+	Status                 string
+	ManifestSHA256         string
+	PartCount              int
+	GeometryReady          int
+	GeometryFailed         int
+	LogicalSizeNominal     int
+	LogicalSizeBoundingBox int
+	PreviewRows            int64
+	PreviewReady           bool
+	RelationReady          bool
+	ConnectorCount         int
+	ConnectorFiles         int
+	ConnectorHash          string
+	ConnectorFailed        int
+	ColliderCount          int
+	ColliderFiles          int
+	ColliderHash           string
+	ColliderFailed         int
+	ColliderStored         int
+	ColliderStorage        string
+	DryRun                 bool
+	FailuresSample         []GeometryFailure
+	SidecarFailuresSample  []SidecarFailure
+	Elapsed                time.Duration
 }
 
 type SidecarFailure struct {
@@ -135,7 +137,8 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 	}
 	libraryID := strings.TrimSpace(opts.LibraryID)
 	if libraryID == "" {
-		libraryID = deterministicUUIDString("studio-part-library:" + manifest.ManifestSHA256)
+		// 同一 Studio 源在派生算法升级后必须得到新的不可变版本，不能原地覆盖旧 snapshot。
+		libraryID = deterministicUUIDString("studio-part-library:" + manifest.ManifestSHA256 + ":" + StudioImporterVersion + ":" + LogicalSizeAlgorithmVersion)
 	}
 	createdBy := strings.TrimSpace(opts.CreatedBy)
 	if createdBy == "" {
@@ -173,6 +176,8 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 	failures := []GeometryFailure{}
 	ready := 0
 	failed := 0
+	nominalSizes := 0
+	boundingBoxSizes := 0
 	for _, part := range parts {
 		row := importPartRow{
 			LDrawPartNum: part.LDrawPartNum,
@@ -237,8 +242,13 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 			}
 		} else {
 			ready++
-			// 精确搜索只能使用可解释的标称规则；任意复杂零件的几何包围盒继续标记为近似值。
+			// 标准零件固化标称尺寸，非标准零件固化 bbox；两类 ready 几何都可参与 ±2mm 尺寸搜索。
 			width, depth, height, derivationStatus := deriveLogicalSize(row.SourceName, stats)
+			if derivationStatus == "derived_exact" {
+				nominalSizes++
+			} else {
+				boundingBoxSizes++
+			}
 			row.Geometry = importGeometryRow{
 				SourceRelativePath: stats.SourceRelativePath,
 				SourceSHA256:       stats.SourceSHA256,
@@ -257,28 +267,30 @@ func ImportStudioLibrary(ctx context.Context, opts ImportOptions) (ImportResult,
 	}
 
 	result := ImportResult{
-		LibraryID:             libraryID,
-		Status:                status,
-		ManifestSHA256:        manifest.ManifestSHA256,
-		PartCount:             len(rows),
-		GeometryReady:         ready,
-		GeometryFailed:        failed,
-		PreviewReady:          ready > 0,
-		RelationReady:         sidecars.relationReady,
-		ConnectorCount:        sidecars.connectorCount,
-		ConnectorFiles:        sidecars.connectorFiles,
-		ConnectorHash:         sidecars.connectorHash,
-		ConnectorFailed:       len(sidecars.connectorFailures),
-		ColliderCount:         sidecars.colliderCount,
-		ColliderFiles:         sidecars.colliderFiles,
-		ColliderHash:          sidecars.colliderHash,
-		ColliderFailed:        len(sidecars.colliderFailures),
-		ColliderStored:        sidecars.colliderStored,
-		ColliderStorage:       colliderStorage,
-		DryRun:                opts.DryRun,
-		FailuresSample:        failures,
-		SidecarFailuresSample: sidecars.failureSample(),
-		Elapsed:               time.Since(started),
+		LibraryID:              libraryID,
+		Status:                 status,
+		ManifestSHA256:         manifest.ManifestSHA256,
+		PartCount:              len(rows),
+		GeometryReady:          ready,
+		GeometryFailed:         failed,
+		LogicalSizeNominal:     nominalSizes,
+		LogicalSizeBoundingBox: boundingBoxSizes,
+		PreviewReady:           ready > 0,
+		RelationReady:          sidecars.relationReady,
+		ConnectorCount:         sidecars.connectorCount,
+		ConnectorFiles:         sidecars.connectorFiles,
+		ConnectorHash:          sidecars.connectorHash,
+		ConnectorFailed:        len(sidecars.connectorFailures),
+		ColliderCount:          sidecars.colliderCount,
+		ColliderFiles:          sidecars.colliderFiles,
+		ColliderHash:           sidecars.colliderHash,
+		ColliderFailed:         len(sidecars.colliderFailures),
+		ColliderStored:         sidecars.colliderStored,
+		ColliderStorage:        colliderStorage,
+		DryRun:                 opts.DryRun,
+		FailuresSample:         failures,
+		SidecarFailuresSample:  sidecars.failureSample(),
+		Elapsed:                time.Since(started),
 	}
 	if opts.DryRun {
 		return result, nil

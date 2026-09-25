@@ -72,42 +72,47 @@ LEFT JOIN LATERAL (
       AND item.locale = sqlc.arg(locale)
     LIMIT 1
 ) translation ON true
+LEFT JOIN LATERAL (
+    -- 只有尺寸筛选启用时才读取当前展示 Version；无尺寸条件时执行计划必须让该内层零循环。
+    SELECT projection.logical_width_stud,
+           projection.logical_depth_stud,
+           projection.logical_height_plate
+    FROM component_repo.component_catalog_projection projection
+    WHERE (sqlc.arg(has_width)::boolean OR sqlc.arg(has_depth)::boolean OR sqlc.arg(has_height)::boolean)
+      AND projection.id = component.id
+) filter_size ON true
 WHERE component.status = 'active'
   AND component.public_version_available
   AND (sqlc.arg(category_filter)::text = '' OR component.category = sqlc.arg(category_filter))
+  AND lower(CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END)
+      LIKE ALL(sqlc.arg(name_patterns)::text[])
   AND (
-      sqlc.arg(search_query)::text = ''
-      OR CASE WHEN translation.id IS NULL THEN component.name ELSE translation.name END
-         ILIKE '%' || sqlc.arg(search_query) || '%'
-      OR component.id::text ILIKE '%' || sqlc.arg(search_query) || '%'
+      sqlc.arg(component_id_filter)::text = ''
+      OR position(sqlc.arg(component_id_filter)::text IN lower(component.id::text)) > 0
   )
   AND (
-      sqlc.arg(size_dimension_count)::integer = 0
-      OR COALESCE(
-          (sqlc.arg(size_dimension_count)::integer = 3
-           AND component.current_logical_size_a > sqlc.arg(size_a)::double precision - 1
-           AND component.current_logical_size_a < sqlc.arg(size_a)::double precision + 1
-           AND component.current_logical_size_b > sqlc.arg(size_b)::double precision - 1
-           AND component.current_logical_size_b < sqlc.arg(size_b)::double precision + 1
-           AND component.current_logical_size_c > sqlc.arg(size_c)::double precision - 1
-           AND component.current_logical_size_c < sqlc.arg(size_c)::double precision + 1)
-          OR
-          (sqlc.arg(size_dimension_count)::integer = 2 AND (
-              (component.current_logical_size_a > sqlc.arg(size_a)::double precision - 1
-               AND component.current_logical_size_a < sqlc.arg(size_a)::double precision + 1
-               AND component.current_logical_size_b > sqlc.arg(size_b)::double precision - 1
-               AND component.current_logical_size_b < sqlc.arg(size_b)::double precision + 1)
-              OR
-              (component.current_logical_size_a > sqlc.arg(size_a)::double precision - 1
-               AND component.current_logical_size_a < sqlc.arg(size_a)::double precision + 1
-               AND component.current_logical_size_c > sqlc.arg(size_b)::double precision - 1
-               AND component.current_logical_size_c < sqlc.arg(size_b)::double precision + 1)
-              OR
-              (component.current_logical_size_b > sqlc.arg(size_a)::double precision - 1
-               AND component.current_logical_size_b < sqlc.arg(size_a)::double precision + 1
-               AND component.current_logical_size_c > sqlc.arg(size_b)::double precision - 1
-               AND component.current_logical_size_c < sqlc.arg(size_b)::double precision + 1)
-          )), false)
+      (NOT sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean)
+      OR (
+          sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+          AND least(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+                  AND least(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
+          AND greatest(filter_size.logical_width_stud, filter_size.logical_depth_stud)
+              BETWEEN greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) - 0.25
+                  AND greatest(sqlc.arg(width_stud)::double precision, sqlc.arg(depth_stud)::double precision) + 0.25
+      )
+      OR (sqlc.arg(has_width)::boolean AND NOT sqlc.arg(has_depth)::boolean
+          AND (filter_size.logical_width_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN sqlc.arg(width_stud)::double precision - 0.25 AND sqlc.arg(width_stud)::double precision + 0.25))
+      OR (NOT sqlc.arg(has_width)::boolean AND sqlc.arg(has_depth)::boolean
+          AND (filter_size.logical_width_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25
+               OR filter_size.logical_depth_stud BETWEEN sqlc.arg(depth_stud)::double precision - 0.25 AND sqlc.arg(depth_stud)::double precision + 0.25))
+  )
+  AND (
+      NOT sqlc.arg(has_height)::boolean
+      OR filter_size.logical_height_plate
+          BETWEEN sqlc.arg(height_plate)::double precision - 0.625
+              AND sqlc.arg(height_plate)::double precision + 0.625
   )
 ORDER BY star.starred_at DESC, component.id
 LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset)

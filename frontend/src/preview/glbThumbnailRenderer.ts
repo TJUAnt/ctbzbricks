@@ -20,8 +20,8 @@ export type GlbThumbnailModel = {
 };
 
 const thumbnailSize = 256;
-// 背景色属于缩略图内容的一部分；调整后提升版本，避免继续读取旧浅色 WebP 缓存。
-const rendererVersion = 'glb-thumbnail-v2';
+// 材质、灯光与背景均属于缩略图内容；任一渲染档位调整后提升版本，避免读取旧 WebP 缓存。
+const rendererVersion = 'glb-thumbnail-v3';
 const maxSourceBytes = 16 * 1024 * 1024;
 const maxMemoryEntries = 128;
 const maxPersistentEntries = 2_000;
@@ -110,8 +110,8 @@ class ThumbnailRenderer {
     this.renderer.setClearColor('#d8dde4', 1);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(38, 1, 0.01, 2_000);
-    installStudioEnvironment(this.renderer, this.scene);
-    addStudioLights(this.scene);
+    installStudioEnvironment(this.renderer, this.scene, 'part-neutral');
+    addStudioLights(this.scene, false, 'part-neutral');
   }
 
   async render(buffer: ArrayBuffer, signal: AbortSignal): Promise<Blob> {
@@ -137,7 +137,7 @@ class ThumbnailRenderer {
 }
 
 function prepareObject(root: THREE.Object3D) {
-  tuneStudioObject(root);
+  tuneStudioObject(root, 'part-neutral');
 }
 
 function centerObject(object: THREE.Object3D) {

@@ -1,6 +1,6 @@
 //go:build integration
 
-package artifact
+package artifact_test
 
 import (
 	"bytes"
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/apierror"
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/artifact"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/config"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/ingestion"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"

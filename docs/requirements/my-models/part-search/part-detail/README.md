@@ -32,7 +32,7 @@
 - requested locale 的 reviewed 官方名称；缺失时回退源名称。
 - 稳定 LDraw 编号。
 - geometry/Preview ready 状态。
-- 宽、深（stud）和高（plate）；缺失值显示 `—`，数字按 locale 格式化。
+- 宽、深（stud）和高（plate）；缺失值显示 `—`，数字按 locale 格式化，并标识为标称尺寸或包围盒尺寸。
 - 几何 face count。
 - Three.js renderer 与统一摄影棚说明。
 
@@ -73,7 +73,7 @@ provider 错误或堆栈。
 1. 从搜索或 BOM 打开的 URL 固定使用原 `partLibraryVersionId`，active library 切换后仍指向同一 Part。
 2. reviewed translation 存在时显示对应名称，draft/rejected 不展示；缺失时回退源名称。
 3. ready GLB 可旋转、缩放、重置并响应容器尺寸；切换 Part 后不残留旧模型或资源。
-4. 尺寸缺失显示 `—`，face count 和单位正确，数字按当前 locale 格式化。
+4. 尺寸缺失显示 `—`，已有尺寸显示标称/bbox 来源，face count 和单位正确，数字按当前 locale 格式化。
 5. Preview 未 ready 时显式调度或复用 materialize task，成功后重读；failed、缺失 Artifact 或签名失败不挂载残缺 Viewer。
 6. GET 不创建任务；POST 只调度持久任务，API 请求不执行 LDraw 解析或 GLB 生成。
 7. 中文、英文、键盘、错误和响应式布局通过浏览器验收。

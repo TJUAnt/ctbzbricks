@@ -1,27 +1,54 @@
 package component
 
-import "testing"
+import (
+	"math"
+	"reflect"
+	"strings"
+	"testing"
+)
 
-func TestParseComponentSizeQuery(t *testing.T) {
-	tests := []struct {
-		name  string
-		query string
-		want  componentSizeFilter
-		ok    bool
-	}{
-		{name: "three dimensions sorted", query: "6 x 1.1 × 5", want: componentSizeFilter{DimensionCount: 3, A: 1.1, B: 5, C: 6}, ok: true},
-		{name: "two dimensions sorted", query: "3X1", want: componentSizeFilter{DimensionCount: 2, A: 1, B: 3}, ok: true},
-		{name: "decimal without leading zero", query: ".5x2", want: componentSizeFilter{DimensionCount: 2, A: .5, B: 2}, ok: true},
-		{name: "ordinary name", query: "car 2x4", ok: false},
-		{name: "one dimension", query: "3", ok: false},
-		{name: "incomplete dimensions", query: "1x2x", ok: false},
+func TestNormalizeComponentSearch(t *testing.T) {
+	width, depth, height := 2.0, 4.0, 3.0
+	got, err := normalizeComponentSearch(ComponentSearchFilters{
+		Name: "  Castle，tower castle 100%_ ", ComponentID: " ABCD ",
+		WidthStud: &width, DepthStud: &depth, HeightPlate: &height,
+	})
+	if err != nil {
+		t.Fatalf("normalize component search: %v", err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, ok := parseComponentSizeQuery(test.query)
-			if ok != test.ok || got != test.want {
-				t.Fatalf("parseComponentSizeQuery(%q) = %+v, %v; want %+v, %v", test.query, got, ok, test.want, test.ok)
-			}
-		})
+	wantPatterns := []string{"%castle%", "%tower%", `%100\%\_%`}
+	if !reflect.DeepEqual(got.NamePatterns, wantPatterns) {
+		t.Fatalf("name patterns = %#v, want %#v", got.NamePatterns, wantPatterns)
+	}
+	if got.ComponentID != "abcd" || !got.HasWidth || !got.HasDepth || !got.HasHeight ||
+		got.WidthStud != width || got.DepthStud != depth || got.HeightPlate != height || got.Signature == "" {
+		t.Fatalf("normalized filters = %+v", got)
+	}
+}
+
+func TestNormalizeComponentSearchAllowsPartialDimensions(t *testing.T) {
+	depth := 6.0
+	got, err := normalizeComponentSearch(ComponentSearchFilters{DepthStud: &depth})
+	if err != nil {
+		t.Fatalf("normalize partial dimensions: %v", err)
+	}
+	if got.HasWidth || !got.HasDepth || got.HasHeight || got.DepthStud != depth {
+		t.Fatalf("partial dimensions = %+v", got)
+	}
+}
+
+func TestNormalizeComponentSearchRejectsInvalidValues(t *testing.T) {
+	zero, tooLarge, nan := 0.0, 1000.01, math.NaN()
+	tests := []ComponentSearchFilters{
+		{Name: strings.Repeat("界", 201)},
+		{ComponentID: "../private"},
+		{WidthStud: &zero},
+		{DepthStud: &tooLarge},
+		{HeightPlate: &nan},
+	}
+	for index, input := range tests {
+		if _, err := normalizeComponentSearch(input); err == nil {
+			t.Fatalf("case %d unexpectedly accepted: %+v", index, input)
+		}
 	}
 }

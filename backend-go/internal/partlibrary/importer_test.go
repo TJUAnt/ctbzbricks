@@ -142,13 +142,24 @@ func TestDeriveLogicalSizeSeparatesNominalExactFromBoundingBoxApproximation(t *t
 	if width != 2 || depth != 4 || height != 3 || status != "derived_exact" {
 		t.Fatalf("brick logical size = %v x %v x %v (%s)", width, depth, height, status)
 	}
-	width, depth, height, status = deriveLogicalSize("Plate 1 x 2", stats)
+	plateStats := GeometryStats{BBoxMin: [3]float64{0, 0, 0}, BBoxMax: [3]float64{40, 12, 20}}
+	width, depth, height, status = deriveLogicalSize("Plate 1 x 2", plateStats)
 	if width != 1 || depth != 2 || height != 1 || status != "derived_exact" {
 		t.Fatalf("plate logical size = %v x %v x %v (%s)", width, depth, height, status)
 	}
 	width, depth, height, status = deriveLogicalSize("Slope Brick 2 x 4", stats)
 	if width != 4 || depth != 2 || height != 3.5 || status != "derived_approximate" {
 		t.Fatalf("approximate logical size = %v x %v x %v (%s)", width, depth, height, status)
+	}
+	width, depth, height, status = deriveLogicalSize("Brick 1 x 2 x 5", stats)
+	if width != 4 || depth != 2 || height != 3.5 || status != "derived_approximate" {
+		t.Fatalf("three-dimensional description must use bbox = %v x %v x %v (%s)", width, depth, height, status)
+	}
+	width, depth, height, status = deriveLogicalSize("Brick 2 x 4 with Oversized Feature", GeometryStats{
+		BBoxMin: [3]float64{0, 0, 0}, BBoxMax: [3]float64{100, 28, 40},
+	})
+	if width != 5 || depth != 2 || height != 3.5 || status != "derived_approximate" {
+		t.Fatalf("non-standard bbox must remain searchable bbox = %v x %v x %v (%s)", width, depth, height, status)
 	}
 }
 

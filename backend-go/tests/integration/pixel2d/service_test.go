@@ -1,15 +1,15 @@
 //go:build integration
 
-package pixel2d
+package pixel2d_test
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	db "github.com/ctbzbricks/brickbuilder/backend-go/db/generated"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/config"
+	. "github.com/ctbzbricks/brickbuilder/backend-go/internal/pixel2d"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/storage"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/task"
 	"github.com/ctbzbricks/brickbuilder/backend-go/internal/uuidutil"
@@ -17,7 +17,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +27,16 @@ type testStore struct {
 	sync.Mutex
 	objects map[string][]byte
 	fail    bool
+}
+
+type testPixelService struct {
+	*Service
+	pool *pgxpool.Pool
+	q    *db.Queries
+}
+
+func newTestPixelService(pool *pgxpool.Pool, store storage.Store, cfg config.StorageConfig) *testPixelService {
+	return &testPixelService{Service: NewService(pool, store, cfg), pool: pool, q: db.New(pool)}
 }
 
 func (s *testStore) Provider() string { return "test" }
@@ -103,7 +112,7 @@ func newActor(t *testing.T) pgtype.UUID {
 	}
 	return v
 }
-func runTask(t *testing.T, s *Service, kind string) task.ClaimedTask {
+func runTask(t *testing.T, s *testPixelService, kind string) task.ClaimedTask {
 	t.Helper()
 	ctx := context.Background()
 	queue := task.NewService(s.pool)
@@ -127,13 +136,13 @@ func TestGoOnlyPixelWorkflow(t *testing.T) {
 	pool := testPool(t)
 	store := &testStore{objects: map[string][]byte{}}
 	cfg := config.StorageConfig{KeyPrefix: "test"}
-	s := NewService(pool, store, cfg)
+	s := newTestPixelService(pool, store, cfg)
 	a, b := newActor(t), newActor(t)
 	_, m, _ := fixture(t)
 	if _, e := ImportCatalog(ctx, pool, mustJSON(m)); e != nil {
 		t.Fatal(e)
 	}
-	source, e := os.ReadFile("testdata/photo_illustration-blocks.png")
+	source, e := os.ReadFile("../../../internal/pixel2d/testdata/photo_illustration-blocks.png")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -152,7 +161,7 @@ func TestGoOnlyPixelWorkflow(t *testing.T) {
 		t.Fatal("cross actor read")
 	}
 	// 重建 API/Worker 对象后 claim PostgreSQL 中的任务；不使用内存 job 状态。
-	s = NewService(pool, store, cfg)
+	s = newTestPixelService(pool, store, cfg)
 	runTask(t, s, GenerateType)
 	pid, _ := id(accepted.ModelID)
 	projectRow, e := s.q.GetPixelProject(ctx, db.GetPixelProjectParams{ID: pid, OwnerID: a})
@@ -259,9 +268,9 @@ func TestIdenticalTemporaryInputsAreIndependent(t *testing.T) {
 	ctx := context.Background()
 	pool := testPool(t)
 	store := &testStore{objects: map[string][]byte{}}
-	s := NewService(pool, store, config.StorageConfig{KeyPrefix: "test"})
+	s := newTestPixelService(pool, store, config.StorageConfig{KeyPrefix: "test"})
 	actor := newActor(t)
-	source, err := os.ReadFile("testdata/photo_illustration-blocks.png")
+	source, err := os.ReadFile("../../../internal/pixel2d/testdata/photo_illustration-blocks.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,93 +296,31 @@ func TestIdenticalTemporaryInputsAreIndependent(t *testing.T) {
 	}
 }
 
-// TestPixelProjectPlans 评估 10 万高占比 actor 的首/深页及空/选择性 actor，保留真实执行计划。
-func TestPixelProjectPlans(t *testing.T) {
-	if os.Getenv("RUN_PIXEL_PLAN_TEST") != "1" {
-		t.Skip("RUN_PIXEL_PLAN_TEST=1 required")
+func fixture(t *testing.T) (Project, Metadata, Design) {
+	t.Helper()
+	data, err := os.ReadFile("../../../internal/pixel2d/testdata/design.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	ctx := context.Background()
-	pool := testPool(t)
-	a, b, blob := newActor(t), newActor(t), newActor(t)
-	_, e := pool.Exec(ctx, `INSERT INTO pixel_2d.blobs(id,owner_id,object_key,bucket,kind,sha256,byte_size,content_type,status) VALUES($1,$2,$3,'test','source',repeat('a',64),1,'image/png','ready')`, blob, a, "perf/"+uuidutil.String(blob))
-	if e != nil {
-		t.Fatal(e)
+	var value struct {
+		Project  Project
+		Metadata Metadata
+		Expected Design
 	}
-	_, e = pool.Exec(ctx, `INSERT INTO pixel_2d.projects(id,owner_id,name,content_locale,source_name,source_blob_id,grid_width,grid_height,color_count,created_at) SELECT md5($1::text || i::text)::uuid,$2,'project','en-US','source.png',$3,4,4,4,'2026-01-01'::timestamptz + i * interval '1 second' FROM generate_series(1,100000) i`, uuidutil.String(a), a, blob)
-	if e != nil {
-		t.Fatal(e)
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
 	}
-	// 每个项目都有修订；大表下验证页内 enrich 仍按主键探测，避免空修订样本低估成本。
-	_, e = pool.Exec(ctx, `INSERT INTO pixel_2d.revisions(id,project_id,owner_id,input_blob_id,task_id,settings)
- SELECT md5(p.id::text || 'revision')::uuid,p.id,p.owner_id,p.source_blob_id,
- (SELECT id FROM component_repo.tasks LIMIT 1),'{}'::jsonb FROM pixel_2d.projects p WHERE p.owner_id=$1`, a)
-	if e != nil {
-		t.Fatal(e)
+	return value.Project, value.Metadata, value.Expected
+}
+
+func mustJSON(value any) []byte {
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
 	}
-	_, e = pool.Exec(ctx, `UPDATE pixel_2d.projects SET current_revision_id=md5(id::text || 'revision')::uuid WHERE owner_id=$1`, a)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if _, e = pool.Exec(ctx, "VACUUM ANALYZE pixel_2d.revisions"); e != nil {
-		t.Fatal(e)
-	}
-	if _, e = pool.Exec(ctx, "VACUUM ANALYZE pixel_2d.projects"); e != nil {
-		t.Fatal(e)
-	}
-	var version string
-	pool.QueryRow(ctx, "SELECT version()").Scan(&version)
-	t.Log(version)
-	raw, e := os.ReadFile("../../db/queries/pixel_2d.sql")
-	if e != nil {
-		t.Fatal(e)
-	}
-	sql := strings.Split(string(raw), "-- name: ListPixelProjects :one")[1]
-	sql = strings.ReplaceAll(sql, "sqlc.arg(owner_id)", "$1")
-	sql = strings.ReplaceAll(sql, "sqlc.arg(page_size)", "$2")
-	sql = strings.ReplaceAll(sql, "sqlc.arg(page_offset)", "$3")
-	for _, tc := range []struct {
-		name   string
-		actor  pgtype.UUID
-		offset int
-	}{{"high-match-first", a, 0}, {"high-match-middle", a, 49992}, {"high-match-deep", a, 99996}, {"empty-actor", b, 0}} {
-		rows, e := pool.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS, SETTINGS) "+sql, tc.actor, 12, tc.offset)
-		if e != nil {
-			t.Fatal(e)
-		}
-		t.Log(tc.name)
-		for rows.Next() {
-			var line string
-			rows.Scan(&line)
-			t.Log(line)
-		}
-		if e = rows.Err(); e != nil {
-			t.Fatal(e)
-		}
-		rows.Close()
-	}
-	// actor-owned one-row scope 有相同过滤结构，不读取高占比 actor 数据。
-	var owner pgtype.UUID
-	pool.QueryRow(ctx, "SELECT owner_id FROM pixel_2d.projects WHERE owner_id<>$1 LIMIT 1", a).Scan(&owner)
-	if owner.Valid {
-		rows, e := pool.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS, SETTINGS) "+sql, owner, 12, 0)
-		if e != nil {
-			t.Fatal(e)
-		}
-		t.Log("selective-actor")
-		for rows.Next() {
-			var line string
-			rows.Scan(&line)
-			t.Log(line)
-		}
-		rows.Close()
-	}
-	s := NewService(pool, &testStore{objects: map[string][]byte{}}, config.StorageConfig{})
-	list, e := s.List(ctx, a, 1, 12)
-	if e != nil {
-		t.Fatal(e)
-	}
-	data, _ := json.Marshal(list)
-	if !bytes.Contains(data, []byte(`"total":100000`)) {
-		t.Fatal(fmt.Sprint(list))
-	}
+	return data
+}
+
+func id(value string) (pgtype.UUID, error) {
+	return uuidutil.Parse(value)
 }

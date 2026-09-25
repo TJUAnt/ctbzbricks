@@ -78,12 +78,27 @@ locale/query/category/status，筛选改变时旧 cursor 返回 validation error
 
 ### 3.3 创建与更新
 
-`POST /api/v1/components` 可以直接创建 owner user Component 元数据，但当前 Web 新建主流程使用上传/Import pipeline，
-没有直接调用该接口。`PATCH /api/v1/components/:componentId` 仅更新 owner、user、未删除 Component 的 name、
-description、tags、category 和 `contentLocale`；用户文本原样保存。
+Component 没有独立公开创建接口。新建上传完成后，`component.import.parse` Go Worker 在同一事务内创建
+`Component -> Candidate -> Draft Version -> initial Preview Task`，避免留下没有来源链或没有初始结构版本的半成品。
+`PATCH /api/v1/components/:componentId` 仅更新 owner、user、未删除 Component 的 name、description、tags、category
+和 `contentLocale`；用户文本原样保存。内部 `Service.CreateComponent/CreateVersion` 只服务事务编排与隔离集成 fixture，
+不注册 HTTP route。
 
 后端核心代码：[component/handler.go](../../../../backend-go/internal/component/handler.go)、
 [component/service.go](../../../../backend-go/internal/component/service.go)、[components.sql](../../../../backend-go/db/queries/components.sql)。
+
+### 3.4 Group、收藏与公共 Feed 的统一筛选
+
+三处页面复用 [ComponentSearchForm.tsx](../../../../frontend/src/componentRepo/ComponentSearchForm.tsx)，只在用户提交时
+把 `name/componentId/widthStud/depthStud/heightPlate` 写入请求；页面内状态当前不持久化到 URL。名称按空白或中英文逗号
+分词并要求全部 token 命中，ID 是独立 contains 字段，所有非空字段按 AND 组合。宽深允许旋转，单独填写宽或深时可命中
+任一水平轴；宽深闭区间为 ±0.25 stud，高度固定轴闭区间为 ±0.625 plate，均对应 Part Search 的每轴 ±2 mm。
+
+Handler 只解析结构化机器值，Service 完成长度、正数/有限值、去重和 LIKE 转义。Group 从 owner/membership 候选驱动，
+Star 从当前 actor 的 Star 关系驱动，公共 Feed 从终态 Feed entry keyset 驱动；只有任一尺寸条件启用时，gated lateral 才
+读取 `component_catalog_projection` 的当前展示 Version。Group 列表与状态 count 共享 `REPEATABLE READ READ ONLY` 快照，
+Star 在同一窗口查询中得到 exact total，公共 Feed 不计算 count 且 cursor 绑定规范化后的完整筛选签名。官方 Component 的
+名称筛选仍只选择 reviewed translation；公共 Feed 仅含 user Component，按用户原始名称筛选。
 
 ## 4. 创建与修订的异步主链路
 
@@ -119,8 +134,7 @@ Task 读取失败只降级阶段细节，队列等待不伪装成算法精确百
 
 ### 4.3 Candidate 到 Draft Version
 
-Candidate 绑定 Import、SceneSnapshot 和 owner。创建 Version 时，`Service.CreateVersion` 锁定 owner Component，并通过
-`GetOwnedVersionCandidateSource` 验证：
+Candidate 绑定 Import、SceneSnapshot 和 owner。Parse Worker 创建 Draft Version 时，在同一事务内验证：
 
 - Candidate 属于 actor 且状态允许；
 - Import 成功并以该 Component 为 target；
@@ -137,7 +151,6 @@ Candidate 绑定 Import、SceneSnapshot 和 owner。创建 Version 时，`Servic
 | 接口 | 当前逻辑 |
 |---|---|
 | `GET /components/:componentId/versions` | owner 读取全部未删除 Version；非 owner 只读非 Draft；按创建时间倒序 OFFSET 分页 |
-| `POST /components/:componentId/versions` | 从通过约束的 owner Candidate 创建 Draft；当前 Web 主链由 Candidate 工作台触发相关流程 |
 | `GET /component-versions/:versionId` | 使用 Component+Version 联合可见性读取 |
 | `PATCH /component-versions/:versionId` | 只允许 owner Draft 更新 version/revision/releaseNote/locale |
 | `DELETE /component-versions/:versionId` | 只软删除 owner Draft；published 历史不允许删除 |
@@ -238,14 +251,14 @@ HTTP 模块按职责分为 `component`（Component/Version/Group/Star）、`comp
 
 ## 10. 测试定位
 
-- Component/Version/Group/Star 主集成：[service_integration_test.go](../../../../backend-go/internal/component/service_integration_test.go)
-- Component 目录十万行计划：[component_catalog_performance_integration_test.go](../../../../backend-go/internal/component/component_catalog_performance_integration_test.go)
-- HTTP 与认证契约：[component_integration_test.go](../../../../backend-go/internal/httpapi/component_integration_test.go)
+- Component/Version/Group/Star 主集成：[service_test.go](../../../../backend-go/tests/integration/component/service_test.go)
+- Component 目录十万行计划：[component_catalog_test.go](../../../../backend-go/tests/performance/component/component_catalog_test.go)
+- HTTP 与认证契约：[component_test.go](../../../../backend-go/tests/integration/httpapi/component_test.go)
 - 上传与 Storage：[artifact](../../../../backend-go/internal/artifact)、[storage](../../../../backend-go/internal/storage)
 - Import/Worker：[ingestion](../../../../backend-go/internal/ingestion)、[worker](../../../../backend-go/internal/worker)
 - Import 解析基准：[import_parser_test.go](../../../../backend-go/internal/ingestion/import_parser_test.go)
-- Version BOM 缩略图 SQL 计划：[version_parts_performance_integration_test.go](../../../../backend-go/internal/workbench/version_parts_performance_integration_test.go)
-- Schema/迁移：[schema_integration_test.go](../../../../backend-go/internal/database/schema_integration_test.go)、[migrations](../../../../backend-go/db/migrations)
+- Version BOM 缩略图 SQL 计划：[version_parts_test.go](../../../../backend-go/tests/performance/workbench/version_parts_test.go)
+- Schema/迁移：[schema_test.go](../../../../backend-go/tests/integration/database/schema_test.go)、[migrations](../../../../backend-go/db/migrations)
 - 前端 API adapter：[componentRepoApi.test.ts](../../../../frontend/src/componentRepo/__tests__/componentRepoApi.test.ts)
 - Import 三阶段 UI：[ComponentImportStatusPage.test.tsx](../../../../frontend/src/componentRepo/__tests__/ComponentImportStatusPage.test.tsx)
 - Group 候选完整性与续页：[ComponentGroupControls.test.tsx](../../../../frontend/src/componentRepo/__tests__/ComponentGroupControls.test.tsx)
@@ -340,11 +353,11 @@ translation 和单 Version 1,000 个 distinct BOM refs；`shared_buffers=128MB`�
 | COMPONENT-CLEAN-04（已关闭） | Component 目录已改为 `(updated_at DESC,id DESC)` opaque keyset，cursor 绑定 locale/query/category/status | 深页不再线性跳过历史行，且没有固定首 N 代表完整集合 | 关闭证据：第 80,001 条 cursor 计划无前置行过滤、API adapter 和稳定续页测试 |
 | COMPONENT-CLEAN-05（已关闭） | 目录页保留列表控制，Group、上传和 presenter 已拆出；详情页保留页面组合，读取、mutation/权限和 presenter 已拆出 | 页面副作用边界可单独验证；目录/详情控制器均约 800 行，其余按职责独立 | 关闭证据：上述前端代码索引、Group UI 测试及全量前端测试 |
 | COMPONENT-CLEAN-06（已关闭） | 原巨型 adapter 已拆为 DTO、统一鉴权 transport 以及 catalog/version/workbench/import/task 五个领域模块；原文件只做兼容重导出 | 上传、任务、映射和目录调用不再共处一个实现文件，调用方 import 契约保持不变 | 关闭证据：`componentRepoApi.ts` 7 行、`componentRepoTransport.ts` 和 `api/`；全量编译通过 |
-| COMPONENT-CLEAN-07 | `POST /components` 与 `POST /components/:id/versions` 存在，但当前 Web 新建主链只走 Import/Candidate | 双入口职责不清，可能形成绕过审核或无人使用的 API | 先查真实调用、CLI/维护依赖与授权审计；明确为管理入口或删除，不建立兼容代理 |
+| COMPONENT-CLEAN-07（已关闭） | Web/CLI/维护入口均未调用拆分创建接口；公开 `POST /components` 与 `POST /components/:id/versions` 已移除，Import Parse Worker 保持原子创建 Component/Candidate/Draft/Preview Task | 不再存在绕过来源链或产生半成品 Component 的第二入口 | 关闭证据：Handler route、HTTP 404 契约测试、Parse Worker 原子事务及 API 文档 |
 | COMPONENT-CLEAN-08（已关闭） | v24 `component_catalog_candidates` 统一删除与 Version 资格，`component_catalog_projection` 统一页内展示尺寸，`component_reviewed_translations` 统一 official reviewed 边界；Component、Group、Star、Watch 及公共 Feed 已切换 | 共享资格规则有一个 Goose 权威定义，候选查询不会提前执行 Version 展示点查，各查询只保留 actor、locale、筛选和分页职责 | 关闭证据：v24 up/down/up、三项 schema view 契约、跨模块集成测试及十万行计划；Version 资格由触发器维护的持久布尔值驱动 |
-| COMPONENT-CLEAN-09 | 同一页面对 Group 使用多条件 AND，对公共 Feed/收藏把条件拼成一个 query | 外观相同的搜索控件具有不同语义 | 产品先统一搜索模型；之后同时修改 API、URL 状态、文案和测试 |
+| COMPONENT-CLEAN-09（已关闭） | Group、收藏和公共 Feed 共用 Part Search 风格的名称、Component ID、宽/深/高结构化表单；所有非空字段按 AND 组合，宽深可旋转并沿用每轴 ±2 mm | 三个列表的同名控件具有相同请求字段、容差、提交和空态语义 | 关闭证据：共享 `ComponentSearchForm`、三条 API/SQL、cursor 筛选签名、集成/API/i18n 测试与查询计划门禁 |
 | COMPONENT-CLEAN-10 | v6 已覆盖版本化颜色表、材质类别、折角法线和 glTF PBR 扩展，但 `collectLDrawTriangles` 仍只输出几何；Part 内部 16/24 颜色继承、直接色、多材质、BFC/TEXMAP 和印刷纹理尚未进入 Component GLB | 纯色普通砖显著接近 Studio，印刷、多色、贴图和特殊 BFC 模型仍可能偏差 | 扩展 triangle material identity 与 mesh primitive 分组；为 16/24、direct color、BFC、TEXMAP/printed fixture 分别建立 GLB validator 与 Studio 视觉基准后关闭 |
 | COMPONENT-CLEAN-11（已关闭） | 详情页已停止连接读取；BOM 返回可选 ready `previewModel` 并按视口生成缩略图；Import 展示三个 durable 阶段；本人不显示 Star，发布右侧更多菜单承载删除 | 阅读页不再承担 owner 审核请求，零件可识别、长任务有恢复友好的阶段反馈，删除降为次级操作 | 关闭证据：详情/状态页与 presenter、BOM Service/SQL 集成和 24,000 Part 计划门禁、双语/i18n、前端全量测试；解析 typed document 基准另证明热点收益 |
 | COMPONENT-CLEAN-12 | 当前 Source 是 Studio/LDraw 模型源文件，没有逐步拼搭说明书 Artifact | 若直接称为“说明书/图纸”会误导用户对文件内容的预期 | 本轮只提供明确的图纸源文件下载；另立产品设计确定步骤拆分、版式、PDF/图片产物、导出 locale 与 Worker 性能门禁后才能关闭 |
 
-01～06、08、11 已关闭。07/09 仍需要先确认产品与真实调用；10 依赖多材质/BFC/TEXMAP 的独立实现和视觉基准；12 等待逐步拼搭说明书产品设计。
+01～09、11 已关闭。10 依赖多材质/BFC/TEXMAP 的独立实现和视觉基准；12 等待逐步拼搭说明书产品设计。

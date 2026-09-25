@@ -19,6 +19,7 @@ import {
   addStudioLights,
   configureStudioRenderer,
   installStudioEnvironment,
+  type StudioPreviewProfile,
   tuneStudioMaterial,
 } from '../preview/studioPreviewRendering';
 
@@ -115,7 +116,13 @@ export function PartViewerPage() {
 
       <section className="part-viewer-layout">
         <div className="part-viewer-stage">
-          {preview ? <ComponentScene preview={{ model: preview.model }} registerReset={registerReset} /> : null}
+          {preview ? (
+            <ComponentScene
+              preview={{ model: preview.model }}
+              profile="part-neutral"
+              registerReset={registerReset}
+            />
+          ) : null}
           {state.status === 'loading' ? (
             <div className="part-viewer-stage-state">
               <span className="part-viewer-spinner" aria-hidden="true" />
@@ -189,6 +196,13 @@ export function PartViewerPage() {
                 value={preview?.geometry.logicalHeightPlate}
               />
             </dl>
+            {preview ? (
+              <p className="mt-3 text-xs text-zinc-500">
+                {preview.geometry.logicalSizeDerivationStatus === 'derived_exact'
+                  ? tr('partSearch:sizeNominal')
+                  : tr('partSearch:sizeBoundingBox')}
+              </p>
+            ) : null}
           </section>
 
           <section className="part-viewer-card part-viewer-renderer-card">
@@ -240,10 +254,12 @@ function DimensionRow({
 /** ComponentScene 加载不可变 GLB，并用统一摄影棚材质与灯光展示 Component 或 Part。 */
 export function ComponentScene({
   preview,
+  profile = 'viewer',
   registerReset,
   selectedConnector = null,
 }: {
   preview: Pick<ComponentPreviewResponse, 'model'>;
+  profile?: StudioPreviewProfile;
   registerReset: ResetRegistration;
   selectedConnector?: ComponentSceneConnector | null;
 }) {
@@ -285,8 +301,8 @@ export function ComponentScene({
     controls.rotateSpeed = 0.75;
     controls.zoomSpeed = 0.8;
 
-    const disposeStudioEnvironment = installStudioEnvironment(renderer, scene);
-    addStudioLights(scene, true);
+    const disposeStudioEnvironment = installStudioEnvironment(renderer, scene, profile);
+    addStudioLights(scene, true, profile);
 
     let component: THREE.Object3D | null = null;
     let floor: THREE.Mesh | null = null;
@@ -299,7 +315,7 @@ export function ComponentScene({
           disposeObject(loadedComponent);
           return;
         }
-        component = prepareLoadedComponent(loadedComponent);
+        component = prepareLoadedComponent(loadedComponent, profile);
         scene.add(component);
         centerObject(component);
         connectorRootRef.current = component.getObjectByName('component-root') ?? component;
@@ -366,7 +382,7 @@ export function ComponentScene({
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [preview.model.artifactId, preview.model.url]);
+  }, [preview.model.artifactId, preview.model.url, profile]);
 
   return (
     <div aria-hidden="true" className="part-viewer-canvas" ref={mountRef}>
@@ -387,7 +403,11 @@ async function loadBinaryPreview(
   return gltf.scene;
 }
 
-function prepareLoadedComponent(component: THREE.Object3D): THREE.Object3D {
+/** prepareLoadedComponent 保留 Component 原始材质；Part 详情显式采用与搜索缩略图一致的中性材质档位。 */
+function prepareLoadedComponent(
+  component: THREE.Object3D,
+  profile: StudioPreviewProfile,
+): THREE.Object3D {
   const meshes: THREE.Mesh[] = [];
   component.traverse((object) => {
     if (object instanceof THREE.Mesh) meshes.push(object);
@@ -410,7 +430,7 @@ function prepareLoadedComponent(component: THREE.Object3D): THREE.Object3D {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach(tuneStudioMaterial);
+    materials.forEach((material) => tuneStudioMaterial(material, profile));
   });
   return component;
 }

@@ -51,9 +51,12 @@ func (e ldrawGeometryError) Error() string {
 
 var identityLDrawTransform = ldrawTransform{m: [9]float64{1, 0, 0, 0, 1, 0, 0, 0, 1}}
 
-var standardPartLogicalSizePattern = regexp.MustCompile(`(?i)^(brick|plate|tile)\s+(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\b`)
+var standardPartLogicalSizePattern = regexp.MustCompile(`(?i)^(brick|plate|tile)\s+(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)(?:\s*x\s*(\d+(?:\.\d+)?))?\b`)
 
-const LogicalSizeAlgorithmVersion = "ldraw-description-nominal-v1"
+const (
+	LogicalSizeAlgorithmVersion = "ldraw-description-nominal-or-bbox-v2"
+	physicalSizeToleranceMM     = 2.0
+)
 
 func (t ldrawTransform) apply(v ldrawVector) ldrawVector {
 	return ldrawVector{
@@ -125,8 +128,8 @@ func ldrawDescription(line string) string {
 	return strings.Join(strings.Fields(value), " ")
 }
 
-// deriveLogicalSize 只把可由官方描述直接解释的标准 Brick/Plate/Tile 标为精确标称尺寸；
-// 其他零件仍保留 bbox 近似值供展示，但不得进入精确尺寸筛选。
+// deriveLogicalSize 优先采用标准 Brick/Plate/Tile 的官方标称尺寸；其他 ready 零件使用几何 bbox。
+// 描述含第三维或 bbox 与标称值偏差超过 2mm 时按非标准件处理，避免把 modified 外形误标为标准尺寸。
 func deriveLogicalSize(sourceName string, stats GeometryStats) (width, depth, height float64, status string) {
 	width = roundNonNegative((stats.BBoxMax[0] - stats.BBoxMin[0]) / 20)
 	depth = roundNonNegative((stats.BBoxMax[2] - stats.BBoxMin[2]) / 20)
@@ -134,7 +137,7 @@ func deriveLogicalSize(sourceName string, stats GeometryStats) (width, depth, he
 	status = "derived_approximate"
 
 	match := standardPartLogicalSizePattern.FindStringSubmatch(sourceName)
-	if match == nil {
+	if match == nil || match[4] != "" {
 		return width, depth, height, status
 	}
 	nominalWidth, widthErr := strconv.ParseFloat(match[2], 64)
@@ -146,7 +149,22 @@ func deriveLogicalSize(sourceName string, stats GeometryStats) (width, depth, he
 	if strings.EqualFold(match[1], "brick") {
 		nominalHeight = 3
 	}
+	if !logicalSizeWithinPhysicalTolerance(
+		width, depth, height,
+		nominalWidth, nominalDepth, nominalHeight,
+	) {
+		return width, depth, height, status
+	}
 	return nominalWidth, nominalDepth, nominalHeight, "derived_exact"
+}
+
+// logicalSizeWithinPhysicalTolerance 用物理毫米校验标称规则；平面允许旋转，高度保持独立轴。
+func logicalSizeWithinPhysicalTolerance(bboxWidth, bboxDepth, bboxHeight, nominalWidth, nominalDepth, nominalHeight float64) bool {
+	bboxPlanarMin, bboxPlanarMax := math.Min(bboxWidth, bboxDepth), math.Max(bboxWidth, bboxDepth)
+	nominalPlanarMin, nominalPlanarMax := math.Min(nominalWidth, nominalDepth), math.Max(nominalWidth, nominalDepth)
+	return math.Abs(bboxPlanarMin-nominalPlanarMin)*8 <= physicalSizeToleranceMM &&
+		math.Abs(bboxPlanarMax-nominalPlanarMax)*8 <= physicalSizeToleranceMM &&
+		math.Abs(bboxHeight-nominalHeight)*3.2 <= physicalSizeToleranceMM
 }
 
 func (idx *ldrawIndex) computeStats(manifestRelativePath string) (GeometryStats, error) {

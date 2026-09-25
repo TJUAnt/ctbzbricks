@@ -1,6 +1,6 @@
 //go:build integration
 
-package component
+package component_test
 
 import (
 	"context"
@@ -176,7 +176,7 @@ func explainComponentCatalog(
 	locale, query, category, status string, hasExact bool, exactID pgtype.UUID,
 ) string {
 	t.Helper()
-	data, err := os.ReadFile("../../db/queries/components.sql")
+	data, err := os.ReadFile("../../../db/queries/components.sql")
 	if err != nil {
 		t.Fatalf("read authoritative Component SQL: %v", err)
 	}
