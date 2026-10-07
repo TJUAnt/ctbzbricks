@@ -45,8 +45,8 @@ From the repository root, `scripts/start-backend.sh` starts only the Go API for
 local development and prints that task processing is not active. The independent `start-go-worker` and
 `start-legacy-backend` launchers start the remaining G8 topology.
 They load shared connection values from `backend/.env`, then optional Go-only
-overrides from `backend-go/.env`; already-exported shell variables take
-precedence. Secrets remain in environment files and are not embedded in the
+overrides from `backend-go/.env`; set `GO_BACKEND_ENV_FILE` to point at a different
+Go env file. Already-exported shell variables take precedence. Secrets remain in environment files and are not embedded in the
 scripts. `scripts/start-dev.sh` defaults to Go API + Go Worker + Vite, with no Python
 service. `START_LEGACY_API=1` explicitly opts into archived legacy development;
 `START_COMPONENT_WORKERS=0` disables task processing and is not a complete 2D topology. Corresponding PowerShell launchers provide the same

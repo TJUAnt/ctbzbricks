@@ -45,6 +45,10 @@ docs/deployment/*
 !docs/design/
 docs/design/*
 !docs/design/README.md
+!docs/design/lego_shape_decomposition_design.md
+!docs/design/model-tools/
+!docs/design/model-tools/**/
+!docs/design/model-tools/**/*.md
 !docs/design/model-plaza/
 !docs/design/model-plaza/**/
 !docs/design/model-plaza/**/*.md

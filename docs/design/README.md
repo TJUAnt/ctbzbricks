@@ -12,16 +12,20 @@ design/
 │   ├── README.md                     # 菜单组设计索引
 │   └── model-plaza/                  # 二级菜单项：模型广场
 │       └── README.md                 # 组件广场详细设计
-└── my-models/                        # 一级菜单组：我的模型
-    ├── README.md                     # 菜单组设计索引
-    ├── component-repo/               # 二级菜单项：我的模型
-    │   ├── README.md                 # Component 主设计
-    │   ├── star.md                   # 收藏领域设计
-    │   ├── star-design-and-roadmap.md
-    │   ├── watch.md                  # 订阅领域设计
-    │   └── watch-design-and-roadmap.md
-    └── part-search/                   # 二级菜单项：零件搜索
-        └── README.md                 # Part Library / Part Search 设计
+├── my-models/                        # 一级菜单组：我的模型
+│   ├── README.md                     # 菜单组设计索引
+│   ├── component-repo/               # 二级菜单项：我的模型
+│   │   ├── README.md                 # Component 主设计
+│   │   ├── star.md                   # 收藏领域设计
+│   │   ├── star-design-and-roadmap.md
+│   │   ├── watch.md                  # 订阅领域设计
+│   │   └── watch-design-and-roadmap.md
+│   └── part-search/                  # 二级菜单项：零件搜索
+│       └── README.md                 # Part Library / Part Search 设计
+└── model-tools/                      # 一级菜单组：模型小工具
+    ├── README.md                     # 菜单组索引（含规划项）
+    └── model-3d/                     # 规划二级菜单项：3D 模型构建 LEGO
+        └── README.md                 # 菜单级方案草案
 ```
 
 - 一级目录对应菜单组，二级目录对应可点击菜单项；共享领域设计放在主要所属菜单项目录内。
@@ -38,6 +42,9 @@ design/
 | 我的模型 | 零件搜索 | `/part-search` | [功能需求](../requirements/my-models/part-search/README.md) | [Part Library 详细设计](./my-models/part-search/README.md) |
 | 模型工具 | 2D 模型工具 | `/pixel-art` | 待整理 | 待按菜单结构整理 |
 
+规划中的“模型小工具 / 3D 模型构建 LEGO”见[菜单级设计草案](./model-tools/model-3d/README.md)与
+[功能需求草案](../requirements/model-tools/model-3d/README.md)；当前没有对应菜单项或确定路由，不计入上表。
+
 ## 3. 共享领域设计
 
 - [Star 详细设计](./my-models/component-repo/star.md)
@@ -50,5 +57,5 @@ design/
 
 ## 4. 其他设计资料
 
-本目录已有的 `3dmodel_legobuild`、`heightmap_design`、`lego_design`、`pixel_design` 等目录属于算法、历史方案或专项
-路线资料。它们不代表当前菜单级详细设计入口；需要提升为当前功能设计时，应先建立对应需求文档，再纳入上方菜单索引。
+[Shape 分块总览与专题](./lego_shape_decomposition_design.md)是规划中 3D 模型构建 LEGO 功能的研究资料，
+由菜单级设计草案索引；研究文档本身不代表当前系统已具备该功能。

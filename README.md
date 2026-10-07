@@ -31,6 +31,14 @@ A data platform for LEGO bricks.
 | 我的模型 / 我的模型 / Watch | [Watch 详细设计](./docs/design/my-models/component-repo/watch.md) | Watch/Unwatch、独立订阅 Component Repo 列表、动态 Feed、发布事件与删除联动 | 仓库实现和 WATCH-CLEAN-01～05 清理完成；个人 Feed 已复用公共大图事件卡片，生产数据库为 v24，应用发布与浏览器验收待执行 |
 | 我的模型 / 零件搜索 | [Part Library 详细设计](./docs/design/my-models/part-search/README.md) · [Part Search 功能需求](./docs/requirements/my-models/part-search/README.md) | Studio snapshot 导入、官方描述、标称/bbox 尺寸、Part Search、预览与详情 | 真实库 Goose v26 / importer v5 已成为唯一 active；24,899 ready Part 支持名称与每轴 ±2mm 尺寸组合搜索并全部具有 ready/verified Preview，SIZE-01 已关闭。认证浏览器结果/详情仍属 DATA-01，页码排序按 PERF-01 延期 |
 
+### 规划中的功能
+
+以下内容是方案索引，不代表菜单、页面、接口或 LEGO 求解器已经实现。
+
+| 计划菜单位置 | 功能需求 | 详细设计与研究资料 | 状态 |
+|---|---|---|---|
+| 模型小工具 / 3D 模型构建 LEGO | [功能需求草案](./docs/requirements/model-tools/model-3d/README.md) | [菜单级设计草案](./docs/design/model-tools/model-3d/README.md) · [Shape 分块总览与专题](./docs/design/lego_shape_decomposition_design.md) | 规划中；先验证 Split / Build 的几何决策，尚未确定页面路由和 API 契约 |
+
 统一接口契约以 [docs/api.md](./docs/api.md) 为准，Go 迁移事实以
 [docs/go_migration_progress.md](./docs/go_migration_progress.md) 为准。专项产品与容量决策见
 [Watch 路线文档](./docs/design/my-models/component-repo/watch-design-and-roadmap.md)和

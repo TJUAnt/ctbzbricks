@@ -98,7 +98,9 @@ function Import-CtbzDevEnvironment {
 
 function Assert-CtbzDatabaseUrl {
   if (-not $env:DATABASE_URL) {
-    throw "DATABASE_URL is required; configure $script:CtbzGoEnvFile or export it before startup"
+    $message = "error: DATABASE_URL is required; configure $script:CtbzGoEnvFile or export it before startup"
+    [Console]::Error.WriteLine($message)
+    exit 1
   }
 }
 

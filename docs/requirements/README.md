@@ -26,7 +26,8 @@ requirements/
 │       ├── README.md                 # 搜索功能需求
 │       └── part-detail/              # Part 详情与 3D 查看器
 └── model-tools/                      # 一级菜单组：模型工具
-    └── model-2d/                     # 二级菜单项：2D 模型工具
+    ├── README.md                     # 菜单组索引（含规划项）
+    └── model-3d/                     # 规划二级菜单项：3D 模型构建 LEGO
 ```
 
 - 目录名使用稳定的菜单 `id` 对应英文 kebab-case；文档标题使用当前中文菜单名称。
@@ -48,6 +49,9 @@ requirements/
 | 我的模型 | 零件搜索 | `/part-search` | [Part Search 功能需求](./my-models/part-search/README.md) |
 | 模型工具 | 2D 模型工具 | `/pixel-art` | 待整理 |
 
+规划中的“模型小工具 / 3D 模型构建 LEGO”见[功能需求草案](./model-tools/model-3d/README.md)；它尚未出现在
+`menuGroups` 中，路由未定，不计入上述当前菜单索引。
+
 ## 3. 文档状态约定
 
 | 状态 | 含义 |
@@ -62,3 +66,5 @@ requirements/
 - [模型广场 / 模型广场](./model-plaza/model-plaza/README.md)
 - [我的模型 / 个人 Component 仓库](./my-models/component-repo/README.md)
 - [我的模型 / 零件搜索](./my-models/part-search/README.md)
+
+规划功能文档：[模型小工具 / 3D 模型构建 LEGO](./model-tools/model-3d/README.md)。
